@@ -1,0 +1,19 @@
+{
+  "total_tests": 7,
+  "passed_tests": 6,
+  "failed_tests": 1,
+  "warning_tests": 0,
+  "success_rate": 85.71428571428571,
+  "total_execution_time": 37.0584774017334,
+  "avg_execution_time": 5.2940682002476285,
+  "test_results": [
+    "TestResult(test_name='Balance Validation', status='PASS', execution_time=0.00029540061950683594, details='Validated 4 balance checks', errors=[], warnings=[])",
+    "TestResult(test_name='Position Sizing', status='FAIL', execution_time=0.0003108978271484375, details='Position size: $0.00, Total value: $97,726.93', errors=['Position sizing returned invalid size'], warnings=[])",
+    "TestResult(test_name='Error Handling', status='PASS', execution_time=10.006767988204956, details='Handled 2 errors', errors=[], warnings=[])",
+    "TestResult(test_name='Thread Safety', status='PASS', execution_time=0.0003960132598876953, details='Balance updates: 6, Order operations: 1', errors=[], warnings=[])",
+    "TestResult(test_name='Integration', status='PASS', execution_time=0.0006501674652099609, details='All components integrated successfully', errors=[], warnings=[])",
+    "TestResult(test_name='Performance', status='PASS', execution_time=27.035173177719116, details='Balance: 0.00s, Position: 0.01s, Error: 27.03s', errors=[], warnings=['Error handling slow: 27.03s for 100 operations'])",
+    "TestResult(test_name='Stress Test', status='PASS', execution_time=0.014883756637573242, details='Handled 20 concurrent operations and 100 high-frequency operations', errors=[], warnings=[])"
+  ],
+  "deployment_ready": false
+}
