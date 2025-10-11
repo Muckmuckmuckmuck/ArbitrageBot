@@ -1,0 +1,317 @@
+{
+  "exchanges": {
+    "bybit": {
+      "name": "Bybit",
+      "transfer_limits": {
+        "withdrawals_per_hour": 50,
+        "withdrawals_per_day": 200,
+        "daily_limit_usdt": 2000000,
+        "min_withdrawal": 1,
+        "max_per_transaction": 50000
+      },
+      "rate_limits": {
+        "api_requests_per_minute": 6000,
+        "api_requests_per_second": 50,
+        "order_requests_per_second": 50
+      },
+      "fees": {
+        "trading_fee": 0.001,
+        "withdrawal_fee_usdt": 0.5,
+        "withdrawal_fee_btc": 0.0002,
+        "withdrawal_fee_eth": 0.003
+      },
+      "security": {
+        "whitelist_required": false,
+        "confirmation_required": false,
+        "cooldown_minutes": 0,
+        "ip_restrictions": false,
+        "api_withdrawals": true
+      },
+      "pros": [
+        "No withdrawal whitelist required",
+        "No manual confirmation needed",
+        "Very high rate limits",
+        "API-based withdrawals",
+        "Lower fees",
+        "No cooldown periods",
+        "High daily limits"
+      ],
+      "cons": [
+        "Less established than Binance/OKX",
+        "Smaller liquidity pool",
+        "Limited crypto selection",
+        "Newer exchange (higher risk)"
+      ],
+      "arbitrage_score": 9.5
+    },
+    "kucoin": {
+      "name": "KuCoin",
+      "transfer_limits": {
+        "withdrawals_per_hour": 30,
+        "withdrawals_per_day": 100,
+        "daily_limit_usdt": 1000000,
+        "min_withdrawal": 5,
+        "max_per_transaction": 25000
+      },
+      "rate_limits": {
+        "api_requests_per_minute": 4000,
+        "api_requests_per_second": 30,
+        "order_requests_per_second": 30
+      },
+      "fees": {
+        "trading_fee": 0.001,
+        "withdrawal_fee_usdt": 0.6,
+        "withdrawal_fee_btc": 0.0003,
+        "withdrawal_fee_eth": 0.004
+      },
+      "security": {
+        "whitelist_required": false,
+        "confirmation_required": false,
+        "cooldown_minutes": 1,
+        "ip_restrictions": false,
+        "api_withdrawals": true
+      },
+      "pros": [
+        "No withdrawal whitelist required",
+        "No manual confirmation needed",
+        "High rate limits",
+        "API-based withdrawals",
+        "Good liquidity",
+        "Wide crypto selection",
+        "Established exchange"
+      ],
+      "cons": [
+        "Moderate rate limits",
+        "Some geographic restrictions",
+        "Higher fees than Bybit"
+      ],
+      "arbitrage_score": 8.5
+    },
+    "gate_io": {
+      "name": "Gate.io",
+      "transfer_limits": {
+        "withdrawals_per_hour": 25,
+        "withdrawals_per_day": 80,
+        "daily_limit_usdt": 500000,
+        "min_withdrawal": 2,
+        "max_per_transaction": 20000
+      },
+      "rate_limits": {
+        "api_requests_per_minute": 3000,
+        "api_requests_per_second": 25,
+        "order_requests_per_second": 25
+      },
+      "fees": {
+        "trading_fee": 0.001,
+        "withdrawal_fee_usdt": 0.7,
+        "withdrawal_fee_btc": 0.0004,
+        "withdrawal_fee_eth": 0.005
+      },
+      "security": {
+        "whitelist_required": false,
+        "confirmation_required": false,
+        "cooldown_minutes": 2,
+        "ip_restrictions": false,
+        "api_withdrawals": true
+      },
+      "pros": [
+        "No withdrawal whitelist required",
+        "No manual confirmation needed",
+        "Good rate limits",
+        "API-based withdrawals",
+        "Very wide crypto selection",
+        "Good liquidity",
+        "Established exchange"
+      ],
+      "cons": [
+        "Moderate rate limits",
+        "Some regulatory concerns",
+        "Higher fees than Bybit/KuCoin"
+      ],
+      "arbitrage_score": 8.0
+    },
+    "mexc": {
+      "name": "MEXC",
+      "transfer_limits": {
+        "withdrawals_per_hour": 20,
+        "withdrawals_per_day": 60,
+        "daily_limit_usdt": 300000,
+        "min_withdrawal": 3,
+        "max_per_transaction": 15000
+      },
+      "rate_limits": {
+        "api_requests_per_minute": 2500,
+        "api_requests_per_second": 20,
+        "order_requests_per_second": 20
+      },
+      "fees": {
+        "trading_fee": 0.001,
+        "withdrawal_fee_usdt": 0.8,
+        "withdrawal_fee_btc": 0.0005,
+        "withdrawal_fee_eth": 0.006
+      },
+      "security": {
+        "whitelist_required": false,
+        "confirmation_required": false,
+        "cooldown_minutes": 3,
+        "ip_restrictions": false,
+        "api_withdrawals": true
+      },
+      "pros": [
+        "No withdrawal whitelist required",
+        "No manual confirmation needed",
+        "Good rate limits",
+        "API-based withdrawals",
+        "Wide crypto selection",
+        "Good liquidity",
+        "Established exchange"
+      ],
+      "cons": [
+        "Moderate rate limits",
+        "Some geographic restrictions",
+        "Higher fees than top alternatives"
+      ],
+      "arbitrage_score": 7.5
+    },
+    "bitget": {
+      "name": "Bitget",
+      "transfer_limits": {
+        "withdrawals_per_hour": 15,
+        "withdrawals_per_day": 50,
+        "daily_limit_usdt": 200000,
+        "min_withdrawal": 5,
+        "max_per_transaction": 10000
+      },
+      "rate_limits": {
+        "api_requests_per_minute": 2000,
+        "api_requests_per_second": 15,
+        "order_requests_per_second": 15
+      },
+      "fees": {
+        "trading_fee": 0.001,
+        "withdrawal_fee_usdt": 0.9,
+        "withdrawal_fee_btc": 0.0006,
+        "withdrawal_fee_eth": 0.007
+      },
+      "security": {
+        "whitelist_required": false,
+        "confirmation_required": false,
+        "cooldown_minutes": 5,
+        "ip_restrictions": false,
+        "api_withdrawals": true
+      },
+      "pros": [
+        "No withdrawal whitelist required",
+        "No manual confirmation needed",
+        "Good rate limits",
+        "API-based withdrawals",
+        "Good crypto selection",
+        "Established exchange"
+      ],
+      "cons": [
+        "Moderate rate limits",
+        "Some geographic restrictions",
+        "Higher fees than top alternatives"
+      ],
+      "arbitrage_score": 7.0
+    }
+  },
+  "current_exchanges": {
+    "binance": {
+      "name": "Binance",
+      "transfer_limits": {
+        "withdrawals_per_hour": 5,
+        "withdrawals_per_day": 20,
+        "daily_limit_usdt": 100000
+      },
+      "rate_limits": {
+        "api_requests_per_minute": 1200,
+        "api_requests_per_second": 10
+      },
+      "security": {
+        "whitelist_required": true,
+        "confirmation_required": true,
+        "cooldown_minutes": 5
+      },
+      "arbitrage_score": 3.0
+    },
+    "okx": {
+      "name": "OKX",
+      "transfer_limits": {
+        "withdrawals_per_hour": 10,
+        "withdrawals_per_day": 50,
+        "daily_limit_usdt": 50000
+      },
+      "rate_limits": {
+        "api_requests_per_minute": 3000,
+        "api_requests_per_second": 20
+      },
+      "security": {
+        "whitelist_required": true,
+        "confirmation_required": true,
+        "cooldown_minutes": 3
+      },
+      "arbitrage_score": 4.0
+    }
+  },
+  "combinations": [
+    {
+      "name": "Bybit + KuCoin",
+      "exchanges": [
+        "bybit",
+        "kucoin"
+      ],
+      "total_withdrawals_per_hour": 80,
+      "combined_score": 9.0,
+      "pros": [
+        "Highest rate limits",
+        "No whitelist required",
+        "API withdrawals",
+        "High daily limits"
+      ],
+      "cons": [
+        "Less established",
+        "Smaller liquidity pools"
+      ]
+    },
+    {
+      "name": "Bybit + Gate.io",
+      "exchanges": [
+        "bybit",
+        "gate_io"
+      ],
+      "total_withdrawals_per_hour": 75,
+      "combined_score": 8.8,
+      "pros": [
+        "High rate limits",
+        "No whitelist required",
+        "API withdrawals",
+        "Good liquidity"
+      ],
+      "cons": [
+        "Less established",
+        "Some regulatory concerns"
+      ]
+    },
+    {
+      "name": "KuCoin + Gate.io",
+      "exchanges": [
+        "kucoin",
+        "gate_io"
+      ],
+      "total_withdrawals_per_hour": 55,
+      "combined_score": 8.3,
+      "pros": [
+        "Good rate limits",
+        "No whitelist required",
+        "API withdrawals",
+        "Established exchanges"
+      ],
+      "cons": [
+        "Moderate rate limits",
+        "Some geographic restrictions"
+      ]
+    }
+  ],
+  "improvement_factor": 5.333333333333333
+}

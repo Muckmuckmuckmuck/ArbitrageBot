@@ -1,0 +1,132 @@
+{
+  "exchange_restrictions": {
+    "bybit": {
+      "name": "Bybit",
+      "restricted_countries": [
+        "United States",
+        "Mainland China",
+        "Hong Kong",
+        "Singapore",
+        "Canada",
+        "France",
+        "United Kingdom",
+        "North Korea",
+        "Cuba",
+        "Iran",
+        "Uzbekistan",
+        "Russian-controlled regions of Ukraine",
+        "Crimea",
+        "Donetsk",
+        "Luhansk",
+        "Sevastopol",
+        "Sudan",
+        "Syria"
+      ],
+      "restriction_type": "Complete ban",
+      "compliance_reason": "Regulatory and sanctions compliance",
+      "risk_level": "High - Account termination if detected"
+    },
+    "kucoin": {
+      "name": "KuCoin",
+      "restricted_countries": [
+        "United States",
+        "Mainland China",
+        "Hong Kong",
+        "Singapore",
+        "Thailand",
+        "Malaysia",
+        "Uzbekistan",
+        "Ontario (Canada)"
+      ],
+      "restriction_type": "Service unavailable",
+      "compliance_reason": "Local laws and regulations",
+      "risk_level": "High - Account suspension if detected"
+    },
+    "binance": {
+      "name": "Binance",
+      "restricted_countries": [
+        "United States",
+        "Mainland China",
+        "Iran",
+        "North Korea",
+        "Cuba",
+        "Crimea",
+        "Donetsk",
+        "Luhansk",
+        "Sevastopol"
+      ],
+      "restriction_type": "Complete ban",
+      "compliance_reason": "Regulatory compliance",
+      "risk_level": "High - Account termination if detected"
+    },
+    "okx": {
+      "name": "OKX",
+      "restricted_countries": [
+        "United States",
+        "Mainland China",
+        "Hong Kong",
+        "Iran",
+        "North Korea",
+        "Cuba",
+        "Crimea",
+        "Donetsk",
+        "Luhansk",
+        "Sevastopol"
+      ],
+      "restriction_type": "Service unavailable",
+      "compliance_reason": "Regulatory compliance",
+      "risk_level": "High - Account suspension if detected"
+    }
+  },
+  "alternative_exchanges": {
+    "kraken": {
+      "name": "Kraken",
+      "restricted_countries": [
+        "Iran",
+        "North Korea",
+        "Cuba",
+        "Crimea",
+        "Donetsk",
+        "Luhansk",
+        "Sevastopol"
+      ],
+      "restriction_type": "Limited restrictions",
+      "compliance_reason": "Sanctions compliance only",
+      "risk_level": "Low - Few restrictions"
+    },
+    "coinbase": {
+      "name": "Coinbase",
+      "restricted_countries": [
+        "Iran",
+        "North Korea",
+        "Cuba",
+        "Crimea",
+        "Donetsk",
+        "Luhansk",
+        "Sevastopol"
+      ],
+      "restriction_type": "Limited restrictions",
+      "compliance_reason": "Sanctions compliance only",
+      "risk_level": "Low - Few restrictions"
+    }
+  },
+  "high_risk_countries": [
+    "United States",
+    "Mainland China",
+    "Hong Kong",
+    "Singapore"
+  ],
+  "moderate_risk_countries": [
+    "Canada",
+    "France",
+    "United Kingdom",
+    "Thailand",
+    "Malaysia"
+  ],
+  "low_risk_countries": [
+    "Iran",
+    "North Korea",
+    "Cuba",
+    "Uzbekistan"
+  ]
+}

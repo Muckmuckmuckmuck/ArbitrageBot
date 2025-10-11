@@ -1,0 +1,14 @@
+[
+  [
+    "DOGE/USDT",
+    {
+      "daily_profit": 2.4499999999999997,
+      "viable": true,
+      "gross_profit": 8.0,
+      "net_profit": 1.0,
+      "opportunities_per_day": 7.0,
+      "success_rate": 0.7,
+      "competition_factor": 0.5
+    }
+  ]
+]

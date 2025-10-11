@@ -1,0 +1,424 @@
+{
+  "exchange_combinations": {
+    "coinex_hyperliquid": {
+      "name": "CoinEx + Hyperliquid",
+      "exchanges": [
+        "CoinEx",
+        "Hyperliquid"
+      ],
+      "type": "Centralized",
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "rate_limits": {
+        "total_withdrawals_per_hour": 80,
+        "coinex_per_hour": 50,
+        "hyperliquid_per_hour": 30
+      },
+      "daily_limits": {
+        "total_usd": 150000,
+        "coinex_usd": 100000,
+        "hyperliquid_usd": 50000
+      },
+      "fees": {
+        "coinex_usdt": 0.5,
+        "hyperliquid_usdt": 0.3,
+        "average_usdt": 0.4
+      },
+      "crypto_support": {
+        "coinex": 1000,
+        "hyperliquid": 50,
+        "total_unique": 1050
+      },
+      "pros": [
+        "\u2705 No geographic restrictions",
+        "\u2705 Fully automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 Good rate limits (80/hour)",
+        "\u2705 Established exchanges",
+        "\u2705 Good liquidity",
+        "\u2705 Wide crypto selection",
+        "\u2705 Lower technical complexity"
+      ],
+      "cons": [
+        "\u274c Not available in US (CoinEx)",
+        "\u274c No fiat support",
+        "\u274c Limited customer support",
+        "\u274c Moderate rate limits",
+        "\u274c Centralized risk"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Medium",
+        "technical_risk": "Low",
+        "liquidity_risk": "Low",
+        "security_risk": "Medium",
+        "operational_risk": "Low"
+      },
+      "profit_potential": {
+        "daily_roi": "2-5%",
+        "monthly_roi": "60-150%",
+        "annual_roi": "730-1825%",
+        "max_trades_per_day": 1920,
+        "expected_profit_per_trade": 0.8
+      },
+      "overall_score": 8.5
+    },
+    "uniswap_pancakeswap": {
+      "name": "Uniswap + PancakeSwap",
+      "exchanges": [
+        "Uniswap",
+        "PancakeSwap"
+      ],
+      "type": "Decentralized (DEX)",
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "rate_limits": {
+        "total_swaps_per_hour": 18000,
+        "uniswap_per_hour": 10000,
+        "pancakeswap_per_hour": 8000
+      },
+      "daily_limits": {
+        "total_usd": "Unlimited",
+        "uniswap_usd": "Unlimited",
+        "pancakeswap_usd": "Unlimited"
+      },
+      "fees": {
+        "uniswap_total": 0.004,
+        "pancakeswap_total": 0.0025,
+        "average_total": 0.00325
+      },
+      "crypto_support": {
+        "uniswap": 1000,
+        "pancakeswap": 500,
+        "total_unique": 1500
+      },
+      "pros": [
+        "\u2705 No geographic restrictions",
+        "\u2705 Fully automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 Very high rate limits (18,000/hour)",
+        "\u2705 Unlimited daily limits",
+        "\u2705 Wide token selection",
+        "\u2705 Non-custodial",
+        "\u2705 No centralized risk",
+        "\u2705 Lower fees than centralized"
+      ],
+      "cons": [
+        "\u274c Requires wallet connection",
+        "\u274c Gas fees for transactions",
+        "\u274c Technical complexity",
+        "\u274c No fiat support",
+        "\u274c No customer support",
+        "\u274c Network congestion issues",
+        "\u274c Smart contract risks"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "High",
+        "liquidity_risk": "Medium",
+        "security_risk": "Medium",
+        "operational_risk": "High"
+      },
+      "profit_potential": {
+        "daily_roi": "5-15%",
+        "monthly_roi": "150-450%",
+        "annual_roi": "1825-5475%",
+        "max_trades_per_day": 432000,
+        "expected_profit_per_trade": 0.6
+      },
+      "overall_score": 9.0
+    },
+    "coinex_uniswap": {
+      "name": "CoinEx + Uniswap",
+      "exchanges": [
+        "CoinEx",
+        "Uniswap"
+      ],
+      "type": "Hybrid (Centralized + DEX)",
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "rate_limits": {
+        "total_operations_per_hour": 10050,
+        "coinex_per_hour": 50,
+        "uniswap_per_hour": 10000
+      },
+      "daily_limits": {
+        "total_usd": "Unlimited",
+        "coinex_usd": 100000,
+        "uniswap_usd": "Unlimited"
+      },
+      "fees": {
+        "coinex_usdt": 0.5,
+        "uniswap_total": 0.004,
+        "average_usdt": 0.0025
+      },
+      "crypto_support": {
+        "coinex": 1000,
+        "uniswap": 1000,
+        "total_unique": 2000
+      },
+      "pros": [
+        "\u2705 No geographic restrictions",
+        "\u2705 Fully automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 Very high rate limits (10,050/hour)",
+        "\u2705 Wide crypto selection (2000+)",
+        "\u2705 Good liquidity",
+        "\u2705 Diversified risk",
+        "\u2705 Best of both worlds"
+      ],
+      "cons": [
+        "\u274c Not available in US (CoinEx)",
+        "\u274c No fiat support",
+        "\u274c Technical complexity (DEX)",
+        "\u274c Gas fees for DEX",
+        "\u274c Mixed complexity"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "Medium",
+        "liquidity_risk": "Low",
+        "security_risk": "Medium",
+        "operational_risk": "Medium"
+      },
+      "profit_potential": {
+        "daily_roi": "3-8%",
+        "monthly_roi": "90-240%",
+        "annual_roi": "1095-2920%",
+        "max_trades_per_day": 241200,
+        "expected_profit_per_trade": 0.7
+      },
+      "overall_score": 8.8
+    }
+  },
+  "best_profit": [
+    "uniswap_pancakeswap",
+    {
+      "name": "Uniswap + PancakeSwap",
+      "exchanges": [
+        "Uniswap",
+        "PancakeSwap"
+      ],
+      "type": "Decentralized (DEX)",
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "rate_limits": {
+        "total_swaps_per_hour": 18000,
+        "uniswap_per_hour": 10000,
+        "pancakeswap_per_hour": 8000
+      },
+      "daily_limits": {
+        "total_usd": "Unlimited",
+        "uniswap_usd": "Unlimited",
+        "pancakeswap_usd": "Unlimited"
+      },
+      "fees": {
+        "uniswap_total": 0.004,
+        "pancakeswap_total": 0.0025,
+        "average_total": 0.00325
+      },
+      "crypto_support": {
+        "uniswap": 1000,
+        "pancakeswap": 500,
+        "total_unique": 1500
+      },
+      "pros": [
+        "\u2705 No geographic restrictions",
+        "\u2705 Fully automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 Very high rate limits (18,000/hour)",
+        "\u2705 Unlimited daily limits",
+        "\u2705 Wide token selection",
+        "\u2705 Non-custodial",
+        "\u2705 No centralized risk",
+        "\u2705 Lower fees than centralized"
+      ],
+      "cons": [
+        "\u274c Requires wallet connection",
+        "\u274c Gas fees for transactions",
+        "\u274c Technical complexity",
+        "\u274c No fiat support",
+        "\u274c No customer support",
+        "\u274c Network congestion issues",
+        "\u274c Smart contract risks"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "High",
+        "liquidity_risk": "Medium",
+        "security_risk": "Medium",
+        "operational_risk": "High"
+      },
+      "profit_potential": {
+        "daily_roi": "5-15%",
+        "monthly_roi": "150-450%",
+        "annual_roi": "1825-5475%",
+        "max_trades_per_day": 432000,
+        "expected_profit_per_trade": 0.6
+      },
+      "overall_score": 9.0
+    }
+  ],
+  "best_risk": [
+    "coinex_hyperliquid",
+    {
+      "name": "CoinEx + Hyperliquid",
+      "exchanges": [
+        "CoinEx",
+        "Hyperliquid"
+      ],
+      "type": "Centralized",
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "rate_limits": {
+        "total_withdrawals_per_hour": 80,
+        "coinex_per_hour": 50,
+        "hyperliquid_per_hour": 30
+      },
+      "daily_limits": {
+        "total_usd": 150000,
+        "coinex_usd": 100000,
+        "hyperliquid_usd": 50000
+      },
+      "fees": {
+        "coinex_usdt": 0.5,
+        "hyperliquid_usdt": 0.3,
+        "average_usdt": 0.4
+      },
+      "crypto_support": {
+        "coinex": 1000,
+        "hyperliquid": 50,
+        "total_unique": 1050
+      },
+      "pros": [
+        "\u2705 No geographic restrictions",
+        "\u2705 Fully automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 Good rate limits (80/hour)",
+        "\u2705 Established exchanges",
+        "\u2705 Good liquidity",
+        "\u2705 Wide crypto selection",
+        "\u2705 Lower technical complexity"
+      ],
+      "cons": [
+        "\u274c Not available in US (CoinEx)",
+        "\u274c No fiat support",
+        "\u274c Limited customer support",
+        "\u274c Moderate rate limits",
+        "\u274c Centralized risk"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Medium",
+        "technical_risk": "Low",
+        "liquidity_risk": "Low",
+        "security_risk": "Medium",
+        "operational_risk": "Low"
+      },
+      "profit_potential": {
+        "daily_roi": "2-5%",
+        "monthly_roi": "60-150%",
+        "annual_roi": "730-1825%",
+        "max_trades_per_day": 1920,
+        "expected_profit_per_trade": 0.8
+      },
+      "overall_score": 8.5
+    }
+  ],
+  "best_balance": [
+    "uniswap_pancakeswap",
+    {
+      "name": "Uniswap + PancakeSwap",
+      "exchanges": [
+        "Uniswap",
+        "PancakeSwap"
+      ],
+      "type": "Decentralized (DEX)",
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "rate_limits": {
+        "total_swaps_per_hour": 18000,
+        "uniswap_per_hour": 10000,
+        "pancakeswap_per_hour": 8000
+      },
+      "daily_limits": {
+        "total_usd": "Unlimited",
+        "uniswap_usd": "Unlimited",
+        "pancakeswap_usd": "Unlimited"
+      },
+      "fees": {
+        "uniswap_total": 0.004,
+        "pancakeswap_total": 0.0025,
+        "average_total": 0.00325
+      },
+      "crypto_support": {
+        "uniswap": 1000,
+        "pancakeswap": 500,
+        "total_unique": 1500
+      },
+      "pros": [
+        "\u2705 No geographic restrictions",
+        "\u2705 Fully automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 Very high rate limits (18,000/hour)",
+        "\u2705 Unlimited daily limits",
+        "\u2705 Wide token selection",
+        "\u2705 Non-custodial",
+        "\u2705 No centralized risk",
+        "\u2705 Lower fees than centralized"
+      ],
+      "cons": [
+        "\u274c Requires wallet connection",
+        "\u274c Gas fees for transactions",
+        "\u274c Technical complexity",
+        "\u274c No fiat support",
+        "\u274c No customer support",
+        "\u274c Network congestion issues",
+        "\u274c Smart contract risks"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "High",
+        "liquidity_risk": "Medium",
+        "security_risk": "Medium",
+        "operational_risk": "High"
+      },
+      "profit_potential": {
+        "daily_roi": "5-15%",
+        "monthly_roi": "150-450%",
+        "annual_roi": "1825-5475%",
+        "max_trades_per_day": 432000,
+        "expected_profit_per_trade": 0.6
+      },
+      "overall_score": 9.0
+    }
+  ]
+}

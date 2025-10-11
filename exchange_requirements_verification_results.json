@@ -1,0 +1,35 @@
+{
+  "pionex_results": {
+    "exchange": "Pionex.US",
+    "passed": true,
+    "requirements_met": {
+      "automated_withdrawals": "\u2705 Pass",
+      "no_manual_confirmation": "\u2705 Pass",
+      "no_whitelist_required": "\u2705 Pass",
+      "ccxt_supported": "\u2705 Pass",
+      "good_liquidity": "\u2705 Pass",
+      "reasonable_fees": "\u2705 Pass",
+      "us_available": "\u2705 Pass",
+      "trustworthy": "\u2705 Pass",
+      "good_api_support": "\u2705 Pass"
+    },
+    "requirements_failed": []
+  },
+  "coinbase_results": {
+    "exchange": "Coinbase Pro",
+    "passed": true,
+    "requirements_met": {
+      "automated_withdrawals": "\u2705 Pass",
+      "no_manual_confirmation": "\u2705 Pass",
+      "no_whitelist_required": "\u2705 Pass",
+      "ccxt_supported": "\u2705 Pass",
+      "good_liquidity": "\u2705 Pass",
+      "reasonable_fees": "\u2705 Pass",
+      "us_available": "\u2705 Pass",
+      "trustworthy": "\u2705 Pass",
+      "good_api_support": "\u2705 Pass"
+    },
+    "requirements_failed": []
+  },
+  "both_passed": true
+}

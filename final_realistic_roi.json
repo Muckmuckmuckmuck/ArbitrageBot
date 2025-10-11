@@ -1,0 +1,20 @@
+[
+  [
+    "TON/USDT",
+    {
+      "profitable": true,
+      "daily_profit": 1.989,
+      "net_profit_per_trade": 2.0,
+      "opportunities_per_day": 4.5
+    }
+  ],
+  [
+    "PEPE/USDT",
+    {
+      "profitable": true,
+      "daily_profit": 0.8287500000000001,
+      "net_profit_per_trade": 1.0,
+      "opportunities_per_day": 3.75
+    }
+  ]
+]

@@ -1,0 +1,529 @@
+{
+  "us_available_exchanges": {
+    "uniswap_pancakeswap": {
+      "name": "Uniswap + PancakeSwap",
+      "exchanges": [
+        "Uniswap",
+        "PancakeSwap"
+      ],
+      "type": "Decentralized (DEX)",
+      "us_available": true,
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "rate_limits": {
+        "total_swaps_per_hour": 18000,
+        "uniswap_per_hour": 10000,
+        "pancakeswap_per_hour": 8000
+      },
+      "daily_limits": {
+        "total_usd": "Unlimited",
+        "uniswap_usd": "Unlimited",
+        "pancakeswap_usd": "Unlimited"
+      },
+      "fees": {
+        "uniswap_total": 0.004,
+        "pancakeswap_total": 0.0025,
+        "average_total": 0.00325
+      },
+      "crypto_support": {
+        "uniswap": 1000,
+        "pancakeswap": 500,
+        "total_unique": 1500
+      },
+      "pros": [
+        "\u2705 Available in US",
+        "\u2705 No geographic restrictions",
+        "\u2705 Fully automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 Very high rate limits (18,000/hour)",
+        "\u2705 Unlimited daily limits",
+        "\u2705 Wide token selection",
+        "\u2705 Non-custodial",
+        "\u2705 No centralized risk"
+      ],
+      "cons": [
+        "\u274c Requires wallet connection",
+        "\u274c Gas fees for transactions",
+        "\u274c Technical complexity",
+        "\u274c No fiat support",
+        "\u274c No customer support",
+        "\u274c Network congestion issues",
+        "\u274c Smart contract risks"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "High",
+        "liquidity_risk": "Medium",
+        "security_risk": "Medium",
+        "operational_risk": "High"
+      },
+      "profit_potential": {
+        "daily_roi": "5-15%",
+        "monthly_roi": "150-450%",
+        "annual_roi": "1825-5475%",
+        "max_trades_per_day": 432000,
+        "expected_profit_per_trade": 0.6
+      },
+      "overall_score": 9.0
+    },
+    "hyperliquid_uniswap": {
+      "name": "Hyperliquid + Uniswap",
+      "exchanges": [
+        "Hyperliquid",
+        "Uniswap"
+      ],
+      "type": "Hybrid (Centralized + DEX)",
+      "us_available": true,
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "rate_limits": {
+        "total_operations_per_hour": 10030,
+        "hyperliquid_per_hour": 30,
+        "uniswap_per_hour": 10000
+      },
+      "daily_limits": {
+        "total_usd": "Unlimited",
+        "hyperliquid_usd": 50000,
+        "uniswap_usd": "Unlimited"
+      },
+      "fees": {
+        "hyperliquid_usdt": 0.3,
+        "uniswap_total": 0.004,
+        "average_usdt": 0.00215
+      },
+      "crypto_support": {
+        "hyperliquid": 50,
+        "uniswap": 1000,
+        "total_unique": 1050
+      },
+      "pros": [
+        "\u2705 Available in US",
+        "\u2705 No geographic restrictions",
+        "\u2705 Fully automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 Very high rate limits (10,030/hour)",
+        "\u2705 Wide crypto selection (1050+)",
+        "\u2705 Good liquidity",
+        "\u2705 Diversified risk",
+        "\u2705 Best of both worlds"
+      ],
+      "cons": [
+        "\u274c No fiat support",
+        "\u274c Technical complexity (DEX)",
+        "\u274c Gas fees for DEX",
+        "\u274c Mixed complexity",
+        "\u274c Limited crypto selection on Hyperliquid"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "Medium",
+        "liquidity_risk": "Low",
+        "security_risk": "Medium",
+        "operational_risk": "Medium"
+      },
+      "profit_potential": {
+        "daily_roi": "3-8%",
+        "monthly_roi": "90-240%",
+        "annual_roi": "1095-2920%",
+        "max_trades_per_day": 240720,
+        "expected_profit_per_trade": 0.7
+      },
+      "overall_score": 8.8
+    },
+    "kraken_uniswap": {
+      "name": "Kraken + Uniswap",
+      "exchanges": [
+        "Kraken",
+        "Uniswap"
+      ],
+      "type": "Hybrid (Centralized + DEX)",
+      "us_available": true,
+      "geographic_restrictions": 7,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "rate_limits": {
+        "total_operations_per_hour": 10020,
+        "kraken_per_hour": 20,
+        "uniswap_per_hour": 10000
+      },
+      "daily_limits": {
+        "total_usd": "Unlimited",
+        "kraken_usd": 100000,
+        "uniswap_usd": "Unlimited"
+      },
+      "fees": {
+        "kraken_usdt": 0.5,
+        "uniswap_total": 0.004,
+        "average_usdt": 0.00225
+      },
+      "crypto_support": {
+        "kraken": 200,
+        "uniswap": 1000,
+        "total_unique": 1200
+      },
+      "pros": [
+        "\u2705 Available in US",
+        "\u2705 Very few geographic restrictions",
+        "\u2705 Fully automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 High rate limits (10,020/hour)",
+        "\u2705 Wide crypto selection (1200+)",
+        "\u2705 Established exchange (Kraken)",
+        "\u2705 Good liquidity",
+        "\u2705 Diversified risk"
+      ],
+      "cons": [
+        "\u274c No fiat support",
+        "\u274c Technical complexity (DEX)",
+        "\u274c Gas fees for DEX",
+        "\u274c Mixed complexity",
+        "\u274c Some geographic restrictions"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "Medium",
+        "liquidity_risk": "Low",
+        "security_risk": "Low",
+        "operational_risk": "Medium"
+      },
+      "profit_potential": {
+        "daily_roi": "3-8%",
+        "monthly_roi": "90-240%",
+        "annual_roi": "1095-2920%",
+        "max_trades_per_day": 240480,
+        "expected_profit_per_trade": 0.7
+      },
+      "overall_score": 8.5
+    },
+    "hyperliquid_pancakeswap": {
+      "name": "Hyperliquid + PancakeSwap",
+      "exchanges": [
+        "Hyperliquid",
+        "PancakeSwap"
+      ],
+      "type": "Hybrid (Centralized + DEX)",
+      "us_available": true,
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "rate_limits": {
+        "total_operations_per_hour": 8030,
+        "hyperliquid_per_hour": 30,
+        "pancakeswap_per_hour": 8000
+      },
+      "daily_limits": {
+        "total_usd": "Unlimited",
+        "hyperliquid_usd": 50000,
+        "pancakeswap_usd": "Unlimited"
+      },
+      "fees": {
+        "hyperliquid_usdt": 0.3,
+        "pancakeswap_total": 0.0025,
+        "average_usdt": 0.0014
+      },
+      "crypto_support": {
+        "hyperliquid": 50,
+        "pancakeswap": 500,
+        "total_unique": 550
+      },
+      "pros": [
+        "\u2705 Available in US",
+        "\u2705 No geographic restrictions",
+        "\u2705 Fully automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 High rate limits (8,030/hour)",
+        "\u2705 Wide crypto selection (550+)",
+        "\u2705 Good liquidity",
+        "\u2705 Diversified risk",
+        "\u2705 Lower fees than Uniswap"
+      ],
+      "cons": [
+        "\u274c No fiat support",
+        "\u274c Technical complexity (DEX)",
+        "\u274c Gas fees for DEX",
+        "\u274c Mixed complexity",
+        "\u274c Limited crypto selection on Hyperliquid"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "Medium",
+        "liquidity_risk": "Low",
+        "security_risk": "Medium",
+        "operational_risk": "Medium"
+      },
+      "profit_potential": {
+        "daily_roi": "3-8%",
+        "monthly_roi": "90-240%",
+        "annual_roi": "1095-2920%",
+        "max_trades_per_day": 192720,
+        "expected_profit_per_trade": 0.7
+      },
+      "overall_score": 8.7
+    }
+  },
+  "us_restricted_exchanges": {
+    "coinex": {
+      "name": "CoinEx",
+      "us_available": false,
+      "reason": "Not available in US due to regulatory restrictions"
+    },
+    "bybit": {
+      "name": "Bybit",
+      "us_available": false,
+      "reason": "Not available in US due to regulatory restrictions"
+    },
+    "kucoin": {
+      "name": "KuCoin",
+      "us_available": false,
+      "reason": "Not available in US due to regulatory restrictions"
+    },
+    "gate_io": {
+      "name": "Gate.io",
+      "us_available": false,
+      "reason": "Not available in US due to regulatory restrictions"
+    },
+    "mexc": {
+      "name": "MEXC",
+      "us_available": false,
+      "reason": "Not available in US due to regulatory restrictions"
+    }
+  },
+  "best_profit": [
+    "uniswap_pancakeswap",
+    {
+      "name": "Uniswap + PancakeSwap",
+      "exchanges": [
+        "Uniswap",
+        "PancakeSwap"
+      ],
+      "type": "Decentralized (DEX)",
+      "us_available": true,
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "rate_limits": {
+        "total_swaps_per_hour": 18000,
+        "uniswap_per_hour": 10000,
+        "pancakeswap_per_hour": 8000
+      },
+      "daily_limits": {
+        "total_usd": "Unlimited",
+        "uniswap_usd": "Unlimited",
+        "pancakeswap_usd": "Unlimited"
+      },
+      "fees": {
+        "uniswap_total": 0.004,
+        "pancakeswap_total": 0.0025,
+        "average_total": 0.00325
+      },
+      "crypto_support": {
+        "uniswap": 1000,
+        "pancakeswap": 500,
+        "total_unique": 1500
+      },
+      "pros": [
+        "\u2705 Available in US",
+        "\u2705 No geographic restrictions",
+        "\u2705 Fully automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 Very high rate limits (18,000/hour)",
+        "\u2705 Unlimited daily limits",
+        "\u2705 Wide token selection",
+        "\u2705 Non-custodial",
+        "\u2705 No centralized risk"
+      ],
+      "cons": [
+        "\u274c Requires wallet connection",
+        "\u274c Gas fees for transactions",
+        "\u274c Technical complexity",
+        "\u274c No fiat support",
+        "\u274c No customer support",
+        "\u274c Network congestion issues",
+        "\u274c Smart contract risks"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "High",
+        "liquidity_risk": "Medium",
+        "security_risk": "Medium",
+        "operational_risk": "High"
+      },
+      "profit_potential": {
+        "daily_roi": "5-15%",
+        "monthly_roi": "150-450%",
+        "annual_roi": "1825-5475%",
+        "max_trades_per_day": 432000,
+        "expected_profit_per_trade": 0.6
+      },
+      "overall_score": 9.0
+    }
+  ],
+  "best_risk": [
+    "hyperliquid_uniswap",
+    {
+      "name": "Hyperliquid + Uniswap",
+      "exchanges": [
+        "Hyperliquid",
+        "Uniswap"
+      ],
+      "type": "Hybrid (Centralized + DEX)",
+      "us_available": true,
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "rate_limits": {
+        "total_operations_per_hour": 10030,
+        "hyperliquid_per_hour": 30,
+        "uniswap_per_hour": 10000
+      },
+      "daily_limits": {
+        "total_usd": "Unlimited",
+        "hyperliquid_usd": 50000,
+        "uniswap_usd": "Unlimited"
+      },
+      "fees": {
+        "hyperliquid_usdt": 0.3,
+        "uniswap_total": 0.004,
+        "average_usdt": 0.00215
+      },
+      "crypto_support": {
+        "hyperliquid": 50,
+        "uniswap": 1000,
+        "total_unique": 1050
+      },
+      "pros": [
+        "\u2705 Available in US",
+        "\u2705 No geographic restrictions",
+        "\u2705 Fully automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 Very high rate limits (10,030/hour)",
+        "\u2705 Wide crypto selection (1050+)",
+        "\u2705 Good liquidity",
+        "\u2705 Diversified risk",
+        "\u2705 Best of both worlds"
+      ],
+      "cons": [
+        "\u274c No fiat support",
+        "\u274c Technical complexity (DEX)",
+        "\u274c Gas fees for DEX",
+        "\u274c Mixed complexity",
+        "\u274c Limited crypto selection on Hyperliquid"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "Medium",
+        "liquidity_risk": "Low",
+        "security_risk": "Medium",
+        "operational_risk": "Medium"
+      },
+      "profit_potential": {
+        "daily_roi": "3-8%",
+        "monthly_roi": "90-240%",
+        "annual_roi": "1095-2920%",
+        "max_trades_per_day": 240720,
+        "expected_profit_per_trade": 0.7
+      },
+      "overall_score": 8.8
+    }
+  ],
+  "best_balance": [
+    "uniswap_pancakeswap",
+    {
+      "name": "Uniswap + PancakeSwap",
+      "exchanges": [
+        "Uniswap",
+        "PancakeSwap"
+      ],
+      "type": "Decentralized (DEX)",
+      "us_available": true,
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "rate_limits": {
+        "total_swaps_per_hour": 18000,
+        "uniswap_per_hour": 10000,
+        "pancakeswap_per_hour": 8000
+      },
+      "daily_limits": {
+        "total_usd": "Unlimited",
+        "uniswap_usd": "Unlimited",
+        "pancakeswap_usd": "Unlimited"
+      },
+      "fees": {
+        "uniswap_total": 0.004,
+        "pancakeswap_total": 0.0025,
+        "average_total": 0.00325
+      },
+      "crypto_support": {
+        "uniswap": 1000,
+        "pancakeswap": 500,
+        "total_unique": 1500
+      },
+      "pros": [
+        "\u2705 Available in US",
+        "\u2705 No geographic restrictions",
+        "\u2705 Fully automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 Very high rate limits (18,000/hour)",
+        "\u2705 Unlimited daily limits",
+        "\u2705 Wide token selection",
+        "\u2705 Non-custodial",
+        "\u2705 No centralized risk"
+      ],
+      "cons": [
+        "\u274c Requires wallet connection",
+        "\u274c Gas fees for transactions",
+        "\u274c Technical complexity",
+        "\u274c No fiat support",
+        "\u274c No customer support",
+        "\u274c Network congestion issues",
+        "\u274c Smart contract risks"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "High",
+        "liquidity_risk": "Medium",
+        "security_risk": "Medium",
+        "operational_risk": "High"
+      },
+      "profit_potential": {
+        "daily_roi": "5-15%",
+        "monthly_roi": "150-450%",
+        "annual_roi": "1825-5475%",
+        "max_trades_per_day": 432000,
+        "expected_profit_per_trade": 0.6
+      },
+      "overall_score": 9.0
+    }
+  ]
+}

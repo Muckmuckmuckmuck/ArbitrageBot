@@ -1,0 +1,66 @@
+{
+  "1. Minimum Spread": {
+    "old_value": "0.8%",
+    "new_value": "0.7%",
+    "reason": "Higher combined fees (0.6% vs 0.032%)",
+    "calculation": "0.6% fees + 0.1% profit = 0.7% minimum",
+    "file": "pionex_coinbase_config.py",
+    "status": "\u2705 Already adjusted"
+  },
+  "2. Slippage Estimates": {
+    "old_value": "0.0001-0.0005 (0.01-0.05%)",
+    "new_value": "0.0005-0.002 (0.05-0.2%)",
+    "reason": "Lower liquidity on Pionex/Coinbase",
+    "calculation": "2-4x higher slippage expected",
+    "file": "pionex_coinbase_config.py",
+    "status": "\u26a0\ufe0f  Needs adjustment"
+  },
+  "3. Position Sizing": {
+    "old_value": "15% per trade, 60% total exposure",
+    "new_value": "12% per trade, 50% total exposure",
+    "reason": "Lower liquidity, higher risk",
+    "calculation": "Conservative due to lower volume",
+    "file": "pionex_coinbase_config.py",
+    "status": "\u2705 Already adjusted"
+  },
+  "4. Scan Frequency": {
+    "old_value": "1-2 seconds per scan",
+    "new_value": "2-5 seconds per scan",
+    "reason": "Lower rate limits (600 vs 1200-3000)",
+    "calculation": "Need to avoid rate limit hits",
+    "file": "pionex_coinbase_bot.py",
+    "status": "\u26a0\ufe0f  Needs adjustment"
+  },
+  "5. Concurrent Trades": {
+    "old_value": "8 concurrent trades",
+    "new_value": "6 concurrent trades",
+    "reason": "Lower rate limits and liquidity",
+    "calculation": "Reduced to prevent congestion",
+    "file": "pionex_coinbase_config.py",
+    "status": "\u2705 Already adjusted"
+  },
+  "6. Reserve Percentage": {
+    "old_value": "20% reserve",
+    "new_value": "30% reserve",
+    "reason": "Higher fees mean need more buffer",
+    "calculation": "More conservative approach",
+    "file": "pionex_coinbase_config.py",
+    "status": "\u2705 Already adjusted"
+  },
+  "7. Transfer Strategy": {
+    "old_value": "Manual confirmation required",
+    "new_value": "Fully automated transfers",
+    "reason": "Both exchanges support API withdrawals",
+    "calculation": "Enable full arbitrage loop",
+    "file": "pioneer_coinbase_bot.py",
+    "status": "\u2705 Already enabled"
+  },
+  "8. Fee Calculations": {
+    "old_value": "0.032% total fees",
+    "new_value": "0.6% total fees + $1 withdrawal",
+    "reason": "Much higher fees on new exchanges",
+    "calculation": "Must account for in profit calculations",
+    "file": "All profit calculations",
+    "status": "\u26a0\ufe0f  Needs verification"
+  }
+}

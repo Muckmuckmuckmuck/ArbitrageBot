@@ -1,0 +1,11 @@
+{
+  "rate_limits": {
+    "total_requests_per_minute": 480.4,
+    "total_requests_per_hour": 28824.0,
+    "total_requests_per_day": 691776.0,
+    "usage_per_minute": 80.06666666666666,
+    "usage_per_hour": 80.06666666666666,
+    "usage_per_day": 80.06666666666666
+  },
+  "timestamp": "2025-10-07 16:40:01.134332"
+}

@@ -1,0 +1,828 @@
+{
+  "compatible": [
+    {
+      "symbol": "TON/USDT",
+      "data": {
+        "category": "Layer 1",
+        "typical_spread": 0.017,
+        "max_spread": 0.03,
+        "min_spread": 0.008,
+        "frequency": 0.6,
+        "daily_volume": 50000000,
+        "transfer_time": 60,
+        "volatility": 0.08,
+        "liquidity_score": 0.75,
+        "success_rate": 0.7,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase"
+        ]
+      },
+      "profitability_score": 0.7125,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "SHIB/USDT",
+      "data": {
+        "category": "Meme",
+        "typical_spread": 0.012,
+        "max_spread": 0.022,
+        "min_spread": 0.006,
+        "frequency": 0.5,
+        "daily_volume": 100000000,
+        "transfer_time": 30,
+        "volatility": 0.1,
+        "liquidity_score": 0.8,
+        "success_rate": 0.7,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase"
+        ]
+      },
+      "profitability_score": 0.71,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "SOL/USDT",
+      "data": {
+        "category": "Layer 1",
+        "typical_spread": 0.008,
+        "max_spread": 0.015,
+        "min_spread": 0.004,
+        "frequency": 0.45,
+        "daily_volume": 500000000,
+        "transfer_time": 10,
+        "volatility": 0.08,
+        "liquidity_score": 0.9,
+        "success_rate": 0.75,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase",
+          "kraken"
+        ]
+      },
+      "profitability_score": 0.6666666666666667,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "AVAX/USDT",
+      "data": {
+        "category": "Layer 1",
+        "typical_spread": 0.009,
+        "max_spread": 0.017,
+        "min_spread": 0.005,
+        "frequency": 0.4,
+        "daily_volume": 200000000,
+        "transfer_time": 30,
+        "volatility": 0.09,
+        "liquidity_score": 0.85,
+        "success_rate": 0.72,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase"
+        ]
+      },
+      "profitability_score": 0.6545,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "ARB/USDT",
+      "data": {
+        "category": "Layer 2",
+        "typical_spread": 0.01,
+        "max_spread": 0.019,
+        "min_spread": 0.005,
+        "frequency": 0.35,
+        "daily_volume": 100000000,
+        "transfer_time": 60,
+        "volatility": 0.09,
+        "liquidity_score": 0.8,
+        "success_rate": 0.7,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin"
+        ]
+      },
+      "profitability_score": 0.64,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "PEPE/USDT",
+      "data": {
+        "category": "Meme",
+        "typical_spread": 0.015,
+        "max_spread": 0.028,
+        "min_spread": 0.007,
+        "frequency": 0.55,
+        "daily_volume": 30000000,
+        "transfer_time": 30,
+        "volatility": 0.12,
+        "liquidity_score": 0.65,
+        "success_rate": 0.65,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin"
+        ]
+      },
+      "profitability_score": 0.6325000000000001,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "DOGE/USDT",
+      "data": {
+        "category": "Meme",
+        "typical_spread": 0.008,
+        "max_spread": 0.016,
+        "min_spread": 0.004,
+        "frequency": 0.35,
+        "daily_volume": 1000000000,
+        "transfer_time": 60,
+        "volatility": 0.08,
+        "liquidity_score": 0.9,
+        "success_rate": 0.75,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase",
+          "kraken"
+        ]
+      },
+      "profitability_score": 0.6299999999999999,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "ATOM/USDT",
+      "data": {
+        "category": "Layer 1",
+        "typical_spread": 0.009,
+        "max_spread": 0.017,
+        "min_spread": 0.005,
+        "frequency": 0.35,
+        "daily_volume": 100000000,
+        "transfer_time": 60,
+        "volatility": 0.08,
+        "liquidity_score": 0.8,
+        "success_rate": 0.72,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase"
+        ]
+      },
+      "profitability_score": 0.6269999999999999,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "XLM/USDT",
+      "data": {
+        "category": "Payment",
+        "typical_spread": 0.008,
+        "max_spread": 0.015,
+        "min_spread": 0.004,
+        "frequency": 0.3,
+        "daily_volume": 100000000,
+        "transfer_time": 3,
+        "volatility": 0.08,
+        "liquidity_score": 0.8,
+        "success_rate": 0.72,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase"
+        ]
+      },
+      "profitability_score": 0.6209999999999999,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "UNI/USDT",
+      "data": {
+        "category": "DeFi",
+        "typical_spread": 0.009,
+        "max_spread": 0.018,
+        "min_spread": 0.005,
+        "frequency": 0.4,
+        "daily_volume": 100000000,
+        "transfer_time": 120,
+        "volatility": 0.09,
+        "liquidity_score": 0.8,
+        "success_rate": 0.7,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase"
+        ]
+      },
+      "profitability_score": 0.6149999999999999,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "NEAR/USDT",
+      "data": {
+        "category": "Layer 1",
+        "typical_spread": 0.01,
+        "max_spread": 0.019,
+        "min_spread": 0.005,
+        "frequency": 0.35,
+        "daily_volume": 80000000,
+        "transfer_time": 30,
+        "volatility": 0.1,
+        "liquidity_score": 0.75,
+        "success_rate": 0.7,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin"
+        ]
+      },
+      "profitability_score": 0.6124999999999999,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "MATIC/USDT",
+      "data": {
+        "category": "Layer 2",
+        "typical_spread": 0.008,
+        "max_spread": 0.015,
+        "min_spread": 0.004,
+        "frequency": 0.4,
+        "daily_volume": 150000000,
+        "transfer_time": 120,
+        "volatility": 0.08,
+        "liquidity_score": 0.85,
+        "success_rate": 0.72,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase"
+        ]
+      },
+      "profitability_score": 0.6094999999999999,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "OP/USDT",
+      "data": {
+        "category": "Layer 2",
+        "typical_spread": 0.011,
+        "max_spread": 0.02,
+        "min_spread": 0.006,
+        "frequency": 0.3,
+        "daily_volume": 80000000,
+        "transfer_time": 60,
+        "volatility": 0.1,
+        "liquidity_score": 0.75,
+        "success_rate": 0.68,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin"
+        ]
+      },
+      "profitability_score": 0.6054999999999999,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "ALGO/USDT",
+      "data": {
+        "category": "Layer 1",
+        "typical_spread": 0.009,
+        "max_spread": 0.017,
+        "min_spread": 0.005,
+        "frequency": 0.3,
+        "daily_volume": 80000000,
+        "transfer_time": 4,
+        "volatility": 0.09,
+        "liquidity_score": 0.78,
+        "success_rate": 0.7,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase"
+        ]
+      },
+      "profitability_score": 0.6006666666666666,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "BONK/USDT",
+      "data": {
+        "category": "Meme",
+        "typical_spread": 0.014,
+        "max_spread": 0.025,
+        "min_spread": 0.007,
+        "frequency": 0.45,
+        "daily_volume": 25000000,
+        "transfer_time": 30,
+        "volatility": 0.13,
+        "liquidity_score": 0.6,
+        "success_rate": 0.65,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit"
+        ]
+      },
+      "profitability_score": 0.5825,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "AAVE/USDT",
+      "data": {
+        "category": "DeFi",
+        "typical_spread": 0.01,
+        "max_spread": 0.02,
+        "min_spread": 0.005,
+        "frequency": 0.35,
+        "daily_volume": 80000000,
+        "transfer_time": 120,
+        "volatility": 0.1,
+        "liquidity_score": 0.75,
+        "success_rate": 0.7,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase"
+        ]
+      },
+      "profitability_score": 0.5824999999999999,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "FTM/USDT",
+      "data": {
+        "category": "Layer 1",
+        "typical_spread": 0.011,
+        "max_spread": 0.021,
+        "min_spread": 0.006,
+        "frequency": 0.3,
+        "daily_volume": 60000000,
+        "transfer_time": 30,
+        "volatility": 0.11,
+        "liquidity_score": 0.7,
+        "success_rate": 0.68,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin"
+        ]
+      },
+      "profitability_score": 0.5780000000000001,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "MANA/USDT",
+      "data": {
+        "category": "Gaming",
+        "typical_spread": 0.011,
+        "max_spread": 0.021,
+        "min_spread": 0.006,
+        "frequency": 0.3,
+        "daily_volume": 60000000,
+        "transfer_time": 120,
+        "volatility": 0.11,
+        "liquidity_score": 0.72,
+        "success_rate": 0.67,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase"
+        ]
+      },
+      "profitability_score": 0.5499999999999999,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "SAND/USDT",
+      "data": {
+        "category": "Gaming",
+        "typical_spread": 0.012,
+        "max_spread": 0.023,
+        "min_spread": 0.006,
+        "frequency": 0.3,
+        "daily_volume": 50000000,
+        "transfer_time": 120,
+        "volatility": 0.12,
+        "liquidity_score": 0.7,
+        "success_rate": 0.65,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase"
+        ]
+      },
+      "profitability_score": 0.5449999999999999,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "OKB/USDT",
+      "data": {
+        "category": "Exchange",
+        "typical_spread": 0.009,
+        "max_spread": 0.017,
+        "min_spread": 0.005,
+        "frequency": 0.3,
+        "daily_volume": 50000000,
+        "transfer_time": 30,
+        "volatility": 0.08,
+        "liquidity_score": 0.75,
+        "success_rate": 0.7,
+        "exchange_support": [
+          "okx",
+          "bybit",
+          "kucoin"
+        ]
+      },
+      "profitability_score": 0.5425,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "AXS/USDT",
+      "data": {
+        "category": "Gaming",
+        "typical_spread": 0.013,
+        "max_spread": 0.024,
+        "min_spread": 0.007,
+        "frequency": 0.25,
+        "daily_volume": 40000000,
+        "transfer_time": 120,
+        "volatility": 0.13,
+        "liquidity_score": 0.65,
+        "success_rate": 0.63,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin"
+        ]
+      },
+      "profitability_score": 0.5255000000000001,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "FET/USDT",
+      "data": {
+        "category": "AI",
+        "typical_spread": 0.013,
+        "max_spread": 0.025,
+        "min_spread": 0.007,
+        "frequency": 0.3,
+        "daily_volume": 30000000,
+        "transfer_time": 120,
+        "volatility": 0.12,
+        "liquidity_score": 0.65,
+        "success_rate": 0.65,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin"
+        ]
+      },
+      "profitability_score": 0.5225,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "XMR/USDT",
+      "data": {
+        "category": "Privacy",
+        "typical_spread": 0.01,
+        "max_spread": 0.019,
+        "min_spread": 0.005,
+        "frequency": 0.3,
+        "daily_volume": 50000000,
+        "transfer_time": 120,
+        "volatility": 0.09,
+        "liquidity_score": 0.7,
+        "success_rate": 0.68,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin"
+        ]
+      },
+      "profitability_score": 0.518,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "AGIX/USDT",
+      "data": {
+        "category": "AI",
+        "typical_spread": 0.014,
+        "max_spread": 0.026,
+        "min_spread": 0.007,
+        "frequency": 0.28,
+        "daily_volume": 25000000,
+        "transfer_time": 120,
+        "volatility": 0.13,
+        "liquidity_score": 0.6,
+        "success_rate": 0.63,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit"
+        ]
+      },
+      "profitability_score": 0.5165,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "FLOKI/USDT",
+      "data": {
+        "category": "Meme",
+        "typical_spread": 0.01,
+        "max_spread": 0.02,
+        "min_spread": 0.005,
+        "frequency": 0.4,
+        "daily_volume": 20000000,
+        "transfer_time": 30,
+        "volatility": 0.11,
+        "liquidity_score": 0.65,
+        "success_rate": 0.65,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin"
+        ]
+      },
+      "profitability_score": 0.5125,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "CRV/USDT",
+      "data": {
+        "category": "DeFi",
+        "typical_spread": 0.01,
+        "max_spread": 0.019,
+        "min_spread": 0.005,
+        "frequency": 0.3,
+        "daily_volume": 40000000,
+        "transfer_time": 120,
+        "volatility": 0.1,
+        "liquidity_score": 0.7,
+        "success_rate": 0.68,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin"
+        ]
+      },
+      "profitability_score": 0.503,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "SUSHI/USDT",
+      "data": {
+        "category": "DeFi",
+        "typical_spread": 0.011,
+        "max_spread": 0.022,
+        "min_spread": 0.006,
+        "frequency": 0.3,
+        "daily_volume": 30000000,
+        "transfer_time": 120,
+        "volatility": 0.12,
+        "liquidity_score": 0.65,
+        "success_rate": 0.65,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin"
+        ]
+      },
+      "profitability_score": 0.4925,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "WIF/USDT",
+      "data": {
+        "category": "Meme",
+        "typical_spread": 0.011,
+        "max_spread": 0.021,
+        "min_spread": 0.006,
+        "frequency": 0.35,
+        "daily_volume": 15000000,
+        "transfer_time": 30,
+        "volatility": 0.14,
+        "liquidity_score": 0.55,
+        "success_rate": 0.6,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit"
+        ]
+      },
+      "profitability_score": 0.49000000000000005,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "OCEAN/USDT",
+      "data": {
+        "category": "AI",
+        "typical_spread": 0.012,
+        "max_spread": 0.023,
+        "min_spread": 0.006,
+        "frequency": 0.28,
+        "daily_volume": 20000000,
+        "transfer_time": 120,
+        "volatility": 0.12,
+        "liquidity_score": 0.62,
+        "success_rate": 0.64,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin"
+        ]
+      },
+      "profitability_score": 0.48300000000000004,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    },
+    {
+      "symbol": "COMP/USDT",
+      "data": {
+        "category": "DeFi",
+        "typical_spread": 0.012,
+        "max_spread": 0.023,
+        "min_spread": 0.006,
+        "frequency": 0.25,
+        "daily_volume": 25000000,
+        "transfer_time": 120,
+        "volatility": 0.11,
+        "liquidity_score": 0.6,
+        "success_rate": 0.65,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "coinbase"
+        ]
+      },
+      "profitability_score": 0.4825,
+      "meets_requirements": true,
+      "rejection_reasons": []
+    }
+  ],
+  "incompatible": [
+    {
+      "symbol": "BNB/USDT",
+      "data": {
+        "category": "Exchange",
+        "typical_spread": 0.007,
+        "max_spread": 0.014,
+        "min_spread": 0.004,
+        "frequency": 0.4,
+        "daily_volume": 800000000,
+        "transfer_time": 30,
+        "volatility": 0.07,
+        "liquidity_score": 0.95,
+        "success_rate": 0.78,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin"
+        ]
+      },
+      "profitability_score": 0.6455,
+      "meets_requirements": false,
+      "rejection_reasons": [
+        "Spread too low (0.7% < 0.8%)"
+      ]
+    },
+    {
+      "symbol": "XRP/USDT",
+      "data": {
+        "category": "Payment",
+        "typical_spread": 0.007,
+        "max_spread": 0.014,
+        "min_spread": 0.004,
+        "frequency": 0.35,
+        "daily_volume": 300000000,
+        "transfer_time": 5,
+        "volatility": 0.08,
+        "liquidity_score": 0.88,
+        "success_rate": 0.75,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase",
+          "kraken"
+        ]
+      },
+      "profitability_score": 0.6303333333333332,
+      "meets_requirements": false,
+      "rejection_reasons": [
+        "Spread too low (0.7% < 0.8%)"
+      ]
+    },
+    {
+      "symbol": "USDC/USDT",
+      "data": {
+        "category": "Stablecoin",
+        "typical_spread": 0.001,
+        "max_spread": 0.003,
+        "min_spread": 0.0005,
+        "frequency": 0.8,
+        "daily_volume": 2000000000,
+        "transfer_time": 120,
+        "volatility": 0.001,
+        "liquidity_score": 1.0,
+        "success_rate": 0.95,
+        "exchange_support": [
+          "binance",
+          "okx",
+          "bybit",
+          "kucoin",
+          "coinbase",
+          "kraken"
+        ]
+      },
+      "profitability_score": 0.63,
+      "meets_requirements": false,
+      "rejection_reasons": [
+        "Spread too low (0.1% < 0.8%)"
+      ]
+    }
+  ],
+  "requirements": {
+    "min_spread": 0.008,
+    "min_frequency": 0.15,
+    "min_daily_volume": 5000000,
+    "max_transfer_time": 300,
+    "min_success_rate": 0.6,
+    "max_volatility": 0.15,
+    "min_liquidity_score": 0.5
+  }
+}

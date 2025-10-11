@@ -1,0 +1,216 @@
+{
+  "analysis_timestamp": 1759799383.285713,
+  "account_sizes": {
+    "$100": {
+      "daily_roi": 4.760583937199999,
+      "annual_roi": 1737.613137078,
+      "daily_roi_percent": 0.04760583937199999,
+      "annual_roi_percent": 17.376131370779998,
+      "total_opportunities": 122
+    },
+    "$1,000": {
+      "daily_roi": 47.605839371999984,
+      "annual_roi": 17376.13137078,
+      "daily_roi_percent": 0.04760583937199998,
+      "annual_roi_percent": 17.37613137078,
+      "total_opportunities": 122
+    },
+    "$10,000": {
+      "daily_roi": 476.0583937200001,
+      "annual_roi": 173761.31370779997,
+      "daily_roi_percent": 0.04760583937200001,
+      "annual_roi_percent": 17.376131370779998,
+      "total_opportunities": 122
+    },
+    "$100,000": {
+      "daily_roi": 4760.583937199999,
+      "annual_roi": 1737613.1370779998,
+      "daily_roi_percent": 0.04760583937199999,
+      "annual_roi_percent": 17.376131370779998,
+      "total_opportunities": 122
+    },
+    "$1,000,000": {
+      "daily_roi": 47605.83937199999,
+      "annual_roi": 17376131.370779995,
+      "daily_roi_percent": 0.04760583937199999,
+      "annual_roi_percent": 17.376131370779994,
+      "total_opportunities": 122
+    }
+  },
+  "asset_data": {
+    "TON/USDT": {
+      "tier": "A+",
+      "avg_spread": 0.018,
+      "success_rate": 0.75,
+      "opportunities_per_day": 8,
+      "transfer_time": 0.5,
+      "position_size": 0.08,
+      "volatility": 0.03,
+      "liquidity_score": 0.95
+    },
+    "ALGO/USDT": {
+      "tier": "A+",
+      "avg_spread": 0.016,
+      "success_rate": 0.8,
+      "opportunities_per_day": 12,
+      "transfer_time": 0.07,
+      "position_size": 0.08,
+      "volatility": 0.025,
+      "liquidity_score": 0.9
+    },
+    "VET/USDT": {
+      "tier": "A+",
+      "avg_spread": 0.015,
+      "success_rate": 0.78,
+      "opportunities_per_day": 10,
+      "transfer_time": 0.17,
+      "position_size": 0.06,
+      "volatility": 0.04,
+      "liquidity_score": 0.85
+    },
+    "XLM/USDT": {
+      "tier": "A+",
+      "avg_spread": 0.014,
+      "success_rate": 0.82,
+      "opportunities_per_day": 15,
+      "transfer_time": 0.05,
+      "position_size": 0.08,
+      "volatility": 0.035,
+      "liquidity_score": 0.88
+    },
+    "TRX/USDT": {
+      "tier": "A",
+      "avg_spread": 0.012,
+      "success_rate": 0.7,
+      "opportunities_per_day": 6,
+      "transfer_time": 2.0,
+      "position_size": 0.06,
+      "volatility": 0.045,
+      "liquidity_score": 0.8
+    },
+    "FTM/USDT": {
+      "tier": "A",
+      "avg_spread": 0.013,
+      "success_rate": 0.72,
+      "opportunities_per_day": 7,
+      "transfer_time": 1.0,
+      "position_size": 0.05,
+      "volatility": 0.05,
+      "liquidity_score": 0.75
+    },
+    "MATIC/USDT": {
+      "tier": "A",
+      "avg_spread": 0.011,
+      "success_rate": 0.75,
+      "opportunities_per_day": 9,
+      "transfer_time": 1.5,
+      "position_size": 0.06,
+      "volatility": 0.04,
+      "liquidity_score": 0.85
+    },
+    "SOL/USDT": {
+      "tier": "A",
+      "avg_spread": 0.01,
+      "success_rate": 0.8,
+      "opportunities_per_day": 11,
+      "transfer_time": 0.17,
+      "position_size": 0.07,
+      "volatility": 0.06,
+      "liquidity_score": 0.9
+    },
+    "BCH/USDT": {
+      "tier": "B+",
+      "avg_spread": 0.009,
+      "success_rate": 0.68,
+      "opportunities_per_day": 5,
+      "transfer_time": 5.0,
+      "position_size": 0.05,
+      "volatility": 0.055,
+      "liquidity_score": 0.7
+    },
+    "XRP/USDT": {
+      "tier": "B+",
+      "avg_spread": 0.008,
+      "success_rate": 0.75,
+      "opportunities_per_day": 8,
+      "transfer_time": 0.08,
+      "position_size": 0.06,
+      "volatility": 0.045,
+      "liquidity_score": 0.85
+    },
+    "DASH/USDT": {
+      "tier": "B+",
+      "avg_spread": 0.01,
+      "success_rate": 0.65,
+      "opportunities_per_day": 4,
+      "transfer_time": 2.5,
+      "position_size": 0.04,
+      "volatility": 0.06,
+      "liquidity_score": 0.65
+    },
+    "LTC/USDT": {
+      "tier": "B+",
+      "avg_spread": 0.008,
+      "success_rate": 0.7,
+      "opportunities_per_day": 6,
+      "transfer_time": 2.5,
+      "position_size": 0.05,
+      "volatility": 0.05,
+      "liquidity_score": 0.75
+    },
+    "HBAR/USDT": {
+      "tier": "B",
+      "avg_spread": 0.009,
+      "success_rate": 0.68,
+      "opportunities_per_day": 5,
+      "transfer_time": 0.5,
+      "position_size": 0.04,
+      "volatility": 0.055,
+      "liquidity_score": 0.7
+    },
+    "ICP/USDT": {
+      "tier": "B",
+      "avg_spread": 0.012,
+      "success_rate": 0.6,
+      "opportunities_per_day": 3,
+      "transfer_time": 1.5,
+      "position_size": 0.03,
+      "volatility": 0.08,
+      "liquidity_score": 0.6
+    },
+    "LINK/USDT": {
+      "tier": "B",
+      "avg_spread": 0.009,
+      "success_rate": 0.72,
+      "opportunities_per_day": 7,
+      "transfer_time": 0.17,
+      "position_size": 0.05,
+      "volatility": 0.05,
+      "liquidity_score": 0.8
+    },
+    "ATOM/USDT": {
+      "tier": "B",
+      "avg_spread": 0.008,
+      "success_rate": 0.7,
+      "opportunities_per_day": 6,
+      "transfer_time": 0.12,
+      "position_size": 0.04,
+      "volatility": 0.06,
+      "liquidity_score": 0.75
+    }
+  },
+  "trading_costs": {
+    "binance_fee": 0.001,
+    "okx_fee": 0.001,
+    "transfer_fee": 0.0005,
+    "slippage": 0.0003,
+    "total_cost_per_trade": 0.0028
+  },
+  "risk_factors": {
+    "market_volatility_impact": 0.15,
+    "competition_impact": 0.1,
+    "technical_issues": 0.05,
+    "exchange_downtime": 0.03,
+    "total_risk_adjustment": 0.33
+  }
+}

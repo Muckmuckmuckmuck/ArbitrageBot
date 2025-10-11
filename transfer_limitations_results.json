@@ -1,0 +1,60 @@
+{
+  "analysis_results": {
+    "issues": [
+      "CRITICAL: Binance allows less than 1 transfer per 5 minutes",
+      "CRITICAL: Manual confirmation required for each withdrawal",
+      "WARNING: VET has high minimum transfer amount (100)"
+    ],
+    "recommendations": [
+      "Use OKX as primary withdrawal exchange",
+      "Implement automated confirmation system or use API-based transfers"
+    ],
+    "max_transfers_5min_binance": 0.41666666666666663,
+    "max_transfers_5min_okx": 0.8333333333333333,
+    "total_fees": {
+      "TON": 0.22999999999999998,
+      "ALGO": 0.181,
+      "VET": 0.19,
+      "XLM": 0.18001,
+      "TRX": 0.28,
+      "FTM": 0.19,
+      "MATIC": 0.19,
+      "SOL": 0.18025,
+      "BCH": 0.18009999999999998,
+      "XRP": 0.18001,
+      "DASH": 0.181,
+      "LTC": 0.181,
+      "HBAR": 0.19,
+      "ICP": 0.19,
+      "LINK": 0.19,
+      "ATOM": 0.19
+    },
+    "fast_assets": [
+      "ALGO",
+      "VET",
+      "XLM",
+      "SOL",
+      "XRP",
+      "LINK",
+      "ATOM"
+    ],
+    "slow_assets": [
+      "TRX",
+      "MATIC",
+      "BCH",
+      "DASH",
+      "LTC",
+      "ICP"
+    ]
+  },
+  "transfer_frequency": {
+    "binance_max_per_hour": 5,
+    "okx_max_per_hour": 10,
+    "binance_conservative_per_hour": 2.5,
+    "okx_conservative_per_hour": 5.0,
+    "binance_per_5min": 0.20833333333333331,
+    "okx_per_5min": 0.41666666666666663,
+    "realistic_transfers_per_5min": 0.20833333333333331
+  },
+  "timestamp": 1759799674.017986
+}

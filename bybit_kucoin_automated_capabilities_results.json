@@ -1,0 +1,146 @@
+{
+  "exchanges": {
+    "bybit": {
+      "name": "Bybit",
+      "api_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": true,
+      "rate_limits": {
+        "withdrawals_per_second": 5,
+        "withdrawals_per_hour": 18000,
+        "cooldown_per_coin_seconds": 10,
+        "api_requests_per_second": 50,
+        "api_requests_per_minute": 6000,
+        "orders_per_second": 50
+      },
+      "daily_limits": {
+        "usdt": 2000000,
+        "btc": 100,
+        "eth": 1000
+      },
+      "fees": {
+        "usdt": 0.5,
+        "btc": 0.0002,
+        "eth": 0.003,
+        "trading": 0.001
+      },
+      "pros": [
+        "No manual confirmation required",
+        "Very high rate limits",
+        "API-based withdrawals",
+        "High daily limits",
+        "Low fees",
+        "Off-chain transfers supported",
+        "10-second cooldown per coin/chain",
+        "Comprehensive API documentation"
+      ],
+      "cons": [
+        "Whitelist required (one-time setup)",
+        "Newer exchange (higher risk)",
+        "Smaller liquidity pool",
+        "Geographic restrictions",
+        "10-second cooldown per coin/chain"
+      ],
+      "arbitrage_score": 9.5
+    },
+    "kucoin": {
+      "name": "KuCoin",
+      "api_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "rate_limits": {
+        "withdrawals_per_second": 10,
+        "withdrawals_per_hour": 36000,
+        "cooldown_per_coin_seconds": 5,
+        "api_requests_per_second": 30,
+        "api_requests_per_minute": 4000,
+        "orders_per_second": 30
+      },
+      "daily_limits": {
+        "usdt": 1000000,
+        "btc": 50,
+        "eth": 500
+      },
+      "fees": {
+        "usdt": 0.6,
+        "btc": 0.0003,
+        "eth": 0.004,
+        "trading": 0.001
+      },
+      "pros": [
+        "No manual confirmation required",
+        "No whitelist required",
+        "Very high rate limits",
+        "API-based withdrawals",
+        "High daily limits",
+        "Established exchange",
+        "Good liquidity",
+        "Wide crypto selection",
+        "5-second cooldown per coin/chain",
+        "Comprehensive API documentation"
+      ],
+      "cons": [
+        "Moderate rate limits",
+        "Some geographic restrictions",
+        "Higher fees than Bybit",
+        "5-second cooldown per coin/chain"
+      ],
+      "arbitrage_score": 8.5
+    }
+  },
+  "current_exchanges": {
+    "binance": {
+      "name": "Binance",
+      "api_withdrawals": true,
+      "manual_confirmation": true,
+      "whitelist_required": true,
+      "rate_limits": {
+        "withdrawals_per_hour": 5,
+        "cooldown_per_coin_seconds": 300,
+        "api_requests_per_second": 10,
+        "api_requests_per_minute": 1200
+      },
+      "daily_limits": {
+        "usdt": 100000,
+        "btc": 5,
+        "eth": 50
+      },
+      "fees": {
+        "usdt": 1.0,
+        "btc": 0.0005,
+        "eth": 0.01,
+        "trading": 0.001
+      },
+      "arbitrage_score": 3.0
+    },
+    "okx": {
+      "name": "OKX",
+      "api_withdrawals": true,
+      "manual_confirmation": true,
+      "whitelist_required": true,
+      "rate_limits": {
+        "withdrawals_per_hour": 10,
+        "cooldown_per_coin_seconds": 180,
+        "api_requests_per_second": 20,
+        "api_requests_per_minute": 3000
+      },
+      "daily_limits": {
+        "usdt": 50000,
+        "btc": 2.5,
+        "eth": 25
+      },
+      "fees": {
+        "usdt": 0.8,
+        "btc": 0.0003,
+        "eth": 0.005,
+        "trading": 0.001
+      },
+      "arbitrage_score": 4.0
+    }
+  },
+  "combined_withdrawals_per_hour": 54000,
+  "combined_daily_limit": 3000000,
+  "combined_score": 9.0,
+  "improvement_factor": 3600.0,
+  "realistic_daily_roi": 3427.2
+}

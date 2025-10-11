@@ -1,0 +1,233 @@
+[
+  [
+    "TON/USDT",
+    {
+      "profitable": true,
+      "daily_profit": 42.0,
+      "gross_profit": 17.0,
+      "net_profit": 10.0,
+      "opportunities_per_day": 12.0,
+      "volume_constrained": false,
+      "max_position_by_volume": 2500000.0,
+      "tier": 1
+    },
+    {
+      "typical_spread": 0.017,
+      "max_spread": 0.025,
+      "frequency": 0.6,
+      "daily_volume": 50000000,
+      "transfer_time": 1,
+      "tier": 1
+    }
+  ],
+  [
+    "PEPE/USDT",
+    {
+      "profitable": true,
+      "daily_profit": 30.799999999999997,
+      "gross_profit": 15.0,
+      "net_profit": 8.0,
+      "opportunities_per_day": 11.0,
+      "volume_constrained": false,
+      "max_position_by_volume": 1500000.0,
+      "tier": 1
+    },
+    {
+      "typical_spread": 0.015,
+      "max_spread": 0.025,
+      "frequency": 0.55,
+      "daily_volume": 30000000,
+      "transfer_time": 1,
+      "tier": 1
+    }
+  ],
+  [
+    "SHIB/USDT",
+    {
+      "profitable": true,
+      "daily_profit": 17.5,
+      "gross_profit": 12.0,
+      "net_profit": 5.0,
+      "opportunities_per_day": 10.0,
+      "volume_constrained": false,
+      "max_position_by_volume": 5000000.0,
+      "tier": 1
+    },
+    {
+      "typical_spread": 0.012,
+      "max_spread": 0.02,
+      "frequency": 0.5,
+      "daily_volume": 100000000,
+      "transfer_time": 1,
+      "tier": 1
+    }
+  ],
+  [
+    "BONK/USDT",
+    {
+      "profitable": true,
+      "daily_profit": 22.049999999999997,
+      "gross_profit": 14.0,
+      "net_profit": 7.0,
+      "opportunities_per_day": 9.0,
+      "volume_constrained": false,
+      "max_position_by_volume": 1250000.0,
+      "tier": 1
+    },
+    {
+      "typical_spread": 0.014,
+      "max_spread": 0.022,
+      "frequency": 0.45,
+      "daily_volume": 25000000,
+      "transfer_time": 1,
+      "tier": 1
+    }
+  ],
+  [
+    "FLOKI/USDT",
+    {
+      "profitable": true,
+      "daily_profit": 8.399999999999999,
+      "gross_profit": 10.0,
+      "net_profit": 3.0,
+      "opportunities_per_day": 8.0,
+      "volume_constrained": false,
+      "max_position_by_volume": 1000000.0,
+      "tier": 2
+    },
+    {
+      "typical_spread": 0.01,
+      "max_spread": 0.018,
+      "frequency": 0.4,
+      "daily_volume": 20000000,
+      "transfer_time": 1,
+      "tier": 2
+    }
+  ],
+  [
+    "WIF/USDT",
+    {
+      "profitable": true,
+      "daily_profit": 9.799999999999999,
+      "gross_profit": 11.0,
+      "net_profit": 4.0,
+      "opportunities_per_day": 7.0,
+      "volume_constrained": false,
+      "max_position_by_volume": 750000.0,
+      "tier": 2
+    },
+    {
+      "typical_spread": 0.011,
+      "max_spread": 0.019,
+      "frequency": 0.35,
+      "daily_volume": 15000000,
+      "transfer_time": 1,
+      "tier": 2
+    }
+  ],
+  [
+    "BOME/USDT",
+    {
+      "profitable": true,
+      "daily_profit": 6.3,
+      "gross_profit": 10.0,
+      "net_profit": 3.0,
+      "opportunities_per_day": 6.0,
+      "volume_constrained": false,
+      "max_position_by_volume": 500000.0,
+      "tier": 2
+    },
+    {
+      "typical_spread": 0.01,
+      "max_spread": 0.017,
+      "frequency": 0.3,
+      "daily_volume": 10000000,
+      "transfer_time": 1,
+      "tier": 2
+    }
+  ],
+  [
+    "MYRO/USDT",
+    {
+      "profitable": true,
+      "daily_profit": 8.75,
+      "gross_profit": 12.0,
+      "net_profit": 5.0,
+      "opportunities_per_day": 5.0,
+      "volume_constrained": false,
+      "max_position_by_volume": 400000.0,
+      "tier": 2
+    },
+    {
+      "typical_spread": 0.012,
+      "max_spread": 0.02,
+      "frequency": 0.25,
+      "daily_volume": 8000000,
+      "transfer_time": 1,
+      "tier": 2
+    }
+  ],
+  [
+    "DOGE/USDT",
+    {
+      "profitable": true,
+      "daily_profit": 2.4499999999999997,
+      "gross_profit": 8.0,
+      "net_profit": 1.0,
+      "opportunities_per_day": 7.0,
+      "volume_constrained": false,
+      "max_position_by_volume": 50000000.0,
+      "tier": 3
+    },
+    {
+      "typical_spread": 0.008,
+      "max_spread": 0.015,
+      "frequency": 0.35,
+      "daily_volume": 1000000000,
+      "transfer_time": 1,
+      "tier": 3
+    }
+  ],
+  [
+    "BABYDOGE/USDT",
+    {
+      "profitable": true,
+      "daily_profit": 4.199999999999999,
+      "gross_profit": 9.0,
+      "net_profit": 2.0,
+      "opportunities_per_day": 6.0,
+      "volume_constrained": false,
+      "max_position_by_volume": 250000.0,
+      "tier": 3
+    },
+    {
+      "typical_spread": 0.009,
+      "max_spread": 0.016,
+      "frequency": 0.3,
+      "daily_volume": 5000000,
+      "transfer_time": 1,
+      "tier": 3
+    }
+  ],
+  [
+    "AKITA/USDT",
+    {
+      "profitable": true,
+      "daily_profit": 1.75,
+      "gross_profit": 8.0,
+      "net_profit": 1.0,
+      "opportunities_per_day": 5.0,
+      "volume_constrained": false,
+      "max_position_by_volume": 150000.0,
+      "tier": 3
+    },
+    {
+      "typical_spread": 0.008,
+      "max_spread": 0.014,
+      "frequency": 0.25,
+      "daily_volume": 3000000,
+      "transfer_time": 1,
+      "tier": 3
+    }
+  ]
+]

@@ -1,0 +1,136 @@
+[
+  [
+    "pionex_coinbase",
+    {
+      "name": "Pionex.US + Coinbase Pro",
+      "exchanges": [
+        "Pionex.US",
+        "Coinbase Pro"
+      ],
+      "both_ccxt_supported": true,
+      "both_automated_withdrawals": true,
+      "complexity": "Low",
+      "pionex_fees": "0.1%",
+      "coinbase_fees": "0.5%",
+      "average_fees": "0.3%",
+      "nj_available": true,
+      "pros": [
+        "\u2705 Both exchanges supported by ccxt",
+        "\u2705 Both have automated withdrawals",
+        "\u2705 Coinbase is well-established (since 2012)",
+        "\u2705 Pionex has lowest fees (0.1%)",
+        "\u2705 No custom API implementation needed",
+        "\u2705 Good liquidity on both",
+        "\u2705 Available in NJ"
+      ],
+      "cons": [
+        "\u274c Coinbase has higher fees (0.5%)",
+        "\u274c Lower profit margins than Pionex-only"
+      ],
+      "daily_roi": "1-3%",
+      "annual_roi": "365-1095%",
+      "difficulty": "Easy",
+      "recommended": true,
+      "score": 9.0
+    }
+  ],
+  [
+    "pionex_only",
+    {
+      "name": "Pionex.US Only (Internal Arbitrage)",
+      "exchanges": [
+        "Pionex.US"
+      ],
+      "both_ccxt_supported": true,
+      "both_automated_withdrawals": true,
+      "complexity": "Very Low",
+      "pionex_fees": "0.1%",
+      "coinbase_fees": "N/A",
+      "average_fees": "0.1%",
+      "nj_available": true,
+      "pros": [
+        "\u2705 Fully supported by ccxt",
+        "\u2705 Automated withdrawals",
+        "\u2705 Built-in trading bots",
+        "\u2705 Lowest fees (0.1%)",
+        "\u2705 No cross-exchange complexity",
+        "\u2705 No withdrawal delays",
+        "\u2705 Available in NJ"
+      ],
+      "cons": [
+        "\u274c Limited to single exchange arbitrage",
+        "\u274c May have fewer opportunities"
+      ],
+      "daily_roi": "1-2%",
+      "annual_roi": "365-730%",
+      "difficulty": "Very Easy",
+      "recommended": true,
+      "score": 8.5
+    }
+  ],
+  [
+    "pionex_binance_us",
+    {
+      "name": "Pionex.US + Binance.US",
+      "exchanges": [
+        "Pionex.US",
+        "Binance.US"
+      ],
+      "both_ccxt_supported": true,
+      "both_automated_withdrawals": false,
+      "complexity": "Medium",
+      "pionex_fees": "0.1%",
+      "binance_fees": "0.1%",
+      "average_fees": "0.1%",
+      "nj_available": true,
+      "pros": [
+        "\u2705 Both exchanges supported by ccxt",
+        "\u2705 Both have very low fees (0.1%)",
+        "\u2705 Excellent liquidity",
+        "\u2705 Available in NJ"
+      ],
+      "cons": [
+        "\u274c Binance.US requires manual withdrawal confirmation",
+        "\u274c Not fully automated"
+      ],
+      "daily_roi": "2-5%",
+      "annual_roi": "730-1825%",
+      "difficulty": "Medium",
+      "recommended": false,
+      "score": 7.5
+    }
+  ],
+  [
+    "pionex_kraken",
+    {
+      "name": "Pionex.US + Kraken",
+      "exchanges": [
+        "Pionex.US",
+        "Kraken"
+      ],
+      "both_ccxt_supported": true,
+      "both_automated_withdrawals": false,
+      "complexity": "Medium",
+      "pionex_fees": "0.1%",
+      "kraken_fees": "0.26%",
+      "average_fees": "0.18%",
+      "nj_available": true,
+      "pros": [
+        "\u2705 Both exchanges supported by ccxt",
+        "\u2705 Kraken is very established (since 2011)",
+        "\u2705 Good liquidity on both",
+        "\u2705 Lower fees than Coinbase",
+        "\u2705 Available in NJ"
+      ],
+      "cons": [
+        "\u274c Kraken requires manual withdrawal confirmation",
+        "\u274c Not fully automated"
+      ],
+      "daily_roi": "1-3%",
+      "annual_roi": "365-1095%",
+      "difficulty": "Medium",
+      "recommended": false,
+      "score": 7.0
+    }
+  ]
+]

@@ -1,0 +1,325 @@
+{
+  "automated_exchanges": {
+    "pionex_us": {
+      "name": "Pionex.US",
+      "type": "Centralized Exchange",
+      "us_available": true,
+      "geographic_restrictions": 3,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": true,
+      "rate_limits": {
+        "api_requests_per_second": 10,
+        "api_requests_per_minute": 600,
+        "withdrawals_per_hour": 20
+      },
+      "daily_limits": {
+        "usd": 50000,
+        "crypto": "Unlimited"
+      },
+      "fees": {
+        "trading": 0.001,
+        "withdrawal_usdt": 1.0,
+        "withdrawal_crypto": 0.0005
+      },
+      "crypto_support": 200,
+      "pros": [
+        "\u2705 Available in most US states (47/50)",
+        "\u2705 Built-in trading bots",
+        "\u2705 Automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 Low trading fees (0.1%)",
+        "\u2705 High liquidity",
+        "\u2705 Professional trading tools",
+        "\u2705 Customer support",
+        "\u2705 Insurance protection"
+      ],
+      "cons": [
+        "\u274c Not available in Alaska, Hawaii, New York",
+        "\u274c KYC required",
+        "\u274c Limited fiat support",
+        "\u274c Limited crypto selection (200)",
+        "\u274c Lower withdrawal limits"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "Low",
+        "liquidity_risk": "Low",
+        "security_risk": "Low",
+        "operational_risk": "Low"
+      },
+      "profit_potential": {
+        "daily_roi": "2-5%",
+        "annual_roi": "730-1825%",
+        "max_trades_per_day": 14400,
+        "expected_profit_per_trade": 0.5
+      },
+      "overall_score": 8.5,
+      "recommended_for": "Most US residents"
+    },
+    "uphold": {
+      "name": "Uphold",
+      "type": "Centralized Exchange",
+      "us_available": true,
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": true,
+      "rate_limits": {
+        "api_requests_per_second": 5,
+        "api_requests_per_minute": 300,
+        "withdrawals_per_hour": 10
+      },
+      "daily_limits": {
+        "usd": 10000,
+        "crypto": "Unlimited"
+      },
+      "fees": {
+        "trading": 0.0025,
+        "withdrawal_ach": 0.0175,
+        "withdrawal_crypto": 0.001
+      },
+      "crypto_support": 250,
+      "pros": [
+        "\u2705 Available in all US states (50/50)",
+        "\u2705 Instant bank withdrawals",
+        "\u2705 Automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 Good crypto selection (250)",
+        "\u2705 ACH and debit card support",
+        "\u2705 Customer support",
+        "\u2705 Insurance protection"
+      ],
+      "cons": [
+        "\u274c KYC required",
+        "\u274c Higher trading fees (0.25%)",
+        "\u274c Lower withdrawal limits",
+        "\u274c Limited API functionality",
+        "\u274c Higher withdrawal fees"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "Low",
+        "liquidity_risk": "Low",
+        "security_risk": "Low",
+        "operational_risk": "Low"
+      },
+      "profit_potential": {
+        "daily_roi": "1-3%",
+        "annual_roi": "365-1095%",
+        "max_trades_per_day": 7200,
+        "expected_profit_per_trade": 0.3
+      },
+      "overall_score": 7.5,
+      "recommended_for": "US residents in restricted states"
+    },
+    "coinbase_pro": {
+      "name": "Coinbase Pro",
+      "type": "Centralized Exchange",
+      "us_available": true,
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": true,
+      "rate_limits": {
+        "api_requests_per_second": 10,
+        "api_requests_per_minute": 600,
+        "withdrawals_per_hour": 5
+      },
+      "daily_limits": {
+        "usd": 25000,
+        "crypto": "Unlimited"
+      },
+      "fees": {
+        "trading": 0.005,
+        "withdrawal_usdt": 0.0,
+        "withdrawal_crypto": 0.0
+      },
+      "crypto_support": 100,
+      "pros": [
+        "\u2705 Available in all US states (50/50)",
+        "\u2705 Automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 Free crypto withdrawals",
+        "\u2705 Established exchange",
+        "\u2705 Good security",
+        "\u2705 Customer support",
+        "\u2705 Insurance protection"
+      ],
+      "cons": [
+        "\u274c KYC required",
+        "\u274c Higher trading fees (0.5%)",
+        "\u274c Limited crypto selection (100)",
+        "\u274c Lower withdrawal limits",
+        "\u274c Limited API functionality"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "Low",
+        "liquidity_risk": "Low",
+        "security_risk": "Low",
+        "operational_risk": "Low"
+      },
+      "profit_potential": {
+        "daily_roi": "1-2%",
+        "annual_roi": "365-730%",
+        "max_trades_per_day": 14400,
+        "expected_profit_per_trade": 0.2
+      },
+      "overall_score": 7.0,
+      "recommended_for": "US residents who prefer established exchanges"
+    }
+  },
+  "excluded_exchanges": {
+    "kraken": {
+      "name": "Kraken",
+      "reason": "Requires manual confirmation for withdrawals",
+      "automated_withdrawals": false
+    },
+    "hyperliquid": {
+      "name": "Hyperliquid",
+      "reason": "Limited API support for automated withdrawals",
+      "automated_withdrawals": false
+    },
+    "binance_us": {
+      "name": "Binance.US",
+      "reason": "Requires manual confirmation for withdrawals",
+      "automated_withdrawals": false
+    },
+    "uniswap_pancakeswap": {
+      "name": "Uniswap + PancakeSwap",
+      "reason": "Too complex for most users (30-50% success rate)",
+      "automated_withdrawals": true,
+      "but_excluded": true
+    }
+  },
+  "best_overall": [
+    "pionex_us",
+    {
+      "name": "Pionex.US",
+      "type": "Centralized Exchange",
+      "us_available": true,
+      "geographic_restrictions": 3,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": true,
+      "rate_limits": {
+        "api_requests_per_second": 10,
+        "api_requests_per_minute": 600,
+        "withdrawals_per_hour": 20
+      },
+      "daily_limits": {
+        "usd": 50000,
+        "crypto": "Unlimited"
+      },
+      "fees": {
+        "trading": 0.001,
+        "withdrawal_usdt": 1.0,
+        "withdrawal_crypto": 0.0005
+      },
+      "crypto_support": 200,
+      "pros": [
+        "\u2705 Available in most US states (47/50)",
+        "\u2705 Built-in trading bots",
+        "\u2705 Automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 Low trading fees (0.1%)",
+        "\u2705 High liquidity",
+        "\u2705 Professional trading tools",
+        "\u2705 Customer support",
+        "\u2705 Insurance protection"
+      ],
+      "cons": [
+        "\u274c Not available in Alaska, Hawaii, New York",
+        "\u274c KYC required",
+        "\u274c Limited fiat support",
+        "\u274c Limited crypto selection (200)",
+        "\u274c Lower withdrawal limits"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "Low",
+        "liquidity_risk": "Low",
+        "security_risk": "Low",
+        "operational_risk": "Low"
+      },
+      "profit_potential": {
+        "daily_roi": "2-5%",
+        "annual_roi": "730-1825%",
+        "max_trades_per_day": 14400,
+        "expected_profit_per_trade": 0.5
+      },
+      "overall_score": 8.5,
+      "recommended_for": "Most US residents"
+    }
+  ],
+  "best_all_states": [
+    "uphold",
+    {
+      "name": "Uphold",
+      "type": "Centralized Exchange",
+      "us_available": true,
+      "geographic_restrictions": 0,
+      "automated_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": true,
+      "rate_limits": {
+        "api_requests_per_second": 5,
+        "api_requests_per_minute": 300,
+        "withdrawals_per_hour": 10
+      },
+      "daily_limits": {
+        "usd": 10000,
+        "crypto": "Unlimited"
+      },
+      "fees": {
+        "trading": 0.0025,
+        "withdrawal_ach": 0.0175,
+        "withdrawal_crypto": 0.001
+      },
+      "crypto_support": 250,
+      "pros": [
+        "\u2705 Available in all US states (50/50)",
+        "\u2705 Instant bank withdrawals",
+        "\u2705 Automated withdrawals",
+        "\u2705 No manual confirmation",
+        "\u2705 No whitelist required",
+        "\u2705 Good crypto selection (250)",
+        "\u2705 ACH and debit card support",
+        "\u2705 Customer support",
+        "\u2705 Insurance protection"
+      ],
+      "cons": [
+        "\u274c KYC required",
+        "\u274c Higher trading fees (0.25%)",
+        "\u274c Lower withdrawal limits",
+        "\u274c Limited API functionality",
+        "\u274c Higher withdrawal fees"
+      ],
+      "risk_factors": {
+        "regulatory_risk": "Low",
+        "technical_risk": "Low",
+        "liquidity_risk": "Low",
+        "security_risk": "Low",
+        "operational_risk": "Low"
+      },
+      "profit_potential": {
+        "daily_roi": "1-3%",
+        "annual_roi": "365-1095%",
+        "max_trades_per_day": 7200,
+        "expected_profit_per_trade": 0.3
+      },
+      "overall_score": 7.5,
+      "recommended_for": "US residents in restricted states"
+    }
+  ]
+}

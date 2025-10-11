@@ -1,0 +1,366 @@
+{
+  "no_restriction_exchanges": {
+    "godex": {
+      "name": "Godex",
+      "geographic_restrictions": 0,
+      "api_withdrawals": false,
+      "automated_transfers": true,
+      "kyc_required": false,
+      "registration_required": false,
+      "crypto_support": 893,
+      "fiat_support": false,
+      "rate_limits": {
+        "swaps_per_hour": 1000,
+        "api_requests_per_second": 0,
+        "instant_swaps": true
+      },
+      "fees": {
+        "swap_fee": 0.005,
+        "network_fee": 0.001,
+        "total_fee": 0.006
+      },
+      "pros": [
+        "No geographic restrictions",
+        "No KYC required",
+        "No registration required",
+        "Instant automated swaps",
+        "Very high rate limits",
+        "Wide crypto selection",
+        "Non-custodial",
+        "Anonymous trading"
+      ],
+      "cons": [
+        "No API for automated trading",
+        "No fiat support",
+        "Limited to crypto-to-crypto",
+        "No order book trading",
+        "No advanced trading features",
+        "No customer support",
+        "No account management"
+      ],
+      "arbitrage_score": 6.0
+    },
+    "sideshift_ai": {
+      "name": "SideShift.ai",
+      "geographic_restrictions": 0,
+      "api_withdrawals": false,
+      "automated_transfers": true,
+      "kyc_required": false,
+      "registration_required": false,
+      "crypto_support": 200,
+      "fiat_support": false,
+      "rate_limits": {
+        "swaps_per_hour": 500,
+        "api_requests_per_second": 0,
+        "instant_swaps": true
+      },
+      "fees": {
+        "swap_fee": 0.003,
+        "network_fee": 0.001,
+        "total_fee": 0.004
+      },
+      "pros": [
+        "No geographic restrictions",
+        "No KYC required",
+        "No registration required",
+        "Instant automated swaps",
+        "Cross-chain swaps",
+        "Non-custodial",
+        "Anonymous trading",
+        "Lower fees than Godex"
+      ],
+      "cons": [
+        "No API for automated trading",
+        "No fiat support",
+        "Limited to crypto-to-crypto",
+        "No order book trading",
+        "No advanced trading features",
+        "No customer support",
+        "No account management"
+      ],
+      "arbitrage_score": 6.5
+    },
+    "exolix": {
+      "name": "Exolix",
+      "geographic_restrictions": 0,
+      "api_withdrawals": false,
+      "automated_transfers": true,
+      "kyc_required": false,
+      "registration_required": false,
+      "crypto_support": 900,
+      "fiat_support": false,
+      "rate_limits": {
+        "swaps_per_hour": 800,
+        "api_requests_per_second": 0,
+        "instant_swaps": true
+      },
+      "fees": {
+        "swap_fee": 0.004,
+        "network_fee": 0.001,
+        "total_fee": 0.005
+      },
+      "pros": [
+        "No geographic restrictions",
+        "No KYC required",
+        "No registration required",
+        "Instant automated swaps",
+        "Very wide crypto selection",
+        "Non-custodial",
+        "Anonymous trading",
+        "Good rate limits"
+      ],
+      "cons": [
+        "No API for automated trading",
+        "No fiat support",
+        "Limited to crypto-to-crypto",
+        "No order book trading",
+        "No advanced trading features",
+        "No customer support",
+        "No account management"
+      ],
+      "arbitrage_score": 6.5
+    },
+    "coinex": {
+      "name": "CoinEx",
+      "geographic_restrictions": 0,
+      "api_withdrawals": true,
+      "automated_transfers": true,
+      "kyc_required": false,
+      "registration_required": true,
+      "crypto_support": 1000,
+      "fiat_support": false,
+      "rate_limits": {
+        "withdrawals_per_hour": 50,
+        "api_requests_per_second": 20,
+        "api_requests_per_minute": 2000,
+        "orders_per_second": 20
+      },
+      "daily_limits": {
+        "usdt": 100000,
+        "btc": 5,
+        "eth": 50
+      },
+      "fees": {
+        "usdt": 0.5,
+        "btc": 0.0002,
+        "eth": 0.003,
+        "trading": 0.001
+      },
+      "pros": [
+        "No geographic restrictions",
+        "No KYC for spot trading",
+        "API-based withdrawals",
+        "Good rate limits",
+        "Wide crypto selection",
+        "Established exchange",
+        "Good liquidity",
+        "Comprehensive API documentation"
+      ],
+      "cons": [
+        "Not available in US",
+        "No fiat support",
+        "Limited customer support",
+        "Some regulatory concerns",
+        "Moderate rate limits"
+      ],
+      "arbitrage_score": 8.0
+    },
+    "hyperliquid": {
+      "name": "Hyperliquid",
+      "geographic_restrictions": 0,
+      "api_withdrawals": true,
+      "automated_transfers": true,
+      "kyc_required": false,
+      "registration_required": true,
+      "crypto_support": 50,
+      "fiat_support": false,
+      "rate_limits": {
+        "withdrawals_per_hour": 30,
+        "api_requests_per_second": 15,
+        "api_requests_per_minute": 1500,
+        "orders_per_second": 15
+      },
+      "daily_limits": {
+        "usdt": 50000,
+        "btc": 2.5,
+        "eth": 25
+      },
+      "fees": {
+        "usdt": 0.3,
+        "btc": 0.0001,
+        "eth": 0.002,
+        "trading": 0.0005
+      },
+      "pros": [
+        "No geographic restrictions",
+        "No KYC required",
+        "API-based withdrawals",
+        "Very low fees",
+        "Zero gas fees",
+        "Good rate limits",
+        "Leverage up to 50x",
+        "Comprehensive API documentation"
+      ],
+      "cons": [
+        "Limited crypto selection",
+        "No fiat support",
+        "Newer exchange",
+        "Limited liquidity",
+        "No customer support",
+        "Moderate rate limits"
+      ],
+      "arbitrage_score": 7.5
+    }
+  },
+  "dex_platforms": {
+    "uniswap": {
+      "name": "Uniswap",
+      "geographic_restrictions": 0,
+      "api_withdrawals": true,
+      "automated_transfers": true,
+      "kyc_required": false,
+      "registration_required": false,
+      "crypto_support": 1000,
+      "fiat_support": false,
+      "rate_limits": {
+        "swaps_per_hour": 10000,
+        "api_requests_per_second": 100,
+        "smart_contract_based": true
+      },
+      "fees": {
+        "swap_fee": 0.003,
+        "gas_fee": 0.001,
+        "total_fee": 0.004
+      },
+      "pros": [
+        "No geographic restrictions",
+        "No KYC required",
+        "No registration required",
+        "Smart contract based",
+        "Very high rate limits",
+        "Wide token selection",
+        "Non-custodial",
+        "Anonymous trading",
+        "Comprehensive API documentation"
+      ],
+      "cons": [
+        "Requires wallet connection",
+        "Gas fees for transactions",
+        "No fiat support",
+        "Limited to ERC-20 tokens",
+        "No customer support",
+        "No account management",
+        "Technical complexity"
+      ],
+      "arbitrage_score": 8.5
+    },
+    "pancakeswap": {
+      "name": "PancakeSwap",
+      "geographic_restrictions": 0,
+      "api_withdrawals": true,
+      "automated_transfers": true,
+      "kyc_required": false,
+      "registration_required": false,
+      "crypto_support": 500,
+      "fiat_support": false,
+      "rate_limits": {
+        "swaps_per_hour": 8000,
+        "api_requests_per_second": 80,
+        "smart_contract_based": true
+      },
+      "fees": {
+        "swap_fee": 0.002,
+        "gas_fee": 0.0005,
+        "total_fee": 0.0025
+      },
+      "pros": [
+        "No geographic restrictions",
+        "No KYC required",
+        "No registration required",
+        "Smart contract based",
+        "Very high rate limits",
+        "Wide token selection",
+        "Non-custodial",
+        "Anonymous trading",
+        "Lower fees than Uniswap"
+      ],
+      "cons": [
+        "Requires wallet connection",
+        "Gas fees for transactions",
+        "No fiat support",
+        "Limited to BSC tokens",
+        "No customer support",
+        "No account management",
+        "Technical complexity"
+      ],
+      "arbitrage_score": 8.0
+    }
+  },
+  "combinations": [
+    {
+      "name": "CoinEx + Hyperliquid",
+      "exchanges": [
+        "coinex",
+        "hyperliquid"
+      ],
+      "total_restrictions": 0,
+      "combined_score": 7.75,
+      "total_withdrawals_per_hour": 80,
+      "total_daily_limit": 150000,
+      "pros": [
+        "No restrictions",
+        "API withdrawals",
+        "Good rate limits",
+        "Wide crypto selection"
+      ],
+      "cons": [
+        "No fiat support",
+        "Limited customer support"
+      ]
+    },
+    {
+      "name": "Uniswap + PancakeSwap",
+      "exchanges": [
+        "uniswap",
+        "pancakeswap"
+      ],
+      "total_restrictions": 0,
+      "combined_score": 8.25,
+      "total_swaps_per_hour": 18000,
+      "total_daily_limit": "Unlimited",
+      "pros": [
+        "No restrictions",
+        "Smart contract based",
+        "Very high rate limits",
+        "Wide token selection"
+      ],
+      "cons": [
+        "Gas fees",
+        "Technical complexity",
+        "No fiat support"
+      ]
+    },
+    {
+      "name": "Godex + SideShift.ai",
+      "exchanges": [
+        "godex",
+        "sideshift_ai"
+      ],
+      "total_restrictions": 0,
+      "combined_score": 6.25,
+      "total_swaps_per_hour": 1500,
+      "total_daily_limit": "Unlimited",
+      "pros": [
+        "No restrictions",
+        "No KYC",
+        "No registration",
+        "Instant swaps"
+      ],
+      "cons": [
+        "No API",
+        "No fiat support",
+        "Limited to crypto-to-crypto"
+      ]
+    }
+  ]
+}

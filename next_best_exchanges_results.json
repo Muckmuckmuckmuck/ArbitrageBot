@@ -1,0 +1,348 @@
+{
+  "next_best_exchanges": {
+    "kraken": {
+      "name": "Kraken",
+      "geographic_restrictions": [
+        "Iran",
+        "North Korea",
+        "Cuba",
+        "Crimea",
+        "Donetsk",
+        "Luhansk",
+        "Sevastopol"
+      ],
+      "restriction_count": 7,
+      "api_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "rate_limits": {
+        "withdrawals_per_hour": 20,
+        "api_requests_per_second": 15,
+        "api_requests_per_minute": 2000,
+        "orders_per_second": 15
+      },
+      "daily_limits": {
+        "usdt": 100000,
+        "btc": 5,
+        "eth": 50
+      },
+      "fees": {
+        "usdt": 0.5,
+        "btc": 0.0002,
+        "eth": 0.003,
+        "trading": 0.001
+      },
+      "pros": [
+        "Very few geographic restrictions",
+        "No whitelist required",
+        "API-based withdrawals",
+        "Established exchange (2011)",
+        "Strong security",
+        "Good liquidity",
+        "Comprehensive API documentation",
+        "Regulatory compliance"
+      ],
+      "cons": [
+        "Moderate rate limits",
+        "Higher fees than Bybit/KuCoin",
+        "Limited crypto selection",
+        "Slower customer support"
+      ],
+      "arbitrage_score": 7.5
+    },
+    "coinbase_pro": {
+      "name": "Coinbase Pro",
+      "geographic_restrictions": [
+        "Iran",
+        "North Korea",
+        "Cuba",
+        "Crimea",
+        "Donetsk",
+        "Luhansk",
+        "Sevastopol"
+      ],
+      "restriction_count": 7,
+      "api_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "rate_limits": {
+        "withdrawals_per_hour": 15,
+        "api_requests_per_second": 10,
+        "api_requests_per_minute": 1000,
+        "orders_per_second": 10
+      },
+      "daily_limits": {
+        "usdt": 50000,
+        "btc": 2.5,
+        "eth": 25
+      },
+      "fees": {
+        "usdt": 0.8,
+        "btc": 0.0003,
+        "eth": 0.005,
+        "trading": 0.001
+      },
+      "pros": [
+        "Very few geographic restrictions",
+        "No whitelist required",
+        "API-based withdrawals",
+        "Established exchange",
+        "Strong regulatory compliance",
+        "Good liquidity",
+        "Comprehensive API documentation",
+        "Sandbox environment for testing"
+      ],
+      "cons": [
+        "Moderate rate limits",
+        "Higher fees than Kraken",
+        "Limited crypto selection",
+        "Stricter compliance requirements"
+      ],
+      "arbitrage_score": 7.0
+    },
+    "mexc": {
+      "name": "MEXC",
+      "geographic_restrictions": [
+        "United States",
+        "Mainland China",
+        "Hong Kong",
+        "Singapore",
+        "Thailand",
+        "Malaysia",
+        "Uzbekistan",
+        "Ontario (Canada)"
+      ],
+      "restriction_count": 8,
+      "api_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "rate_limits": {
+        "withdrawals_per_hour": 25,
+        "api_requests_per_second": 20,
+        "api_requests_per_minute": 2500,
+        "orders_per_second": 20
+      },
+      "daily_limits": {
+        "usdt": 300000,
+        "btc": 15,
+        "eth": 150
+      },
+      "fees": {
+        "usdt": 0.8,
+        "btc": 0.0005,
+        "eth": 0.006,
+        "trading": 0.001
+      },
+      "pros": [
+        "No whitelist required",
+        "API-based withdrawals",
+        "Good rate limits",
+        "Wide crypto selection",
+        "Good liquidity",
+        "Zero-fee spot trading",
+        "Comprehensive API documentation"
+      ],
+      "cons": [
+        "Some geographic restrictions",
+        "Newer exchange (higher risk)",
+        "Moderate fees",
+        "Limited customer support"
+      ],
+      "arbitrage_score": 7.5
+    },
+    "gate_io": {
+      "name": "Gate.io",
+      "geographic_restrictions": [
+        "United States",
+        "Mainland China",
+        "Hong Kong",
+        "Singapore",
+        "Thailand",
+        "Malaysia",
+        "Uzbekistan",
+        "Ontario (Canada)"
+      ],
+      "restriction_count": 8,
+      "api_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "rate_limits": {
+        "withdrawals_per_hour": 30,
+        "api_requests_per_second": 25,
+        "api_requests_per_minute": 3000,
+        "orders_per_second": 25
+      },
+      "daily_limits": {
+        "usdt": 500000,
+        "btc": 25,
+        "eth": 250
+      },
+      "fees": {
+        "usdt": 0.7,
+        "btc": 0.0004,
+        "eth": 0.005,
+        "trading": 0.001
+      },
+      "pros": [
+        "No whitelist required",
+        "API-based withdrawals",
+        "Good rate limits",
+        "Very wide crypto selection",
+        "Good liquidity",
+        "Established exchange",
+        "Comprehensive API documentation"
+      ],
+      "cons": [
+        "Some geographic restrictions",
+        "Moderate fees",
+        "Some regulatory concerns",
+        "Limited customer support"
+      ],
+      "arbitrage_score": 8.0
+    },
+    "bitget": {
+      "name": "Bitget",
+      "geographic_restrictions": [
+        "United States",
+        "Mainland China",
+        "Hong Kong",
+        "Singapore",
+        "Thailand",
+        "Malaysia",
+        "Uzbekistan",
+        "Ontario (Canada)"
+      ],
+      "restriction_count": 8,
+      "api_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "rate_limits": {
+        "withdrawals_per_hour": 20,
+        "api_requests_per_second": 15,
+        "api_requests_per_minute": 2000,
+        "orders_per_second": 15
+      },
+      "daily_limits": {
+        "usdt": 200000,
+        "btc": 10,
+        "eth": 100
+      },
+      "fees": {
+        "usdt": 0.9,
+        "btc": 0.0006,
+        "eth": 0.007,
+        "trading": 0.001
+      },
+      "pros": [
+        "No whitelist required",
+        "API-based withdrawals",
+        "Good rate limits",
+        "Wide crypto selection",
+        "Good liquidity",
+        "Established exchange",
+        "Comprehensive API documentation"
+      ],
+      "cons": [
+        "Some geographic restrictions",
+        "Higher fees than alternatives",
+        "Moderate rate limits",
+        "Limited customer support"
+      ],
+      "arbitrage_score": 7.0
+    }
+  },
+  "current_exchanges": {
+    "binance": {
+      "name": "Binance",
+      "restriction_count": 9,
+      "api_withdrawals": true,
+      "manual_confirmation": true,
+      "whitelist_required": true,
+      "rate_limits": {
+        "withdrawals_per_hour": 5,
+        "api_requests_per_second": 10,
+        "api_requests_per_minute": 1200
+      },
+      "arbitrage_score": 3.0
+    },
+    "okx": {
+      "name": "OKX",
+      "restriction_count": 10,
+      "api_withdrawals": true,
+      "manual_confirmation": true,
+      "whitelist_required": true,
+      "rate_limits": {
+        "withdrawals_per_hour": 10,
+        "api_requests_per_second": 20,
+        "api_requests_per_minute": 3000
+      },
+      "arbitrage_score": 4.0
+    }
+  },
+  "combinations": [
+    {
+      "name": "Kraken + Gate.io",
+      "exchanges": [
+        "kraken",
+        "gate_io"
+      ],
+      "total_restrictions": 15,
+      "combined_score": 7.75,
+      "total_withdrawals_per_hour": 50,
+      "total_daily_limit": 600000,
+      "pros": [
+        "Few restrictions",
+        "No whitelist required",
+        "API withdrawals",
+        "Good rate limits"
+      ],
+      "cons": [
+        "Moderate rate limits",
+        "Some geographic restrictions"
+      ]
+    },
+    {
+      "name": "Kraken + MEXC",
+      "exchanges": [
+        "kraken",
+        "mexc"
+      ],
+      "total_restrictions": 15,
+      "combined_score": 7.5,
+      "total_withdrawals_per_hour": 45,
+      "total_daily_limit": 400000,
+      "pros": [
+        "Few restrictions",
+        "No whitelist required",
+        "API withdrawals",
+        "Good rate limits"
+      ],
+      "cons": [
+        "Moderate rate limits",
+        "Some geographic restrictions"
+      ]
+    },
+    {
+      "name": "Gate.io + MEXC",
+      "exchanges": [
+        "gate_io",
+        "mexc"
+      ],
+      "total_restrictions": 16,
+      "combined_score": 7.75,
+      "total_withdrawals_per_hour": 55,
+      "total_daily_limit": 800000,
+      "pros": [
+        "No whitelist required",
+        "API withdrawals",
+        "Good rate limits",
+        "Wide crypto selection"
+      ],
+      "cons": [
+        "Some geographic restrictions",
+        "Moderate fees"
+      ]
+    }
+  ],
+  "improvement_factor": 7.333333333333333
+}

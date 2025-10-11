@@ -1,0 +1,110 @@
+{
+  "bybit_capabilities": {
+    "api_withdrawals": {
+      "supported": true,
+      "rate_limits": {
+        "requests_per_second": 5,
+        "per_coin_per_chain": 1,
+        "cooldown_seconds": 10
+      },
+      "requirements": [
+        "API keys with withdrawal permissions",
+        "Withdrawal addresses must be whitelisted",
+        "Two-factor authentication enabled",
+        "IP whitelist recommended"
+      ],
+      "limitations": [
+        "Address whitelist required (one-time setup)",
+        "10-second cooldown per coin/chain combination",
+        "Maximum 5 withdrawals per second globally",
+        "Security verification required"
+      ]
+    },
+    "off_chain_transfers": {
+      "supported": true,
+      "rate_limits": {
+        "requests_per_second": 10,
+        "cooldown_seconds": 5
+      },
+      "requirements": [
+        "Recipient Bybit UID in address book",
+        "API keys with transfer permissions",
+        "Two-factor authentication"
+      ],
+      "limitations": [
+        "Only works between Bybit accounts",
+        "Recipient must be on Bybit",
+        "Address book management required"
+      ]
+    },
+    "automated_trading": {
+      "supported": true,
+      "rate_limits": {
+        "orders_per_second": 50,
+        "api_requests_per_second": 50,
+        "api_requests_per_minute": 6000
+      },
+      "requirements": [
+        "API keys with trading permissions",
+        "Sufficient account balance",
+        "Proper risk management"
+      ],
+      "limitations": [
+        "Market volatility risks",
+        "Liquidity requirements",
+        "Exchange maintenance windows"
+      ]
+    }
+  },
+  "exchange_comparison": {
+    "bybit": {
+      "api_withdrawals": true,
+      "whitelist_required": true,
+      "manual_confirmation": false,
+      "rate_limits": {
+        "withdrawals_per_second": 5,
+        "withdrawals_per_hour": 18000,
+        "cooldown_per_coin": 10
+      },
+      "daily_limit": 2000000,
+      "fees": {
+        "usdt": 0.5,
+        "btc": 0.0002,
+        "eth": 0.003
+      }
+    },
+    "binance": {
+      "api_withdrawals": true,
+      "whitelist_required": true,
+      "manual_confirmation": true,
+      "rate_limits": {
+        "withdrawals_per_hour": 5,
+        "cooldown_per_coin": 300
+      },
+      "daily_limit": 100000,
+      "fees": {
+        "usdt": 1.0,
+        "btc": 0.0005,
+        "eth": 0.01
+      }
+    },
+    "okx": {
+      "api_withdrawals": true,
+      "whitelist_required": true,
+      "manual_confirmation": true,
+      "rate_limits": {
+        "withdrawals_per_hour": 10,
+        "cooldown_per_coin": 180
+      },
+      "daily_limit": 50000,
+      "fees": {
+        "usdt": 0.8,
+        "btc": 0.0003,
+        "eth": 0.005
+      }
+    }
+  },
+  "single_coin_per_hour": 360.0,
+  "multiple_coins_per_hour": 18000,
+  "improvement_factor": 24.0
+}

@@ -1,0 +1,1128 @@
+[
+  {
+    "account_balance": 100,
+    "max_position_size": 12.0,
+    "max_total_exposure": 50.0,
+    "crypto_results": {},
+    "total_daily_profit": 0,
+    "total_monthly_profit": 0,
+    "total_yearly_profit": 0,
+    "daily_roi": 0.0,
+    "yearly_roi": 0.0
+  },
+  {
+    "account_balance": 500,
+    "max_position_size": 60.0,
+    "max_total_exposure": 250.0,
+    "crypto_results": {},
+    "total_daily_profit": 0,
+    "total_monthly_profit": 0,
+    "total_yearly_profit": 0,
+    "daily_roi": 0.0,
+    "yearly_roi": 0.0
+  },
+  {
+    "account_balance": 1000,
+    "max_position_size": 120.0,
+    "max_total_exposure": 500.0,
+    "crypto_results": {
+      "GRT/USDT": {
+        "position_size": 120.0,
+        "daily_profit": 156.8676,
+        "monthly_profit": 4706.028,
+        "yearly_profit": 57256.674000000006,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ETC/USDT": {
+        "position_size": 120.0,
+        "daily_profit": 124.84800000000001,
+        "monthly_profit": 3745.4400000000005,
+        "yearly_profit": 45569.520000000004,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ALGO/USDT": {
+        "position_size": 120.0,
+        "daily_profit": 115.4472,
+        "monthly_profit": 3463.4159999999997,
+        "yearly_profit": 42138.227999999996,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "AAVE/USDT": {
+        "position_size": 120.0,
+        "daily_profit": 108.20159999999998,
+        "monthly_profit": 3246.048,
+        "yearly_profit": 39493.583999999995,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ATOM/USDT": {
+        "position_size": 120.0,
+        "daily_profit": 93.2196,
+        "monthly_profit": 2796.588,
+        "yearly_profit": 34025.154,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "FIL/USDT": {
+        "position_size": 120.0,
+        "daily_profit": 87.73679999999999,
+        "monthly_profit": 2632.104,
+        "yearly_profit": 32023.931999999997,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "XLM/USDT": {
+        "position_size": 120.0,
+        "daily_profit": 72.852,
+        "monthly_profit": 2185.56,
+        "yearly_profit": 26590.980000000003,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "DOGE/USDT": {
+        "position_size": 120.0,
+        "daily_profit": 64.23599999999999,
+        "monthly_profit": 1927.0799999999997,
+        "yearly_profit": 23446.139999999996,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "AVAX/USDT": {
+        "position_size": 120.0,
+        "daily_profit": 60.9552,
+        "monthly_profit": 1828.656,
+        "yearly_profit": 22248.647999999997,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "UNI/USDT": {
+        "position_size": 120.0,
+        "daily_profit": 53.6112,
+        "monthly_profit": 1608.3359999999998,
+        "yearly_profit": 19568.088,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      }
+    },
+    "total_daily_profit": 937.9751999999999,
+    "total_monthly_profit": 28139.255999999994,
+    "total_yearly_profit": 342360.948,
+    "daily_roi": 93.79751999999999,
+    "yearly_roi": 34236.09479999999
+  },
+  {
+    "account_balance": 5000,
+    "max_position_size": 600.0,
+    "max_total_exposure": 2500.0,
+    "crypto_results": {
+      "GRT/USDT": {
+        "position_size": 600.0,
+        "daily_profit": 784.338,
+        "monthly_profit": 23530.14,
+        "yearly_profit": 286283.37,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ETC/USDT": {
+        "position_size": 600.0,
+        "daily_profit": 624.24,
+        "monthly_profit": 18727.2,
+        "yearly_profit": 227847.6,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ALGO/USDT": {
+        "position_size": 600.0,
+        "daily_profit": 577.236,
+        "monthly_profit": 17317.079999999998,
+        "yearly_profit": 210691.13999999998,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "AAVE/USDT": {
+        "position_size": 600.0,
+        "daily_profit": 541.0079999999999,
+        "monthly_profit": 16230.239999999998,
+        "yearly_profit": 197467.91999999998,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ATOM/USDT": {
+        "position_size": 600.0,
+        "daily_profit": 466.098,
+        "monthly_profit": 13982.94,
+        "yearly_profit": 170125.77000000002,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "FIL/USDT": {
+        "position_size": 600.0,
+        "daily_profit": 438.68399999999997,
+        "monthly_profit": 13160.519999999999,
+        "yearly_profit": 160119.65999999997,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "XLM/USDT": {
+        "position_size": 600.0,
+        "daily_profit": 364.26,
+        "monthly_profit": 10927.8,
+        "yearly_profit": 132954.9,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "DOGE/USDT": {
+        "position_size": 600.0,
+        "daily_profit": 321.17999999999995,
+        "monthly_profit": 9635.399999999998,
+        "yearly_profit": 117230.69999999998,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "AVAX/USDT": {
+        "position_size": 600.0,
+        "daily_profit": 304.77599999999995,
+        "monthly_profit": 9143.279999999999,
+        "yearly_profit": 111243.23999999998,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "UNI/USDT": {
+        "position_size": 600.0,
+        "daily_profit": 268.056,
+        "monthly_profit": 8041.679999999999,
+        "yearly_profit": 97840.43999999999,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      }
+    },
+    "total_daily_profit": 4689.875999999999,
+    "total_monthly_profit": 140696.27999999997,
+    "total_yearly_profit": 1711804.7399999998,
+    "daily_roi": 93.79751999999999,
+    "yearly_roi": 34236.09479999999
+  },
+  {
+    "account_balance": 10000,
+    "max_position_size": 1200.0,
+    "max_total_exposure": 5000.0,
+    "crypto_results": {
+      "GRT/USDT": {
+        "position_size": 1200.0,
+        "daily_profit": 1568.676,
+        "monthly_profit": 47060.28,
+        "yearly_profit": 572566.74,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ETC/USDT": {
+        "position_size": 1200.0,
+        "daily_profit": 1248.48,
+        "monthly_profit": 37454.4,
+        "yearly_profit": 455695.2,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ALGO/USDT": {
+        "position_size": 1200.0,
+        "daily_profit": 1154.472,
+        "monthly_profit": 34634.159999999996,
+        "yearly_profit": 421382.27999999997,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "AAVE/USDT": {
+        "position_size": 1200.0,
+        "daily_profit": 1082.0159999999998,
+        "monthly_profit": 32460.479999999996,
+        "yearly_profit": 394935.83999999997,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ATOM/USDT": {
+        "position_size": 1200.0,
+        "daily_profit": 932.196,
+        "monthly_profit": 27965.88,
+        "yearly_profit": 340251.54000000004,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "FIL/USDT": {
+        "position_size": 1200.0,
+        "daily_profit": 877.3679999999999,
+        "monthly_profit": 26321.039999999997,
+        "yearly_profit": 320239.31999999995,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "XLM/USDT": {
+        "position_size": 1200.0,
+        "daily_profit": 728.52,
+        "monthly_profit": 21855.6,
+        "yearly_profit": 265909.8,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "DOGE/USDT": {
+        "position_size": 1200.0,
+        "daily_profit": 642.3599999999999,
+        "monthly_profit": 19270.799999999996,
+        "yearly_profit": 234461.39999999997,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "AVAX/USDT": {
+        "position_size": 1200.0,
+        "daily_profit": 609.5519999999999,
+        "monthly_profit": 18286.559999999998,
+        "yearly_profit": 222486.47999999995,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "UNI/USDT": {
+        "position_size": 1200.0,
+        "daily_profit": 536.112,
+        "monthly_profit": 16083.359999999999,
+        "yearly_profit": 195680.87999999998,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      }
+    },
+    "total_daily_profit": 9379.751999999999,
+    "total_monthly_profit": 281392.55999999994,
+    "total_yearly_profit": 3423609.4799999995,
+    "daily_roi": 93.79751999999999,
+    "yearly_roi": 34236.09479999999
+  },
+  {
+    "account_balance": 25000,
+    "max_position_size": 3000.0,
+    "max_total_exposure": 12500.0,
+    "crypto_results": {
+      "GRT/USDT": {
+        "position_size": 3000.0,
+        "daily_profit": 3921.69,
+        "monthly_profit": 117650.7,
+        "yearly_profit": 1431416.85,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ETC/USDT": {
+        "position_size": 3000.0,
+        "daily_profit": 3121.2000000000003,
+        "monthly_profit": 93636.00000000001,
+        "yearly_profit": 1139238.0,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ALGO/USDT": {
+        "position_size": 3000.0,
+        "daily_profit": 2886.18,
+        "monthly_profit": 86585.4,
+        "yearly_profit": 1053455.7,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "AAVE/USDT": {
+        "position_size": 3000.0,
+        "daily_profit": 2705.04,
+        "monthly_profit": 81151.2,
+        "yearly_profit": 987339.6,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ATOM/USDT": {
+        "position_size": 3000.0,
+        "daily_profit": 2330.4900000000002,
+        "monthly_profit": 69914.70000000001,
+        "yearly_profit": 850628.8500000001,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "FIL/USDT": {
+        "position_size": 3000.0,
+        "daily_profit": 2193.42,
+        "monthly_profit": 65802.6,
+        "yearly_profit": 800598.3,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "XLM/USDT": {
+        "position_size": 3000.0,
+        "daily_profit": 1821.3000000000002,
+        "monthly_profit": 54639.00000000001,
+        "yearly_profit": 664774.5000000001,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "DOGE/USDT": {
+        "position_size": 3000.0,
+        "daily_profit": 1605.8999999999999,
+        "monthly_profit": 48176.99999999999,
+        "yearly_profit": 586153.5,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "AVAX/USDT": {
+        "position_size": 3000.0,
+        "daily_profit": 1523.8799999999999,
+        "monthly_profit": 45716.399999999994,
+        "yearly_profit": 556216.2,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "UNI/USDT": {
+        "position_size": 3000.0,
+        "daily_profit": 1340.28,
+        "monthly_profit": 40208.4,
+        "yearly_profit": 489202.2,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      }
+    },
+    "total_daily_profit": 23449.38,
+    "total_monthly_profit": 703481.4,
+    "total_yearly_profit": 8559023.700000001,
+    "daily_roi": 93.79752,
+    "yearly_roi": 34236.094800000006
+  },
+  {
+    "account_balance": 50000,
+    "max_position_size": 6000.0,
+    "max_total_exposure": 25000.0,
+    "crypto_results": {
+      "GRT/USDT": {
+        "position_size": 6000.0,
+        "daily_profit": 7843.38,
+        "monthly_profit": 235301.4,
+        "yearly_profit": 2862833.7,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ETC/USDT": {
+        "position_size": 6000.0,
+        "daily_profit": 6242.400000000001,
+        "monthly_profit": 187272.00000000003,
+        "yearly_profit": 2278476.0,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ALGO/USDT": {
+        "position_size": 6000.0,
+        "daily_profit": 5772.36,
+        "monthly_profit": 173170.8,
+        "yearly_profit": 2106911.4,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "AAVE/USDT": {
+        "position_size": 6000.0,
+        "daily_profit": 5410.08,
+        "monthly_profit": 162302.4,
+        "yearly_profit": 1974679.2,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "ATOM/USDT": {
+        "position_size": 6000.0,
+        "daily_profit": 4660.9800000000005,
+        "monthly_profit": 139829.40000000002,
+        "yearly_profit": 1701257.7000000002,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "FIL/USDT": {
+        "position_size": 6000.0,
+        "daily_profit": 4386.84,
+        "monthly_profit": 131605.2,
+        "yearly_profit": 1601196.6,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "XLM/USDT": {
+        "position_size": 6000.0,
+        "daily_profit": 3642.6000000000004,
+        "monthly_profit": 109278.00000000001,
+        "yearly_profit": 1329549.0000000002,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "DOGE/USDT": {
+        "position_size": 6000.0,
+        "daily_profit": 3211.7999999999997,
+        "monthly_profit": 96353.99999999999,
+        "yearly_profit": 1172307.0,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "AVAX/USDT": {
+        "position_size": 6000.0,
+        "daily_profit": 3047.7599999999998,
+        "monthly_profit": 91432.79999999999,
+        "yearly_profit": 1112432.4,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      },
+      "UNI/USDT": {
+        "position_size": 6000.0,
+        "daily_profit": 2680.56,
+        "monthly_profit": 80416.8,
+        "yearly_profit": 978404.4,
+        "slippage_penalty": 1.0,
+        "volume_constrained": false
+      }
+    },
+    "total_daily_profit": 46898.76,
+    "total_monthly_profit": 1406962.8,
+    "total_yearly_profit": 17118047.400000002,
+    "daily_roi": 93.79752,
+    "yearly_roi": 34236.094800000006
+  },
+  {
+    "account_balance": 100000,
+    "max_position_size": 12000.0,
+    "max_total_exposure": 50000.0,
+    "crypto_results": {
+      "GRT/USDT": {
+        "position_size": 12000.0,
+        "daily_profit": 14902.421999999999,
+        "monthly_profit": 447072.66,
+        "yearly_profit": 5439384.029999999,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "ETC/USDT": {
+        "position_size": 12000.0,
+        "daily_profit": 11860.560000000001,
+        "monthly_profit": 355816.80000000005,
+        "yearly_profit": 4329104.4,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "ALGO/USDT": {
+        "position_size": 12000.0,
+        "daily_profit": 10967.483999999999,
+        "monthly_profit": 329024.51999999996,
+        "yearly_profit": 4003131.6599999997,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "AAVE/USDT": {
+        "position_size": 12000.0,
+        "daily_profit": 10279.152,
+        "monthly_profit": 308374.56,
+        "yearly_profit": 3751890.48,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "ATOM/USDT": {
+        "position_size": 12000.0,
+        "daily_profit": 8855.862000000001,
+        "monthly_profit": 265675.86000000004,
+        "yearly_profit": 3232389.6300000004,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "FIL/USDT": {
+        "position_size": 12000.0,
+        "daily_profit": 8334.996,
+        "monthly_profit": 250049.87999999998,
+        "yearly_profit": 3042273.5399999996,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "XLM/USDT": {
+        "position_size": 12000.0,
+        "daily_profit": 6920.9400000000005,
+        "monthly_profit": 207628.2,
+        "yearly_profit": 2526143.1,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "DOGE/USDT": {
+        "position_size": 12000.0,
+        "daily_profit": 6102.419999999999,
+        "monthly_profit": 183072.59999999998,
+        "yearly_profit": 2227383.3,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "AVAX/USDT": {
+        "position_size": 12000.0,
+        "daily_profit": 5790.744,
+        "monthly_profit": 173722.31999999998,
+        "yearly_profit": 2113621.56,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "UNI/USDT": {
+        "position_size": 12000.0,
+        "daily_profit": 5093.063999999999,
+        "monthly_profit": 152791.91999999998,
+        "yearly_profit": 1858968.3599999999,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      }
+    },
+    "total_daily_profit": 89107.644,
+    "total_monthly_profit": 2673229.32,
+    "total_yearly_profit": 32524290.06,
+    "daily_roi": 89.107644,
+    "yearly_roi": 32524.29006
+  },
+  {
+    "account_balance": 250000,
+    "max_position_size": 30000.0,
+    "max_total_exposure": 125000.0,
+    "crypto_results": {
+      "GRT/USDT": {
+        "position_size": 30000.0,
+        "daily_profit": 37256.055,
+        "monthly_profit": 1117681.65,
+        "yearly_profit": 13598460.075,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "ETC/USDT": {
+        "position_size": 30000.0,
+        "daily_profit": 29651.4,
+        "monthly_profit": 889542.0,
+        "yearly_profit": 10822761.0,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "ALGO/USDT": {
+        "position_size": 30000.0,
+        "daily_profit": 27418.71,
+        "monthly_profit": 822561.2999999999,
+        "yearly_profit": 10007829.15,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "AAVE/USDT": {
+        "position_size": 30000.0,
+        "daily_profit": 25697.879999999997,
+        "monthly_profit": 770936.3999999999,
+        "yearly_profit": 9379726.2,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "ATOM/USDT": {
+        "position_size": 30000.0,
+        "daily_profit": 22139.655,
+        "monthly_profit": 664189.6499999999,
+        "yearly_profit": 8080974.074999999,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "FIL/USDT": {
+        "position_size": 30000.0,
+        "daily_profit": 20837.489999999998,
+        "monthly_profit": 625124.7,
+        "yearly_profit": 7605683.85,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "XLM/USDT": {
+        "position_size": 30000.0,
+        "daily_profit": 17302.35,
+        "monthly_profit": 519070.49999999994,
+        "yearly_profit": 6315357.749999999,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "DOGE/USDT": {
+        "position_size": 30000.0,
+        "daily_profit": 15256.049999999997,
+        "monthly_profit": 457681.49999999994,
+        "yearly_profit": 5568458.249999999,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "AVAX/USDT": {
+        "position_size": 30000.0,
+        "daily_profit": 14476.859999999999,
+        "monthly_profit": 434305.8,
+        "yearly_profit": 5284053.899999999,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "UNI/USDT": {
+        "position_size": 30000.0,
+        "daily_profit": 12732.659999999998,
+        "monthly_profit": 381979.79999999993,
+        "yearly_profit": 4647420.899999999,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      }
+    },
+    "total_daily_profit": 222769.11,
+    "total_monthly_profit": 6683073.3,
+    "total_yearly_profit": 81310725.14999999,
+    "daily_roi": 89.107644,
+    "yearly_roi": 32524.29006
+  },
+  {
+    "account_balance": 500000,
+    "max_position_size": 60000.0,
+    "max_total_exposure": 250000.0,
+    "crypto_results": {
+      "GRT/USDT": {
+        "position_size": 60000.0,
+        "daily_profit": 74512.11,
+        "monthly_profit": 2235363.3,
+        "yearly_profit": 27196920.15,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "ETC/USDT": {
+        "position_size": 60000.0,
+        "daily_profit": 59302.8,
+        "monthly_profit": 1779084.0,
+        "yearly_profit": 21645522.0,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "ALGO/USDT": {
+        "position_size": 60000.0,
+        "daily_profit": 54837.42,
+        "monthly_profit": 1645122.5999999999,
+        "yearly_profit": 20015658.3,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "AAVE/USDT": {
+        "position_size": 60000.0,
+        "daily_profit": 51395.759999999995,
+        "monthly_profit": 1541872.7999999998,
+        "yearly_profit": 18759452.4,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "ATOM/USDT": {
+        "position_size": 60000.0,
+        "daily_profit": 44279.31,
+        "monthly_profit": 1328379.2999999998,
+        "yearly_profit": 16161948.149999999,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "FIL/USDT": {
+        "position_size": 60000.0,
+        "daily_profit": 41674.979999999996,
+        "monthly_profit": 1250249.4,
+        "yearly_profit": 15211367.7,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "XLM/USDT": {
+        "position_size": 60000.0,
+        "daily_profit": 34604.7,
+        "monthly_profit": 1038140.9999999999,
+        "yearly_profit": 12630715.499999998,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "DOGE/USDT": {
+        "position_size": 60000.0,
+        "daily_profit": 30512.099999999995,
+        "monthly_profit": 915362.9999999999,
+        "yearly_profit": 11136916.499999998,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "AVAX/USDT": {
+        "position_size": 60000.0,
+        "daily_profit": 28953.719999999998,
+        "monthly_profit": 868611.6,
+        "yearly_profit": 10568107.799999999,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      },
+      "UNI/USDT": {
+        "position_size": 60000.0,
+        "daily_profit": 25465.319999999996,
+        "monthly_profit": 763959.5999999999,
+        "yearly_profit": 9294841.799999999,
+        "slippage_penalty": 0.95,
+        "volume_constrained": false
+      }
+    },
+    "total_daily_profit": 445538.22,
+    "total_monthly_profit": 13366146.6,
+    "total_yearly_profit": 162621450.29999998,
+    "daily_roi": 89.107644,
+    "yearly_roi": 32524.29006
+  },
+  {
+    "account_balance": 1000000,
+    "max_position_size": 120000.0,
+    "max_total_exposure": 500000.0,
+    "crypto_results": {
+      "GRT/USDT": {
+        "position_size": 120000.0,
+        "daily_profit": 141180.84,
+        "monthly_profit": 4235425.2,
+        "yearly_profit": 51531006.6,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "ETC/USDT": {
+        "position_size": 120000.0,
+        "daily_profit": 112363.20000000001,
+        "monthly_profit": 3370896.0000000005,
+        "yearly_profit": 41012568.00000001,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "ALGO/USDT": {
+        "position_size": 120000.0,
+        "daily_profit": 103902.48,
+        "monthly_profit": 3117074.4,
+        "yearly_profit": 37924405.199999996,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "AAVE/USDT": {
+        "position_size": 120000.0,
+        "daily_profit": 97381.43999999999,
+        "monthly_profit": 2921443.1999999997,
+        "yearly_profit": 35544225.599999994,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "ATOM/USDT": {
+        "position_size": 120000.0,
+        "daily_profit": 83897.64000000001,
+        "monthly_profit": 2516929.2,
+        "yearly_profit": 30622638.600000005,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "FIL/USDT": {
+        "position_size": 120000.0,
+        "daily_profit": 78963.12000000001,
+        "monthly_profit": 2368893.6,
+        "yearly_profit": 28821538.800000004,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "XLM/USDT": {
+        "position_size": 120000.0,
+        "daily_profit": 65566.8,
+        "monthly_profit": 1967004.0,
+        "yearly_profit": 23931882.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "DOGE/USDT": {
+        "position_size": 120000.0,
+        "daily_profit": 57812.399999999994,
+        "monthly_profit": 1734371.9999999998,
+        "yearly_profit": 21101525.999999996,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "AVAX/USDT": {
+        "position_size": 120000.0,
+        "daily_profit": 54859.68,
+        "monthly_profit": 1645790.4,
+        "yearly_profit": 20023783.2,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "UNI/USDT": {
+        "position_size": 120000.0,
+        "daily_profit": 48250.08,
+        "monthly_profit": 1447502.4000000001,
+        "yearly_profit": 17611279.2,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      }
+    },
+    "total_daily_profit": 844177.6800000002,
+    "total_monthly_profit": 25325330.400000006,
+    "total_yearly_profit": 308124853.20000005,
+    "daily_roi": 84.41776800000001,
+    "yearly_roi": 30812.485320000007
+  },
+  {
+    "account_balance": 2500000,
+    "max_position_size": 300000.0,
+    "max_total_exposure": 1250000.0,
+    "crypto_results": {
+      "GRT/USDT": {
+        "position_size": 300000.0,
+        "daily_profit": 352952.10000000003,
+        "monthly_profit": 10588563.000000002,
+        "yearly_profit": 128827516.50000001,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "ETC/USDT": {
+        "position_size": 300000.0,
+        "daily_profit": 280908.0,
+        "monthly_profit": 8427240.0,
+        "yearly_profit": 102531420.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "ALGO/USDT": {
+        "position_size": 300000.0,
+        "daily_profit": 259756.2,
+        "monthly_profit": 7792686.0,
+        "yearly_profit": 94811013.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "AAVE/USDT": {
+        "position_size": 300000.0,
+        "daily_profit": 243453.6,
+        "monthly_profit": 7303608.0,
+        "yearly_profit": 88860564.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "ATOM/USDT": {
+        "position_size": 300000.0,
+        "daily_profit": 209744.1,
+        "monthly_profit": 6292323.0,
+        "yearly_profit": 76556596.5,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "FIL/USDT": {
+        "position_size": 300000.0,
+        "daily_profit": 197407.80000000002,
+        "monthly_profit": 5922234.000000001,
+        "yearly_profit": 72053847.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "XLM/USDT": {
+        "position_size": 300000.0,
+        "daily_profit": 163917.0,
+        "monthly_profit": 4917510.0,
+        "yearly_profit": 59829705.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "DOGE/USDT": {
+        "position_size": 300000.0,
+        "daily_profit": 144531.0,
+        "monthly_profit": 4335930.0,
+        "yearly_profit": 52753815.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "AVAX/USDT": {
+        "position_size": 300000.0,
+        "daily_profit": 137149.2,
+        "monthly_profit": 4114476.0000000005,
+        "yearly_profit": 50059458.00000001,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "UNI/USDT": {
+        "position_size": 300000.0,
+        "daily_profit": 120625.2,
+        "monthly_profit": 3618756.0,
+        "yearly_profit": 44028198.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      }
+    },
+    "total_daily_profit": 2110444.2,
+    "total_monthly_profit": 63313326.00000001,
+    "total_yearly_profit": 770312133.0000001,
+    "daily_roi": 84.41776800000001,
+    "yearly_roi": 30812.485320000007
+  },
+  {
+    "account_balance": 5000000,
+    "max_position_size": 600000.0,
+    "max_total_exposure": 2500000.0,
+    "crypto_results": {
+      "GRT/USDT": {
+        "position_size": 600000.0,
+        "daily_profit": 705904.2000000001,
+        "monthly_profit": 21177126.000000004,
+        "yearly_profit": 257655033.00000003,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "ETC/USDT": {
+        "position_size": 600000.0,
+        "daily_profit": 561816.0,
+        "monthly_profit": 16854480.0,
+        "yearly_profit": 205062840.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "ALGO/USDT": {
+        "position_size": 600000.0,
+        "daily_profit": 519512.4,
+        "monthly_profit": 15585372.0,
+        "yearly_profit": 189622026.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "AAVE/USDT": {
+        "position_size": 600000.0,
+        "daily_profit": 486907.2,
+        "monthly_profit": 14607216.0,
+        "yearly_profit": 177721128.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "ATOM/USDT": {
+        "position_size": 600000.0,
+        "daily_profit": 419488.2,
+        "monthly_profit": 12584646.0,
+        "yearly_profit": 153113193.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "FIL/USDT": {
+        "position_size": 600000.0,
+        "daily_profit": 394815.60000000003,
+        "monthly_profit": 11844468.000000002,
+        "yearly_profit": 144107694.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "XLM/USDT": {
+        "position_size": 600000.0,
+        "daily_profit": 327834.0,
+        "monthly_profit": 9835020.0,
+        "yearly_profit": 119659410.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "DOGE/USDT": {
+        "position_size": 600000.0,
+        "daily_profit": 289062.0,
+        "monthly_profit": 8671860.0,
+        "yearly_profit": 105507630.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "AVAX/USDT": {
+        "position_size": 600000.0,
+        "daily_profit": 274298.4,
+        "monthly_profit": 8228952.000000001,
+        "yearly_profit": 100118916.00000001,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      },
+      "UNI/USDT": {
+        "position_size": 600000.0,
+        "daily_profit": 241250.4,
+        "monthly_profit": 7237512.0,
+        "yearly_profit": 88056396.0,
+        "slippage_penalty": 0.9,
+        "volume_constrained": false
+      }
+    },
+    "total_daily_profit": 4220888.4,
+    "total_monthly_profit": 126626652.00000001,
+    "total_yearly_profit": 1540624266.0000002,
+    "daily_roi": 84.41776800000001,
+    "yearly_roi": 30812.485320000007
+  },
+  {
+    "account_balance": 10000000,
+    "max_position_size": 1200000.0,
+    "max_total_exposure": 5000000.0,
+    "crypto_results": {
+      "GRT/USDT": {
+        "position_size": 1200000.0,
+        "daily_profit": 1254940.8,
+        "monthly_profit": 37648224.0,
+        "yearly_profit": 458053392.0,
+        "slippage_penalty": 0.8,
+        "volume_constrained": false
+      },
+      "ETC/USDT": {
+        "position_size": 1200000.0,
+        "daily_profit": 998784.0,
+        "monthly_profit": 29963520.0,
+        "yearly_profit": 364556160.0,
+        "slippage_penalty": 0.8,
+        "volume_constrained": false
+      },
+      "ALGO/USDT": {
+        "position_size": 1200000.0,
+        "daily_profit": 923577.6000000001,
+        "monthly_profit": 27707328.000000004,
+        "yearly_profit": 337105824.00000006,
+        "slippage_penalty": 0.8,
+        "volume_constrained": false
+      },
+      "AAVE/USDT": {
+        "position_size": 1200000.0,
+        "daily_profit": 865612.8,
+        "monthly_profit": 25968384.0,
+        "yearly_profit": 315948672.0,
+        "slippage_penalty": 0.8,
+        "volume_constrained": false
+      },
+      "ATOM/USDT": {
+        "position_size": 1200000.0,
+        "daily_profit": 745756.8,
+        "monthly_profit": 22372704.0,
+        "yearly_profit": 272201232.0,
+        "slippage_penalty": 0.8,
+        "volume_constrained": false
+      },
+      "FIL/USDT": {
+        "position_size": 1200000.0,
+        "daily_profit": 701894.4,
+        "monthly_profit": 21056832.0,
+        "yearly_profit": 256191456.0,
+        "slippage_penalty": 0.8,
+        "volume_constrained": false
+      },
+      "XLM/USDT": {
+        "position_size": 1200000.0,
+        "daily_profit": 582816.0,
+        "monthly_profit": 17484480.0,
+        "yearly_profit": 212727840.0,
+        "slippage_penalty": 0.8,
+        "volume_constrained": false
+      },
+      "DOGE/USDT": {
+        "position_size": 1200000.0,
+        "daily_profit": 513888.0,
+        "monthly_profit": 15416640.0,
+        "yearly_profit": 187569120.0,
+        "slippage_penalty": 0.8,
+        "volume_constrained": false
+      },
+      "AVAX/USDT": {
+        "position_size": 1200000.0,
+        "daily_profit": 487641.60000000003,
+        "monthly_profit": 14629248.000000002,
+        "yearly_profit": 177989184.0,
+        "slippage_penalty": 0.8,
+        "volume_constrained": false
+      },
+      "UNI/USDT": {
+        "position_size": 1200000.0,
+        "daily_profit": 428889.60000000003,
+        "monthly_profit": 12866688.000000002,
+        "yearly_profit": 156544704.0,
+        "slippage_penalty": 0.8,
+        "volume_constrained": false
+      }
+    },
+    "total_daily_profit": 7503801.6,
+    "total_monthly_profit": 225114048.0,
+    "total_yearly_profit": 2738887584.0,
+    "daily_roi": 75.038016,
+    "yearly_roi": 27388.875839999997
+  }
+]

@@ -1,0 +1,253 @@
+{
+  "exchanges_with_automated_withdrawals": {
+    "coinex": {
+      "name": "CoinEx",
+      "automated_withdrawals": true,
+      "api_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "withdrawal_method": "API-based",
+      "rate_limits": {
+        "withdrawals_per_hour": 50,
+        "api_requests_per_second": 20,
+        "cooldown_seconds": 0
+      },
+      "daily_limits": {
+        "usdt": 100000,
+        "btc": 5,
+        "eth": 50
+      },
+      "fees": {
+        "usdt": 0.5,
+        "btc": 0.0002,
+        "eth": 0.003
+      },
+      "pros": [
+        "\u2705 Fully automated withdrawals via API",
+        "\u2705 No manual confirmation required",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 High rate limits (50 per hour)",
+        "\u2705 No cooldown periods",
+        "\u2705 Wide crypto selection (1000+)",
+        "\u2705 Established exchange"
+      ],
+      "cons": [
+        "\u274c Not available in US",
+        "\u274c No fiat support",
+        "\u274c Limited customer support"
+      ],
+      "automation_score": 9.5
+    },
+    "hyperliquid": {
+      "name": "Hyperliquid",
+      "automated_withdrawals": true,
+      "api_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "withdrawal_method": "API-based",
+      "rate_limits": {
+        "withdrawals_per_hour": 30,
+        "api_requests_per_second": 15,
+        "cooldown_seconds": 0
+      },
+      "daily_limits": {
+        "usdt": 50000,
+        "btc": 2.5,
+        "eth": 25
+      },
+      "fees": {
+        "usdt": 0.3,
+        "btc": 0.0001,
+        "eth": 0.002
+      },
+      "pros": [
+        "\u2705 Fully automated withdrawals via API",
+        "\u2705 No manual confirmation required",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 Very low fees",
+        "\u2705 Zero gas fees",
+        "\u2705 Good rate limits (30 per hour)",
+        "\u2705 No cooldown periods"
+      ],
+      "cons": [
+        "\u274c Limited crypto selection (50)",
+        "\u274c No fiat support",
+        "\u274c Newer exchange (higher risk)",
+        "\u274c Limited customer support"
+      ],
+      "automation_score": 8.5
+    },
+    "uniswap": {
+      "name": "Uniswap",
+      "automated_withdrawals": true,
+      "api_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "withdrawal_method": "Smart contract based",
+      "rate_limits": {
+        "swaps_per_hour": 10000,
+        "api_requests_per_second": 100,
+        "cooldown_seconds": 0
+      },
+      "daily_limits": {
+        "unlimited": true
+      },
+      "fees": {
+        "swap_fee": 0.003,
+        "gas_fee": 0.001,
+        "total_fee": 0.004
+      },
+      "pros": [
+        "\u2705 Fully automated withdrawals via smart contracts",
+        "\u2705 No manual confirmation required",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 Very high rate limits (10,000 per hour)",
+        "\u2705 No cooldown periods",
+        "\u2705 Wide token selection (1000+)",
+        "\u2705 No daily limits",
+        "\u2705 Non-custodial"
+      ],
+      "cons": [
+        "\u274c Requires wallet connection",
+        "\u274c Gas fees for transactions",
+        "\u274c Technical complexity",
+        "\u274c No fiat support",
+        "\u274c No customer support"
+      ],
+      "automation_score": 9.0
+    },
+    "pancakeswap": {
+      "name": "PancakeSwap",
+      "automated_withdrawals": true,
+      "api_withdrawals": true,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "withdrawal_method": "Smart contract based",
+      "rate_limits": {
+        "swaps_per_hour": 8000,
+        "api_requests_per_second": 80,
+        "cooldown_seconds": 0
+      },
+      "daily_limits": {
+        "unlimited": true
+      },
+      "fees": {
+        "swap_fee": 0.002,
+        "gas_fee": 0.0005,
+        "total_fee": 0.0025
+      },
+      "pros": [
+        "\u2705 Fully automated withdrawals via smart contracts",
+        "\u2705 No manual confirmation required",
+        "\u2705 No whitelist required",
+        "\u2705 No KYC required",
+        "\u2705 Very high rate limits (8,000 per hour)",
+        "\u2705 No cooldown periods",
+        "\u2705 Wide token selection (500+)",
+        "\u2705 No daily limits",
+        "\u2705 Lower fees than Uniswap",
+        "\u2705 Non-custodial"
+      ],
+      "cons": [
+        "\u274c Requires wallet connection",
+        "\u274c Gas fees for transactions",
+        "\u274c Technical complexity",
+        "\u274c No fiat support",
+        "\u274c No customer support"
+      ],
+      "automation_score": 8.5
+    }
+  },
+  "exchanges_without_automated_withdrawals": {
+    "godex": {
+      "name": "Godex",
+      "automated_withdrawals": false,
+      "api_withdrawals": false,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "withdrawal_method": "Instant swaps only",
+      "rate_limits": {
+        "swaps_per_hour": 1000,
+        "api_requests_per_second": 0,
+        "cooldown_seconds": 0
+      },
+      "daily_limits": {
+        "unlimited": true
+      },
+      "fees": {
+        "swap_fee": 0.005,
+        "network_fee": 0.001,
+        "total_fee": 0.006
+      },
+      "pros": [
+        "\u2705 No geographic restrictions",
+        "\u2705 No KYC required",
+        "\u2705 No registration required",
+        "\u2705 Instant automated swaps",
+        "\u2705 Very high rate limits (1,000 per hour)",
+        "\u2705 No cooldown periods",
+        "\u2705 Wide crypto selection (893)",
+        "\u2705 Non-custodial"
+      ],
+      "cons": [
+        "\u274c No API for automated trading",
+        "\u274c No fiat support",
+        "\u274c Limited to crypto-to-crypto",
+        "\u274c No order book trading",
+        "\u274c No advanced trading features",
+        "\u274c No customer support",
+        "\u274c No account management"
+      ],
+      "automation_score": 6.0
+    },
+    "sideshift_ai": {
+      "name": "SideShift.ai",
+      "automated_withdrawals": false,
+      "api_withdrawals": false,
+      "manual_confirmation": false,
+      "whitelist_required": false,
+      "kyc_required": false,
+      "withdrawal_method": "Instant swaps only",
+      "rate_limits": {
+        "swaps_per_hour": 500,
+        "api_requests_per_second": 0,
+        "cooldown_seconds": 0
+      },
+      "daily_limits": {
+        "unlimited": true
+      },
+      "fees": {
+        "swap_fee": 0.003,
+        "network_fee": 0.001,
+        "total_fee": 0.004
+      },
+      "pros": [
+        "\u2705 No geographic restrictions",
+        "\u2705 No KYC required",
+        "\u2705 No registration required",
+        "\u2705 Instant automated swaps",
+        "\u2705 Cross-chain swaps",
+        "\u2705 Non-custodial",
+        "\u2705 Lower fees than Godex"
+      ],
+      "cons": [
+        "\u274c No API for automated trading",
+        "\u274c No fiat support",
+        "\u274c Limited to crypto-to-crypto",
+        "\u274c No order book trading",
+        "\u274c No advanced trading features",
+        "\u274c No customer support",
+        "\u274c No account management"
+      ],
+      "automation_score": 6.5
+    }
+  }
+}
