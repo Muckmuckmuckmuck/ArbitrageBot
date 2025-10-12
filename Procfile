@@ -1,2 +1,2 @@
-# Railway Procfile for Aggressive Arbitrage Bot
-worker: python aggressive_bot_fixed.py
+# Railway Procfile for Coinbase + Gemini Arbitrage Bot
+worker: python coinbase_gemini_bot.py
