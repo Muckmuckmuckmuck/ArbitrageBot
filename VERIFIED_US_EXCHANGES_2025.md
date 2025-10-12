@@ -327,3 +327,4 @@ Most exchanges either:
 **Last Updated**: October 12, 2025  
 **Status**: Need to test Kraken/Gemini automation ⚠️  
 **Recommendation**: Test Kraken first (higher liquidity) ✅
+

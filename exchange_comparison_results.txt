@@ -1,0 +1,122 @@
+Traceback (most recent call last):
+  File "/Users/jayreddy/Algotrading bot/compare_bitfinex_poloniex.py", line 166, in analyze_exchange_pair
+    print(f"   Success rate: {len(profitable)/len(results)*100:.1f}%")
+                              ~~~~~~~~~~~~~~~^~~~~~~~~~~~~
+ZeroDivisionError: division by zero
+Traceback (most recent call last):
+  File "/Users/jayreddy/Algotrading bot/compare_bitfinex_poloniex.py", line 166, in analyze_exchange_pair
+    print(f"   Success rate: {len(profitable)/len(results)*100:.1f}%")
+                              ~~~~~~~~~~~~~~~^~~~~~~~~~~~~
+ZeroDivisionError: division by zero
+================================================================================
+BITFINEX VS POLONIEX - COMPREHENSIVE COMPARISON
+================================================================================
+
+Analyzing real-time spreads, liquidity, and automation...
+
+
+================================================================================
+OPTION 1: BITFINEX + COINBASE
+================================================================================
+================================================================================
+ANALYZING: BITFINEX + COINBASE
+================================================================================
+
+✅ Bitfinex initialized
+✅ Coinbase Advanced initialized
+
+🤖 AUTOMATION FEATURES:
+
+   Bitfinex:
+      ✅ Automated withdrawals
+      ✅ Get deposit address
+      ✅ Check balance
+      ✅ Place orders
+
+   Coinbase Advanced:
+      ✅ Automated withdrawals
+      ✅ Get deposit address
+      ✅ Check balance
+      ✅ Place orders
+
+📊 FETCHING MARKETS...
+   Bitfinex: 382 markets
+   Coinbase Advanced: 1062 markets
+   Common pairs: 94
+   Common USDT/USD pairs: 80
+
+🔍 ANALYZING SPREADS FOR TOP CRYPTOS:
+
+   Found 0 tradeable pairs
+
+   TOP 15 ARBITRAGE OPPORTUNITIES:
+
+   Symbol        Spread    Volume(24h)   Bid-Ask   Price
+   ----------------------------------------------------------------------
+
+📈 STATISTICS:
+
+   Total pairs analyzed: 0
+   Profitable pairs (>0.8% spread): 0
+❌ Error analyzing bitfinex: division by zero
+
+================================================================================
+OPTION 2: POLONIEX + COINBASE
+================================================================================
+================================================================================
+ANALYZING: POLONIEX + COINBASE
+================================================================================
+
+✅ Poloniex initialized
+✅ Coinbase Advanced initialized
+
+🤖 AUTOMATION FEATURES:
+
+   Poloniex:
+      ✅ Automated withdrawals
+      ✅ Get deposit address
+      ✅ Check balance
+      ✅ Place orders
+
+   Coinbase Advanced:
+      ✅ Automated withdrawals
+      ✅ Get deposit address
+      ✅ Check balance
+      ✅ Place orders
+
+📊 FETCHING MARKETS...
+   Poloniex: 1080 markets
+   Coinbase Advanced: 1062 markets
+   Common pairs: 46
+   Common USDT/USD pairs: 31
+
+🔍 ANALYZING SPREADS FOR TOP CRYPTOS:
+
+   Found 0 tradeable pairs
+
+   TOP 15 ARBITRAGE OPPORTUNITIES:
+
+   Symbol        Spread    Volume(24h)   Bid-Ask   Price
+   ----------------------------------------------------------------------
+
+📈 STATISTICS:
+
+   Total pairs analyzed: 0
+   Profitable pairs (>0.8% spread): 0
+❌ Error analyzing poloniex: division by zero
+
+================================================================================
+FINAL VERDICT
+================================================================================
+
+================================================================================
+AUTOMATION CHECK:
+================================================================================
+
+✅ Both Bitfinex and Poloniex support:
+   ✅ Automated withdrawals (no manual approval)
+   ✅ API-based deposits
+   ✅ 24/7 trading
+   ✅ Can run while you sleep
+   ✅ Fully automated via CCXT
+

@@ -365,3 +365,4 @@ except Exception as e:
 **Last Updated**: October 12, 2025  
 **CCXT Version**: 4.5.10  
 **Status**: Pionex.US confirmed NOT supported ❌
+

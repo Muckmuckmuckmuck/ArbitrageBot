@@ -423,3 +423,4 @@ self.exchange2 = ccxt.coinbase({...})
 **Last Updated**: October 12, 2025  
 **Status**: Pionex.US NOT supported - Must switch exchanges ⚠️  
 **Action Required**: Choose Bitfinex or Poloniex + update configuration ✅
+

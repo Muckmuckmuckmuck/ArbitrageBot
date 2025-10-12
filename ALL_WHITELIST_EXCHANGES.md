@@ -269,3 +269,4 @@ Since whitelisting is fine, here are your options ranked:
 **Last Updated**: October 12, 2025  
 **Status**: Coinbase + Gemini confirmed BEST option ✅  
 **Setup**: One-time whitelisting (15 min) then fully automated! 🎊
+

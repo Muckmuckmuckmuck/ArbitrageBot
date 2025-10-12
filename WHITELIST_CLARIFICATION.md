@@ -335,3 +335,4 @@ Coinbase:
 ---
 
 **Ready for me to update your bot for Gemini + Coinbase?**
+
