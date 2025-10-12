@@ -102,23 +102,26 @@ EXCHANGE_FEES = {
 # CRYPTOCURRENCY SELECTION (Available on BOTH Coinbase and Gemini)
 # ============================================================================
 
-# All cryptos available on both exchanges
+# REFINED: Best 11 cryptos (removed BTC, ETH, LTC due to low spreads/slow transfers)
+# Ranked by: Transfer speed + Spread potential + Frequency + Liquidity
 CURRENCY_PAIRS = [
-    'BTC/USD',    # Bitcoin
-    'ETH/USD',    # Ethereum
-    'SOL/USD',    # Solana
-    'AVAX/USD',   # Avalanche
-    'DOGE/USD',   # Dogecoin
-    'SHIB/USD',   # Shiba Inu
-    'XRP/USD',    # Ripple
-    'DOT/USD',    # Polkadot
-    'LINK/USD',   # Chainlink
-    'UNI/USD',    # Uniswap
-    'ATOM/USD',   # Cosmos
-    'LTC/USD',    # Litecoin
-    'AAVE/USD',   # Aave
-    'COMP/USD',   # Compound
+    'SHIB/USD',   # #1 - Best spread (1.2%), high frequency (38%)
+    'AAVE/USD',   # #2 - Best spread (1.2%), good frequency (33%)
+    'COMP/USD',   # #3 - Best spread (1.2%), good frequency (28%)
+    'UNI/USD',    # #4 - Good spread (1.0%), good frequency (30%)
+    'DOT/USD',    # #5 - Good spread (1.0%), high frequency (33%)
+    'SOL/USD',    # #6 - Ultra fast (20s), good frequency (33%)
+    'AVAX/USD',   # #7 - Very fast (90s), good spread (0.9%)
+    'LINK/USD',   # #8 - Good spread (0.9%), good frequency (28%)
+    'DOGE/USD',   # #9 - Fast transfer, decent spread (0.8%)
+    'XRP/USD',    # #10 - Ultra fast (4s), decent frequency (28%)
+    'ATOM/USD',   # #11 - Good spread (0.9%), decent frequency (28%)
 ]
+
+# Removed (poor scores):
+# - BTC/USD: Score 0.224 (30 min transfer, 0.3% spread, 18% frequency)
+# - ETH/USD: Score 0.578 (0.4% spread too low, 23% frequency)
+# - LTC/USD: Score 0.610 (6 min transfer, 0.7% spread, 23% frequency)
 
 # ============================================================================
 # CRYPTO-SPECIFIC PARAMETERS
@@ -130,26 +133,7 @@ CURRENCY_PAIRS = [
 # So minimum spread should be 1.2% for safety
 
 CURRENCY_PAIR_SPREADS = {
-    'BTC/USD': {
-        'min_spread': 0.012,      # 1.2% (covers 0.95% fees + 0.1% slippage + 0.15% profit)
-        'safe_spread': 0.020,     # 2.0%
-        'max_spread': 0.050,      # 5.0%
-        'slippage': 0.00100,      # 0.1% (tight for BTC)
-        'transfer_time': 600,     # 10 minutes (Bitcoin network)
-        'frequency': 0.20,        # 20% of time has good spread
-        'category': 'Major',
-        'liquidity_score': 1.0,   # Highest liquidity
-    },
-    'ETH/USD': {
-        'min_spread': 0.012,      # 1.2%
-        'safe_spread': 0.018,     # 1.8%
-        'max_spread': 0.040,      # 4.0%
-        'slippage': 0.00100,      # 0.1%
-        'transfer_time': 180,     # 3 minutes (Ethereum)
-        'frequency': 0.25,        # 25%
-        'category': 'Major',
-        'liquidity_score': 1.0,
-    },
+    # REFINED LIST: Top 11 cryptos only (removed BTC, ETH, LTC)
     'SOL/USD': {
         'min_spread': 0.012,      # 1.2%
         'safe_spread': 0.015,     # 1.5%
@@ -240,16 +224,6 @@ CURRENCY_PAIR_SPREADS = {
         'category': 'Layer 1',
         'liquidity_score': 0.7,
     },
-    'LTC/USD': {
-        'min_spread': 0.012,      # 1.2%
-        'safe_spread': 0.015,     # 1.5%
-        'max_spread': 0.030,      # 3.0%
-        'slippage': 0.00100,      # 0.1%
-        'transfer_time': 300,     # 5 minutes (Litecoin)
-        'frequency': 0.25,        # 25%
-        'category': 'Payment',
-        'liquidity_score': 0.8,
-    },
     'AAVE/USD': {
         'min_spread': 0.012,      # 1.2%
         'safe_spread': 0.018,     # 1.8%
@@ -276,28 +250,28 @@ CURRENCY_PAIR_SPREADS = {
 # POSITION SIZING (Percentage-based, scales with balance)
 # ============================================================================
 
-# Base position percentages (will be dynamically adjusted)
+# REFINED: Position percentages based on score (Speed + Spread + Frequency + Liquidity)
+# Removed BTC, ETH, LTC - keeping only top 11 performers
 BASE_POSITION_PERCENTAGES = {
-    # Tier 1: High liquidity, fast transfers (42% total allocation)
-    'SOL/USD': 0.12,     # 12% - Fast transfer, high liquidity
-    'XRP/USD': 0.11,     # 11% - Very fast transfer
-    'BTC/USD': 0.10,     # 10% - Highest liquidity
-    'ETH/USD': 0.09,     # 9% - High liquidity
+    # Top tier: Best spreads (1.0-1.2%) + good frequency (28-38%)
+    'SHIB/USD': 0.10,    # 10.0% - Score: 0.811 (Best spread 1.2%, 38% frequency)
+    'AAVE/USD': 0.10,    # 10.0% - Score: 0.801 (Best spread 1.2%, 33% frequency)
+    'COMP/USD': 0.10,    # 10.0% - Score: 0.791 (Best spread 1.2%, 28% frequency)
+    'UNI/USD': 0.09,     # 9.0%  - Score: 0.747 (Good spread 1.0%, 30% frequency)
+    'DOT/USD': 0.09,     # 9.0%  - Score: 0.737 (Good spread 1.0%, 33% frequency)
     
-    # Tier 2: Good liquidity, medium transfers (36% total allocation)
-    'AVAX/USD': 0.09,    # 9%
-    'DOGE/USD': 0.08,    # 8%
-    'LINK/USD': 0.07,    # 7%
-    'UNI/USD': 0.06,     # 6%
-    'SHIB/USD': 0.06,    # 6%
+    # Fast transfers + good frequency
+    'SOL/USD': 0.09,     # 9.0%  - Score: 0.735 (Ultra fast 20s, 33% frequency)
+    'AVAX/USD': 0.09,    # 9.0%  - Score: 0.731 (Very fast 90s, 0.9% spread)
+    'LINK/USD': 0.09,    # 9.0%  - Score: 0.714 (Good spread 0.9%, 28% frequency)
     
-    # Tier 3: Medium liquidity (22% total allocation)
-    'LTC/USD': 0.06,     # 6%
-    'ATOM/USD': 0.05,    # 5%
-    'DOT/USD': 0.05,     # 5%
-    'AAVE/USD': 0.03,    # 3%
-    'COMP/USD': 0.03,    # 3%
+    # Good all-around performers
+    'DOGE/USD': 0.09,    # 9.0%  - Score: 0.684 (Fast transfer, 0.8% spread)
+    'XRP/USD': 0.08,     # 8.0%  - Score: 0.670 (Ultra fast 4s, 28% frequency)
+    'ATOM/USD': 0.08,    # 8.0%  - Score: 0.651 (Good spread 0.9%, 28% frequency)
 }
+
+# Total: 100% across 11 cryptos (removed BTC, ETH, LTC)
 
 # Position sizing limits
 MAX_POSITION_PERCENT_PER_TRADE = 0.15  # 15% of total account value per trade
@@ -373,20 +347,18 @@ MAX_DYNAMIC_SPREAD_CEILING = 0.050        # 5.0% absolute maximum
 # ============================================================================
 
 SLIPPAGE_ESTIMATES = {
-    'BTC/USD': 0.00050,   # 0.05% (very tight)
-    'ETH/USD': 0.00050,   # 0.05%
-    'SOL/USD': 0.00100,   # 0.10%
-    'AVAX/USD': 0.00100,  # 0.10%
-    'DOGE/USD': 0.00100,  # 0.10%
+    # REFINED LIST: Top 11 cryptos only
     'SHIB/USD': 0.00150,  # 0.15%
-    'XRP/USD': 0.00080,   # 0.08%
-    'DOT/USD': 0.00100,   # 0.10%
-    'LINK/USD': 0.00100,  # 0.10%
-    'UNI/USD': 0.00100,   # 0.10%
-    'ATOM/USD': 0.00100,  # 0.10%
-    'LTC/USD': 0.00100,   # 0.10%
     'AAVE/USD': 0.00120,  # 0.12%
     'COMP/USD': 0.00120,  # 0.12%
+    'UNI/USD': 0.00100,   # 0.10%
+    'DOT/USD': 0.00100,   # 0.10%
+    'SOL/USD': 0.00100,   # 0.10%
+    'AVAX/USD': 0.00100,  # 0.10%
+    'LINK/USD': 0.00100,  # 0.10%
+    'DOGE/USD': 0.00100,  # 0.10%
+    'XRP/USD': 0.00080,   # 0.08%
+    'ATOM/USD': 0.00100,  # 0.10%
 }
 
 # ============================================================================
