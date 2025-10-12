@@ -26,6 +26,7 @@ from fixed_percentage_balance_manager import FixedPercentageBalanceManager
 from comprehensive_error_handler import ComprehensiveErrorHandler
 from transfer_manager_fixed import TransferManager, TransferResult
 from auto_recovery_system import AutoRecoverySystem, StuckPosition
+from smart_order_placer import SmartOrderPlacer
 
 # Setup logging
 logging.basicConfig(
@@ -95,6 +96,7 @@ class CoinbaseGeminiArbitrageBot:
         self.error_handler = None
         self.transfer_manager = None
         self.recovery_system = None
+        self.smart_order_placer = None
         
         # Statistics
         self.stats = {
@@ -154,6 +156,7 @@ class CoinbaseGeminiArbitrageBot:
         self.error_handler = ComprehensiveErrorHandler()
         self.transfer_manager = TransferManager(self.exchange_manager)
         self.recovery_system = AutoRecoverySystem(self.exchange_manager)
+        self.smart_order_placer = SmartOrderPlacer(self.exchange_manager)
         
         # Get initial balance
         self.logger.info("Fetching initial balances...")
@@ -216,9 +219,10 @@ class CoinbaseGeminiArbitrageBot:
                         symbol, coinbase_ask
                     )
                     
+                    # Use MAKER fees (limit orders) instead of TAKER fees (market orders)
                     estimated_profit = (spread_cb_to_gem * position_size) - \
-                                     (coinbase_ask * position_size * (Config.EXCHANGE_FEES['coinbase']['taker'] + 
-                                                                       Config.EXCHANGE_FEES['gemini']['taker']))
+                                     (coinbase_ask * position_size * (Config.EXCHANGE_FEES['coinbase']['maker'] + 
+                                                                       Config.EXCHANGE_FEES['gemini']['maker']))
                     
                     if estimated_profit >= Config.MIN_PROFIT_USD:
                         opportunities.append(TradeOpportunity(
@@ -240,9 +244,10 @@ class CoinbaseGeminiArbitrageBot:
                         symbol, gemini_ask
                     )
                     
+                    # Use MAKER fees (limit orders) instead of TAKER fees (market orders)
                     estimated_profit = (spread_gem_to_cb * position_size) - \
-                                     (gemini_ask * position_size * (Config.EXCHANGE_FEES['gemini']['taker'] + 
-                                                                     Config.EXCHANGE_FEES['coinbase']['taker']))
+                                     (gemini_ask * position_size * (Config.EXCHANGE_FEES['gemini']['maker'] + 
+                                                                     Config.EXCHANGE_FEES['coinbase']['maker']))
                     
                     if estimated_profit >= Config.MIN_PROFIT_USD:
                         opportunities.append(TradeOpportunity(
@@ -284,26 +289,23 @@ class CoinbaseGeminiArbitrageBot:
         buy_amount = opp.position_size_usd / opp.buy_price
         
         try:
-            buy_order = await self.exchange_manager.create_order(
+            # Use LIMIT ORDER to pay MAKER fees (0.40% vs 0.60% on Coinbase, 0.10% vs 0.35% on Gemini)
+            filled_order = await self.smart_order_placer.place_smart_buy(
                 exchange_id=opp.buy_exchange,
                 symbol=opp.symbol,
-                order_type='market',
-                side='buy',
-                amount=buy_amount
-            )
-            
-            # Wait for order to fill
-            await asyncio.sleep(1)
-            filled_order = await self.exchange_manager.fetch_order(
-                opp.buy_exchange, buy_order['id'], opp.symbol
+                amount=buy_amount,
+                current_ask=opp.buy_price
             )
             
             actual_buy_amount = filled_order.get('filled', buy_amount)
             actual_buy_price = filled_order.get('average', opp.buy_price)
             buy_cost = filled_order.get('cost', actual_buy_amount * actual_buy_price)
-            buy_fee = filled_order.get('fee', {}).get('cost', buy_cost * Config.EXCHANGE_FEES[opp.buy_exchange]['taker'])
+            
+            # Use MAKER fee (not taker)
+            buy_fee = filled_order.get('fee', {}).get('cost', buy_cost * Config.EXCHANGE_FEES[opp.buy_exchange]['maker'])
             
             self.logger.info(f"✅ Buy complete: {actual_buy_amount:.8f} {base_currency} @ ${actual_buy_price:.6f}")
+            self.logger.info(f"   Fee: ${buy_fee:.6f} (MAKER fee: {Config.EXCHANGE_FEES[opp.buy_exchange]['maker']*100:.2f}%)")
             
         except Exception as e:
             self.logger.error(f"❌ Buy failed: {e}")
@@ -339,26 +341,23 @@ class CoinbaseGeminiArbitrageBot:
         self.logger.info(f"[PHASE 3] Selling on {opp.sell_exchange}...")
         
         try:
-            sell_order = await self.exchange_manager.create_order(
+            # Use LIMIT ORDER to pay MAKER fees (0.40% vs 0.60% on Coinbase, 0.10% vs 0.35% on Gemini)
+            filled_sell_order = await self.smart_order_placer.place_smart_sell(
                 exchange_id=opp.sell_exchange,
                 symbol=opp.symbol,
-                order_type='market',
-                side='sell',
-                amount=actual_buy_amount
-            )
-            
-            # Wait for order to fill
-            await asyncio.sleep(1)
-            filled_sell_order = await self.exchange_manager.fetch_order(
-                opp.sell_exchange, sell_order['id'], opp.symbol
+                amount=actual_buy_amount,
+                current_bid=opp.sell_price
             )
             
             actual_sell_amount = filled_sell_order.get('filled', actual_buy_amount)
             actual_sell_price = filled_sell_order.get('average', opp.sell_price)
             sell_revenue = filled_sell_order.get('cost', actual_sell_amount * actual_sell_price)
-            sell_fee = filled_sell_order.get('fee', {}).get('cost', sell_revenue * Config.EXCHANGE_FEES[opp.sell_exchange]['taker'])
+            
+            # Use MAKER fee (not taker)
+            sell_fee = filled_sell_order.get('fee', {}).get('cost', sell_revenue * Config.EXCHANGE_FEES[opp.sell_exchange]['maker'])
             
             self.logger.info(f"✅ Sell complete: {actual_sell_amount:.8f} {base_currency} @ ${actual_sell_price:.6f}")
+            self.logger.info(f"   Fee: ${sell_fee:.6f} (MAKER fee: {Config.EXCHANGE_FEES[opp.sell_exchange]['maker']*100:.2f}%)")
             
         except Exception as e:
             self.logger.error(f"❌ Sell failed: {e}")
