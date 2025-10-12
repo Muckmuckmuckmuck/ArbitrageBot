@@ -22,9 +22,11 @@ EXCHANGE_2_ID = 'gemini'    # Gemini
 # ============================================================================
 
 # Coinbase Advanced API Keys
+# Note: Newer Coinbase API keys may not have a passphrase (CDP API)
+# Older keys have passphrase. Bot supports both!
 COINBASE_API_KEY = os.getenv('COINBASE_API_KEY', '')
 COINBASE_SECRET_KEY = os.getenv('COINBASE_SECRET_KEY', '')
-COINBASE_PASSPHRASE = os.getenv('COINBASE_PASSPHRASE', '')
+COINBASE_PASSPHRASE = os.getenv('COINBASE_PASSPHRASE', '')  # Optional for newer API keys
 COINBASE_SANDBOX = os.getenv('COINBASE_SANDBOX', 'false').lower() == 'true'
 
 # Gemini API Keys
