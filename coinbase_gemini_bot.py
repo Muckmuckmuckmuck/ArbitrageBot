@@ -169,6 +169,9 @@ class CoinbaseGeminiArbitrageBot:
         """Scan all currency pairs for arbitrage opportunities"""
         opportunities = []
         
+        # Track spreads for logging
+        spread_info = []
+        
         for symbol in Config.CURRENCY_PAIRS:
             try:
                 # Check rate limits
@@ -204,6 +207,16 @@ class CoinbaseGeminiArbitrageBot:
                 
                 # Get minimum required spread
                 min_spread = self.spread_manager.get_min_spread(symbol)
+                
+                # Track spread for logging (use best direction)
+                best_spread_pct = max(spread_cb_to_gem_pct, spread_gem_to_cb_pct)
+                spread_info.append({
+                    'symbol': symbol,
+                    'spread': best_spread_pct,
+                    'required': min_spread * 100,
+                    'profitable': best_spread_pct >= min_spread * 100,
+                    'direction': 'CB→GEM' if spread_cb_to_gem_pct > spread_gem_to_cb_pct else 'GEM→CB'
+                })
                 
                 # Check if either direction is profitable
                 if spread_cb_to_gem_pct >= min_spread * 100:
@@ -259,6 +272,19 @@ class CoinbaseGeminiArbitrageBot:
             except Exception as e:
                 self.logger.debug(f"Error scanning {symbol}: {e}")
                 continue
+        
+        # Log spread summary every scan
+        if spread_info:
+            self.logger.info("=" * 80)
+            self.logger.info("📊 CURRENT SPREADS")
+            self.logger.info("=" * 80)
+            for info in spread_info:
+                status = "✅ PROFITABLE" if info['profitable'] else "❌ TOO LOW"
+                self.logger.info(
+                    f"{info['symbol']:12s} | {info['direction']:8s} | "
+                    f"Spread: {info['spread']:6.3f}% | Required: {info['required']:5.3f}% | {status}"
+                )
+            self.logger.info("=" * 80)
         
         return opportunities
     

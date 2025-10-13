@@ -70,7 +70,9 @@ class AutoRecoverySystem:
                 return await result
             return result
         except Exception as e:
-            logger.error(f"Error fetching balance: {e}")
+            # Suppress known Gemini API key type warnings
+            if 'master-keys are not-supported' not in str(e):
+                logger.error(f"Error fetching balance: {e}")
             return {}
     
     async def _fetch_ticker_safe(self, exchange, symbol: str) -> Dict:

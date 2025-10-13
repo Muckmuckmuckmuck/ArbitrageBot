@@ -65,7 +65,9 @@ class FixedPercentageBalanceManager:
                             total_value += balance['total'][currency]
                                     
                 except Exception as e:
-                    logger.error(f"Error fetching balance from {exchange_name}: {str(e)}")
+                    # Suppress known Gemini API key type warnings
+                    if 'master-keys are not-supported' not in str(e):
+                        logger.error(f"Error fetching balance from {exchange_name}: {str(e)}")
                     
             logger.info(f"Total account value: ${total_value:,.2f}")
             return total_value
