@@ -104,46 +104,166 @@ EXCHANGE_FEES = {
 # CRYPTOCURRENCY SELECTION (Available on BOTH Coinbase and Gemini)
 # ============================================================================
 
-# UPDATED: Niche cryptos with REAL positive spreads (Oct 13, 2025)
-# Based on comprehensive scan of all 69 common USD pairs
-# Selected for: Actual positive spreads + decent volume + fast transfers
+# FINAL: Best cryptos from comprehensive 146-pair scan (Oct 13, 2025)
+# Scanned ALL pairs on Coinbase + Gemini, found 32 profitable
+# Selected for: High profit + good volume + realistic spreads
 CURRENCY_PAIRS = [
-    'EUL/USD',       # #1 - Spread: 0.547%, Vol: $372k (Euler - DeFi governance)
-    'CTX/USD',       # #2 - Spread: 0.645%, Vol: $3.3k (Cryptex Finance)
-    'FARTCOIN/USD',  # #3 - Spread: 0.618%, Vol: $1.7k (Meme coin with liquidity)
-    'IOTX/USD',      # #4 - Spread: 0.357%, Vol: $1.2k (IoTeX - IoT blockchain)
-    'PUMP/USD',      # #5 - Spread: 0.128%, Vol: $29k (Pump token)
+    # TIER 1: PRIMARY PAIRS (Best profit + volume)
+    'ZEC/USD',       # $1.37 profit, $1.5M volume, 1.875% spread - BEST OVERALL
+    'MOODENG/USDC',  # $2.43 profit, $102k volume, 2.933% spread
+    'BAT/USD',       # $3.01 profit, $45k volume, 3.511% spread
+    'COMP/USD',      # $0.70 profit, $23k volume, 1.203% spread - DeFi blue chip
+    'QNT/USD',       # $2.70 profit, $17k volume, 3.204% spread
+    'AMP/USD',       # $0.24 profit, $16k volume, 0.743% spread - Safe
     
-    # Backup pairs (if above don't have opportunities)
-    'ARB/USD',       # Arbitrum - Layer 2, good volume
-    'POL/USD',       # Polygon - Fast transfers
-    'FET/USD',       # Fetch.ai - AI blockchain
-    'GMT/USD',       # STEPN - Move-to-earn
-    'TRUMP/USD',     # Political meme coin
+    # TIER 2: BACKUP PAIRS (Good opportunities)
+    'IMX/USD',       # $1.33 profit, $8k volume, 1.831% spread
+    'EUL/USD',       # $0.18 profit, $431k volume, 0.683% spread - SAFEST (huge volume)
+    'SKL/USD',       # $0.16 profit, $9k volume, 0.662% spread
+    'IOTX/USD',      # $0.31 profit, $1k volume, 0.810% spread
+    
+    # TIER 3: HIGH RISK / HIGH REWARD
+    'API3/USD',      # $4.76 profit, $5k volume, 5.257% spread - High profit, low volume
 ]
 
 # Why these work:
-# - All have POSITIVE spreads (not negative like BTC/ETH/SOL)
-# - Lower market efficiency = more arbitrage opportunities
-# - Fast transfer times (most are ERC-20 or fast L1s)
-# - Available on both Coinbase & Gemini
+# - All have REAL positive spreads (0.66% - 5.26%)
+# - Profitable after 0.50% maker fees
+# - ZEC has best volume ($1.5M) - very safe
+# - Most have 2-3 min transfer times
+# - Verified available on BOTH Coinbase & Gemini
 
 # ============================================================================
 # CRYPTO-SPECIFIC PARAMETERS
 # ============================================================================
 
 # Minimum spread required for profitability (after fees + slippage)
-# Formula: min_spread > (coinbase_taker + gemini_taker + slippage + buffer)
-#         = 0.60% + 0.35% + 0.10% + 0.10% = 1.15%
-# UPDATED: Lowered to 0.8% since we found niche cryptos with smaller but real spreads
+# Using MAKER FEES: Coinbase 0.40% + Gemini 0.10% = 0.50% total
+# Min spread should be > 0.50% to be profitable
 
 CURRENCY_PAIR_SPREADS = {
-    # UPDATED: Niche cryptos with real positive spreads
+    # TIER 1: PRIMARY PAIRS
+    'ZEC/USD': {
+        'min_spread': 0.006,      # 0.6% (actual: 1.875%)
+        'safe_spread': 0.010,     # 1.0%
+        'max_spread': 0.030,      # 3.0%
+        'slippage': 0.00100,      # 0.1%
+        'transfer_time': 180,     # 3 min
+        'frequency': 0.30,        # 30%
+        'category': 'Privacy',
+        'liquidity_score': 0.9,   # Excellent volume
+    },
+    'MOODENG/USDC': {
+        'min_spread': 0.008,      # 0.8% (actual: 2.933%)
+        'safe_spread': 0.015,     # 1.5%
+        'max_spread': 0.040,      # 4.0%
+        'slippage': 0.00150,      # 0.15%
+        'transfer_time': 120,     # 2 min
+        'frequency': 0.25,        # 25%
+        'category': 'Meme',
+        'liquidity_score': 0.7,
+    },
+    'BAT/USD': {
+        'min_spread': 0.008,      # 0.8% (actual: 3.511%)
+        'safe_spread': 0.015,     # 1.5%
+        'max_spread': 0.050,      # 5.0%
+        'slippage': 0.00150,      # 0.15%
+        'transfer_time': 120,     # 2 min
+        'frequency': 0.30,        # 30%
+        'category': 'Utility',
+        'liquidity_score': 0.8,
+    },
+    'COMP/USD': {
+        'min_spread': 0.006,      # 0.6% (actual: 1.203%)
+        'safe_spread': 0.010,     # 1.0%
+        'max_spread': 0.025,      # 2.5%
+        'slippage': 0.00100,      # 0.1%
+        'transfer_time': 120,     # 2 min
+        'frequency': 0.30,        # 30%
+        'category': 'DeFi',
+        'liquidity_score': 0.8,
+    },
+    'QNT/USD': {
+        'min_spread': 0.008,      # 0.8% (actual: 3.204%)
+        'safe_spread': 0.015,     # 1.5%
+        'max_spread': 0.045,      # 4.5%
+        'slippage': 0.00150,      # 0.15%
+        'transfer_time': 120,     # 2 min
+        'frequency': 0.25,        # 25%
+        'category': 'Enterprise',
+        'liquidity_score': 0.7,
+    },
+    'AMP/USD': {
+        'min_spread': 0.005,      # 0.5% (actual: 0.743%)
+        'safe_spread': 0.008,     # 0.8%
+        'max_spread': 0.015,      # 1.5%
+        'slippage': 0.00100,      # 0.1%
+        'transfer_time': 120,     # 2 min
+        'frequency': 0.30,        # 30%
+        'category': 'Payments',
+        'liquidity_score': 0.8,
+    },
+    
+    # TIER 2: BACKUP PAIRS
+    'IMX/USD': {
+        'min_spread': 0.006,      # 0.6% (actual: 1.831%)
+        'safe_spread': 0.010,     # 1.0%
+        'max_spread': 0.025,      # 2.5%
+        'slippage': 0.00100,      # 0.1%
+        'transfer_time': 120,     # 2 min
+        'frequency': 0.25,        # 25%
+        'category': 'Gaming',
+        'liquidity_score': 0.7,
+    },
     'EUL/USD': {
-        'min_spread': 0.008,      # 0.8% (actual spread: 0.547%)
+        'min_spread': 0.005,      # 0.5% (actual: 0.683%)
+        'safe_spread': 0.008,     # 0.8%
+        'max_spread': 0.015,      # 1.5%
+        'slippage': 0.00100,      # 0.1%
+        'transfer_time': 120,     # 2 min
+        'frequency': 0.30,        # 30%
+        'category': 'DeFi',
+        'liquidity_score': 0.9,   # HUGE volume ($431k)
+    },
+    'SKL/USD': {
+        'min_spread': 0.005,      # 0.5% (actual: 0.662%)
+        'safe_spread': 0.008,     # 0.8%
+        'max_spread': 0.015,      # 1.5%
+        'slippage': 0.00100,      # 0.1%
+        'transfer_time': 120,     # 2 min
+        'frequency': 0.25,        # 25%
+        'category': 'Infrastructure',
+        'liquidity_score': 0.7,
+    },
+    'IOTX/USD': {
+        'min_spread': 0.005,      # 0.5% (actual: 0.810%)
+        'safe_spread': 0.008,     # 0.8%
+        'max_spread': 0.015,      # 1.5%
+        'slippage': 0.00150,      # 0.15%
+        'transfer_time': 30,      # 30 sec (IoTeX native)
+        'frequency': 0.25,        # 25%
+        'category': 'IoT',
+        'liquidity_score': 0.6,
+    },
+    
+    # TIER 3: HIGH RISK / HIGH REWARD
+    'API3/USD': {
+        'min_spread': 0.010,      # 1.0% (actual: 5.257%)
+        'safe_spread': 0.020,     # 2.0%
+        'max_spread': 0.070,      # 7.0%
+        'slippage': 0.00200,      # 0.2% (low liquidity)
+        'transfer_time': 120,     # 2 min
+        'frequency': 0.20,        # 20%
+        'category': 'Oracle',
+        'liquidity_score': 0.5,   # Low volume - risky
+    },
+    
+    # Legacy entries (kept for compatibility)
+    'CTX/USD': {
+        'min_spread': 0.008,      # 0.8% (actual spread: 0.645%)
         'safe_spread': 0.010,     # 1.0%
         'max_spread': 0.020,      # 2.0%
-        'slippage': 0.00150,      # 0.15% (lower liquidity)
+        'slippage': 0.00200,      # 0.2% (lower liquidity)
         'transfer_time': 180,     # 3 min (ERC-20 token)
         'frequency': 0.25,        # 25% (less frequent)
         'category': 'DeFi',
@@ -357,25 +477,28 @@ CURRENCY_PAIR_SPREADS = {
 # POSITION SIZING (Percentage-based, scales with balance)
 # ============================================================================
 
-# UPDATED: Position percentages for niche cryptos with real positive spreads
-# Based on actual spread + volume + liquidity analysis (Oct 13, 2025)
+# FINAL: Position percentages based on comprehensive 146-pair scan
+# Weighted by: profit potential + volume + liquidity + reliability
 BASE_POSITION_PERCENTAGES = {
-    # Top tier: Highest spreads + decent volume
-    'EUL/USD': 0.15,       # 15% - Spread: 0.547%, Vol: $372k (best volume)
-    'CTX/USD': 0.12,       # 12% - Spread: 0.645%, Vol: $3.3k (highest spread)
-    'FARTCOIN/USD': 0.12,  # 12% - Spread: 0.618%, Vol: $1.7k (high spread)
-    'IOTX/USD': 0.12,      # 12% - Spread: 0.357%, Vol: $1.2k (good spread)
-    'PUMP/USD': 0.10,      # 10% - Spread: 0.128%, Vol: $29k (good volume)
+    # TIER 1: PRIMARY PAIRS (70% of capital)
+    'ZEC/USD': 0.20,       # 20% - BEST: $1.37 profit, $1.5M volume (safest)
+    'BAT/USD': 0.15,       # 15% - $3.01 profit, $45k volume
+    'COMP/USD': 0.12,      # 12% - $0.70 profit, $23k volume (DeFi blue chip)
+    'QNT/USD': 0.10,       # 10% - $2.70 profit, $17k volume
+    'AMP/USD': 0.08,       # 8%  - $0.24 profit, $16k volume (safe)
+    'MOODENG/USDC': 0.05,  # 5%  - $2.43 profit, $102k volume
     
-    # Backup tier: Lower spreads but available
-    'ARB/USD': 0.10,       # 10% - Layer 2, good liquidity
-    'POL/USD': 0.10,       # 10% - Fast transfers, good volume
-    'FET/USD': 0.08,       # 8%  - AI sector
-    'GMT/USD': 0.06,       # 6%  - Gaming sector
-    'TRUMP/USD': 0.05,     # 5%  - Volatile meme coin
+    # TIER 2: BACKUP PAIRS (25% of capital)
+    'EUL/USD': 0.10,       # 10% - $0.18 profit, $431k volume (HUGE volume)
+    'IMX/USD': 0.08,       # 8%  - $1.33 profit, $8k volume
+    'SKL/USD': 0.05,       # 5%  - $0.16 profit, $9k volume
+    'IOTX/USD': 0.02,      # 2%  - $0.31 profit, $1k volume
+    
+    # TIER 3: HIGH RISK (5% of capital)
+    'API3/USD': 0.05,      # 5%  - $4.76 profit, $5k volume (high risk/reward)
 }
 
-# Total: 100% across 10 cryptos (niche pairs with real spreads)
+# Total: 100% across 11 cryptos (best from 146-pair scan)
 
 # Position sizing limits
 MAX_POSITION_PERCENT_PER_TRADE = 0.15  # 15% of total account value per trade
