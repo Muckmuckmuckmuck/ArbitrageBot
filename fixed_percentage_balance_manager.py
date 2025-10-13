@@ -57,19 +57,24 @@ class FixedPercentageBalanceManager:
                     else:
                         balance = balance_result
                     
-                    # Get USD/USDT balance
-                    for currency in ['USD', 'USDT']:
-                        if currency in balance.get('free', {}):
-                            total_value += balance['free'][currency]
-                        if currency in balance.get('total', {}):
-                            total_value += balance['total'][currency]
+                    # Get USD/USDT/USDC balance (use 'free' only, not 'total' to avoid double counting)
+                    exchange_total = 0.0
+                    for currency in ['USD', 'USDT', 'USDC']:
+                        free_balance = balance.get('free', {}).get(currency, 0.0)
+                        if free_balance > 0:
+                            total_value += free_balance
+                            exchange_total += free_balance
+                            logger.info(f"  {exchange_name} {currency}: ${free_balance:.2f}")
+                    
+                    if exchange_total == 0:
+                        logger.warning(f"  ⚠️  {exchange_name} has $0 balance in USD/USDT/USDC")
                                     
                 except Exception as e:
                     # Suppress known Gemini API key type warnings
                     if 'master-keys are not-supported' not in str(e):
                         logger.error(f"Error fetching balance from {exchange_name}: {str(e)}")
                     
-            logger.info(f"Total account value: ${total_value:,.2f}")
+            logger.info(f"💰 Total account value: ${total_value:,.2f}")
             return total_value
             
         except Exception as e:
