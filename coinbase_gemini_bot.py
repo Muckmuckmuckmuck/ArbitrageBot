@@ -27,6 +27,7 @@ from comprehensive_error_handler import ComprehensiveErrorHandler
 from transfer_manager_fixed import TransferManager, TransferResult
 from auto_recovery_system import AutoRecoverySystem, StuckPosition
 from smart_order_placer import SmartOrderPlacer
+from auto_balance_system import AutoBalanceSystem
 
 # Setup logging
 logging.basicConfig(
@@ -150,6 +151,7 @@ class CoinbaseGeminiArbitrageBot:
         self.transfer_manager = TransferManager(self.exchange_manager.exchanges, Config)
         self.recovery_system = AutoRecoverySystem(self.exchange_manager.exchanges, Config)
         self.smart_order_placer = SmartOrderPlacer(self.exchange_manager)
+        self.auto_balance = AutoBalanceSystem(self.exchange_manager, Config)
         
         # Get initial balance
         self.logger.info("Fetching initial balances...")
@@ -487,8 +489,15 @@ class CoinbaseGeminiArbitrageBot:
         """Main trading loop"""
         self.logger.info("🚀 Starting trading loop...")
         
+        # Check for rebalancing on startup
+        await self.auto_balance.check_and_rebalance()
+        
         while self.running and not self.shutdown_event.is_set():
             try:
+                # Check if rebalancing is needed (every 10 scans)
+                if self.stats['scans'] % 10 == 0:
+                    await self.auto_balance.check_and_rebalance()
+                
                 # Scan for opportunities
                 opportunities = await self.scan_for_opportunities()
                 
