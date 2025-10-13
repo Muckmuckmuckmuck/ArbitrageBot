@@ -117,68 +117,68 @@ class FixedPercentageBalanceManager:
             logger.error(f"Error calculating position size for {symbol}: {str(e)}")
             return 0.0
     
-    async def _validate_position_size(self, symbol: str, position_size: float, 
+    async def _validate_position_size(self, symbol: str, position_size_usd: float, 
                                     spread_percent: float) -> PositionSizeResult:
-        """Validate position size against available balances"""
+        """Validate position size against available balances
+        
+        Args:
+            position_size_usd: Position size in USD (e.g., $11.10)
+            symbol: Trading pair (e.g., 'ZEC/USD')
+            spread_percent: Spread percentage
+        
+        Returns:
+            PositionSizeResult with validated position size in USD
+        """
         try:
             # Get exchanges
             exchanges = ['coinbase', 'gemini']
-            validated_sizes = []
+            validated_sizes_usd = []  # Store in USD
             validation_details = []
+            
+            # Get quote currency from symbol
+            quote_currency = symbol.split('/')[-1]  # USD, USDT, or USDC
             
             for exchange_name in exchanges:
                 try:
-                    # Get current price
-                    exchange = self.exchange_manager.get_exchange(exchange_name)
-                    ticker_result = exchange.fetch_ticker(symbol)
-                    if hasattr(ticker_result, '__await__'):
-                        ticker = await ticker_result
-                    else:
-                        ticker = ticker_result
-                    current_price = ticker.get('last') or ticker.get('close')
-                    
-                    # Calculate required quote currency for this position
-                    quote_currency = symbol.split('/')[-1]  # USD, USDT, or USDC
-                    required_quote = position_size * current_price
-                    
-                    # Validate quote currency balance for buy side
+                    # Validate that exchange has enough quote currency
                     buy_validation = await self.balance_validator.validate_balance(
-                        exchange_name, quote_currency, required_quote, buffer_percent=0.1
+                        exchange_name, quote_currency, position_size_usd, buffer_percent=0.1
                     )
                     
                     if buy_validation.is_valid:
-                        # Calculate max position based on available balance
-                        max_position = buy_validation.available_amount / (current_price * 1.1)
-                        validated_sizes.append(max_position)
+                        # Exchange can handle this position
+                        # Calculate max position size in USD based on available balance
+                        max_position_usd = buy_validation.available_amount / 1.1  # Account for 10% buffer
+                        validated_sizes_usd.append(max_position_usd)
                         validation_details.append({
                             'exchange': exchange_name,
-                            'max_position': max_position,
+                            'max_position_usd': max_position_usd,
                             'available_quote': buy_validation.available_amount,
-                            'required_quote': required_quote
+                            'required_quote': position_size_usd
                         })
-                        logger.info(f"✅ {exchange_name} can handle position: ${max_position:,.2f}")
+                        logger.info(f"✅ {exchange_name} can handle position: ${max_position_usd:,.2f}")
                     else:
                         logger.warning(f"❌ {exchange_name} insufficient {quote_currency}: {buy_validation.message}")
-                        validated_sizes.append(0.0)
+                        validated_sizes_usd.append(0.0)
                         validation_details.append({
                             'exchange': exchange_name,
-                            'max_position': 0.0,
+                            'max_position_usd': 0.0,
                             'available_quote': buy_validation.available_amount,
-                            'required_quote': required_quote,
+                            'required_quote': position_size_usd,
                             'error': buy_validation.message
                         })
                         
                 except Exception as e:
                     logger.error(f"Error validating position size on {exchange_name}: {str(e)}")
-                    validated_sizes.append(0.0)
+                    validated_sizes_usd.append(0.0)
                     validation_details.append({
                         'exchange': exchange_name,
                         'max_position': 0.0,
                         'error': str(e)
                     })
             
-            # Find the maximum validated position size
-            max_validated = max(validated_sizes) if validated_sizes else 0.0
+            # Find the maximum validated position size (in USD)
+            max_validated = max(validated_sizes_usd) if validated_sizes_usd else 0.0
             
             # Ensure minimum position size
             min_position = self.config.RISK_MANAGEMENT['min_position_percent'] * await self.get_total_account_value()
