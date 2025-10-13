@@ -293,6 +293,8 @@ RISK_MANAGEMENT = {
     'emergency_stop_loss_percent': 0.10,   # Emergency stop at 10% loss
     
     # Position sizing
+    'max_position_percent': 0.15,          # 15% max per position
+    'min_position_percent': 0.05,          # 5% min per position
     'min_trade_size_usd': 10.0,           # Minimum $10 per trade
     'max_trade_size_usd': None,           # No max (scales with balance)
     'min_account_balance_usd': 50.0,      # Minimum $50 to operate
