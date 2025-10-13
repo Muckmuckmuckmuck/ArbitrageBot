@@ -102,8 +102,18 @@ class BalanceValidator:
             try:
                 # Get fresh balance from exchange
                 exchange = self.exchange_manager.get_exchange(exchange_name)
-                balance = await exchange.get_balance()
-                current_balance = balance.get(currency, 0.0)
+                
+                # CCXT fetch_balance can be sync or async
+                balance_result = exchange.fetch_balance()
+                if hasattr(balance_result, '__await__'):
+                    balance = await balance_result
+                else:
+                    balance = balance_result
+                
+                # Get balance for currency (check both 'free' and 'total')
+                current_balance = balance.get('free', {}).get(currency, 0.0)
+                if current_balance == 0.0:
+                    current_balance = balance.get('total', {}).get(currency, 0.0)
                 
                 # Update cache
                 self.balance_cache[cache_key] = current_balance
@@ -113,7 +123,9 @@ class BalanceValidator:
                 return current_balance
                 
             except Exception as e:
-                logger.error(f"Error getting balance from {exchange_name}: {str(e)}")
+                # Suppress known Gemini API key type warnings
+                if 'master-keys are not-supported' not in str(e):
+                    logger.error(f"Error getting balance from {exchange_name}: {str(e)}")
                 return 0.0
     
     async def validate_trade_balance(self, buy_exchange: str, sell_exchange: str,
@@ -122,9 +134,12 @@ class BalanceValidator:
         results = {}
         
         try:
-            # Validate buy side (USDT balance)
+            # Determine quote currency from symbol (USD, USDT, or USDC)
+            quote_currency = symbol.split('/')[-1]
+            
+            # Validate buy side (quote currency balance)
             buy_validation = await self.validate_balance(
-                buy_exchange, 'USDT', amount * price, buffer_percent=0.1
+                buy_exchange, quote_currency, amount * price, buffer_percent=0.1
             )
             results['buy_side'] = buy_validation
             

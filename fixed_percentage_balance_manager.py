@@ -132,12 +132,13 @@ class FixedPercentageBalanceManager:
                         ticker = ticker_result
                     current_price = ticker.get('last') or ticker.get('close')
                     
-                    # Calculate required USDT for this position
-                    required_usdt = position_size * current_price
+                    # Calculate required quote currency for this position
+                    quote_currency = symbol.split('/')[-1]  # USD, USDT, or USDC
+                    required_quote = position_size * current_price
                     
-                    # Validate USDT balance for buy side
+                    # Validate quote currency balance for buy side
                     buy_validation = await self.balance_validator.validate_balance(
-                        exchange_name, 'USDT', required_usdt, buffer_percent=0.1
+                        exchange_name, quote_currency, required_quote, buffer_percent=0.1
                     )
                     
                     if buy_validation.is_valid:
