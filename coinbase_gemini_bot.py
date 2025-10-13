@@ -147,7 +147,7 @@ class CoinbaseGeminiArbitrageBot:
         self.balance_validator = BalanceValidator(self.exchange_manager)
         self.balance_manager = FixedPercentageBalanceManager(self.exchange_manager)
         self.error_handler = ComprehensiveErrorHandler()
-        self.transfer_manager = TransferManager(self.exchange_manager)
+        self.transfer_manager = TransferManager(self.exchange_manager.exchanges, Config)
         self.recovery_system = AutoRecoverySystem(self.exchange_manager)
         self.smart_order_placer = SmartOrderPlacer(self.exchange_manager)
         
