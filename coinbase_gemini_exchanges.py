@@ -37,8 +37,8 @@ class CoinbaseGeminiExchangeManager:
                 self.coinbase.set_sandbox_mode(True)
                 logger.info("Coinbase: Sandbox mode enabled")
             
-            # Load markets
-            await self.coinbase.load_markets()
+            # Load markets (CCXT load_markets is synchronous)
+            self.coinbase.load_markets()
             logger.info(f"✅ Coinbase initialized: {len(self.coinbase.markets)} markets")
             
         except Exception as e:
@@ -58,8 +58,8 @@ class CoinbaseGeminiExchangeManager:
                 self.gemini.set_sandbox_mode(True)
                 logger.info("Gemini: Sandbox mode enabled")
             
-            # Load markets
-            await self.gemini.load_markets()
+            # Load markets (CCXT load_markets is synchronous)
+            self.gemini.load_markets()
             logger.info(f"✅ Gemini initialized: {len(self.gemini.markets)} markets")
             
         except Exception as e:
@@ -229,10 +229,18 @@ class CoinbaseGeminiExchangeManager:
     
     async def close(self):
         """Close exchange connections"""
-        if self.coinbase:
-            await self.coinbase.close()
-        if self.gemini:
-            await self.gemini.close()
+        try:
+            if self.coinbase and hasattr(self.coinbase, 'close'):
+                await self.coinbase.close()
+        except Exception as e:
+            logger.warning(f"Error closing Coinbase: {e}")
+        
+        try:
+            if self.gemini and hasattr(self.gemini, 'close'):
+                await self.gemini.close()
+        except Exception as e:
+            logger.warning(f"Error closing Gemini: {e}")
+        
         logger.info("Exchange connections closed")
 
 # ============================================================================
