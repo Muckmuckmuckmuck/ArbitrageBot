@@ -148,7 +148,7 @@ class CoinbaseGeminiArbitrageBot:
         self.balance_manager = FixedPercentageBalanceManager(self.exchange_manager)
         self.error_handler = ComprehensiveErrorHandler()
         self.transfer_manager = TransferManager(self.exchange_manager.exchanges, Config)
-        self.recovery_system = AutoRecoverySystem(self.exchange_manager)
+        self.recovery_system = AutoRecoverySystem(self.exchange_manager.exchanges, Config)
         self.smart_order_placer = SmartOrderPlacer(self.exchange_manager)
         
         # Get initial balance
