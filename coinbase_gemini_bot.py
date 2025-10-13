@@ -293,7 +293,7 @@ class CoinbaseGeminiArbitrageBot:
                         ))
                 
             except Exception as e:
-                self.logger.debug(f"Error scanning {symbol}: {e}")
+                self.logger.warning(f"❌ Error scanning {symbol}: {e}")
                 continue
         
         # Log spread summary every scan
