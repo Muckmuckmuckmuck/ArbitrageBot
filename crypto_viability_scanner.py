@@ -24,6 +24,8 @@ class CryptoViabilityScanner:
         logger.info("="*100)
         logger.info("🔍 CRYPTO VIABILITY SCANNER - FINDING BEST ARBITRAGE CRYPTOS")
         logger.info("="*100)
+        logger.info("💡 Using MAKER FEES (limit orders): Coinbase 0.40% + Gemini 0.10% = 0.50% total")
+        logger.info("="*100)
         
         # Initialize exchanges
         self.coinbase = ccxt.coinbase({
@@ -75,10 +77,10 @@ class CryptoViabilityScanner:
         """Calculate potential profit for a $100 position"""
         position_size_usd = 100.0  # $100 position
         
-        # Fees
-        coinbase_taker = 0.0060  # 0.60%
-        gemini_taker = 0.0035    # 0.35%
-        total_fees = coinbase_taker + gemini_taker  # 0.95%
+        # MAKER FEES (using limit orders, not market orders!)
+        coinbase_maker = 0.0040  # 0.40% maker fee
+        gemini_maker = 0.0010    # 0.10% maker fee
+        total_fees = coinbase_maker + gemini_maker  # 0.50% total
         
         # Net spread after fees
         net_spread = spread_pct - total_fees
