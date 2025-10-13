@@ -472,7 +472,7 @@ class CoinbaseGeminiArbitrageBot:
         while self.running and not self.shutdown_event.is_set():
             try:
                 # Update current balance
-                total_balance = await self.balance_manager.get_total_account_value_usd()
+                total_balance = await self.balance_manager.get_total_account_value()
                 self.stats['current_balance_usd'] = total_balance
                 
                 # Calculate performance
@@ -504,7 +504,7 @@ class CoinbaseGeminiArbitrageBot:
         """Periodically refresh balance cache"""
         while self.running and not self.shutdown_event.is_set():
             try:
-                await self.balance_validator.refresh_balance_cache()
+                self.balance_validator.clear_cache()
                 await asyncio.sleep(30)
             except Exception as e:
                 self.logger.error(f"Error refreshing balance: {e}")

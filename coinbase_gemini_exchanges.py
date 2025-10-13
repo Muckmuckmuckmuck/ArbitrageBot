@@ -96,7 +96,13 @@ class CoinbaseGeminiExchangeManager:
         """Fetch ticker (price) from exchange"""
         exchange = self.get_exchange(exchange_id)
         try:
-            ticker = await exchange.fetch_ticker(symbol)
+            # CCXT fetch_ticker can be sync or async depending on version
+            result = exchange.fetch_ticker(symbol)
+            # Check if it's a coroutine (async) or direct result (sync)
+            if hasattr(result, '__await__'):
+                ticker = await result
+            else:
+                ticker = result
             return ticker
         except Exception as e:
             logger.error(f"Error fetching ticker {symbol} from {exchange_id}: {e}")
