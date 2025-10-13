@@ -208,10 +208,13 @@ class CoinbaseGeminiArbitrageBot:
                 # Get minimum required spread
                 min_spread = self.spread_manager.get_min_spread(symbol)
                 
+                # Track spread for logging (use best direction)
+                best_spread_pct = max(spread_cb_to_gem_pct, spread_gem_to_cb_pct)
+                
                 # Calculate estimated profit for logging (with error handling)
                 try:
                     position_size = await self.balance_manager.get_adaptive_position_size(
-                        symbol, coinbase_ask if spread_cb_to_gem_pct > spread_gem_to_cb_pct else gemini_ask
+                        symbol, best_spread_pct / 100, 0.01  # spread_percent, volatility (1% default)
                     )
                     
                     if spread_cb_to_gem_pct > spread_gem_to_cb_pct:
@@ -222,9 +225,6 @@ class CoinbaseGeminiArbitrageBot:
                         est_profit = (spread_gem_to_cb * position_size) - \
                                      (gemini_ask * position_size * (Config.EXCHANGE_FEES['gemini']['maker'] + 
                                                                      Config.EXCHANGE_FEES['coinbase']['maker']))
-                    
-                    # Track spread for logging (use best direction)
-                    best_spread_pct = max(spread_cb_to_gem_pct, spread_gem_to_cb_pct)
                     is_spread_profitable = best_spread_pct >= min_spread * 100
                     is_profit_enough = est_profit >= Config.MIN_PROFIT_USD
                     
@@ -245,7 +245,7 @@ class CoinbaseGeminiArbitrageBot:
                 if spread_cb_to_gem_pct >= min_spread * 100:
                     # Buy on Coinbase, sell on Gemini
                     position_size = await self.balance_manager.get_adaptive_position_size(
-                        symbol, coinbase_ask
+                        symbol, spread_cb_to_gem_pct / 100, 0.01  # spread_percent, volatility
                     )
                     
                     # Use MAKER fees (limit orders) instead of TAKER fees (market orders)
@@ -270,7 +270,7 @@ class CoinbaseGeminiArbitrageBot:
                 elif spread_gem_to_cb_pct >= min_spread * 100:
                     # Buy on Gemini, sell on Coinbase
                     position_size = await self.balance_manager.get_adaptive_position_size(
-                        symbol, gemini_ask
+                        symbol, spread_gem_to_cb_pct / 100, 0.01  # spread_percent, volatility
                     )
                     
                     # Use MAKER fees (limit orders) instead of TAKER fees (market orders)
