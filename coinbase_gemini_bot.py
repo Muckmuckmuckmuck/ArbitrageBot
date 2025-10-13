@@ -153,7 +153,7 @@ class CoinbaseGeminiArbitrageBot:
         
         # Get initial balance
         self.logger.info("Fetching initial balances...")
-        total_balance = await self.balance_manager.get_total_account_value_usd()
+        total_balance = await self.balance_manager.get_total_account_value()
         self.stats['initial_balance_usd'] = total_balance
         self.stats['current_balance_usd'] = total_balance
         self.stats['start_time'] = datetime.now()
