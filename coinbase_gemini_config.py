@@ -104,34 +104,40 @@ EXCHANGE_FEES = {
 # CRYPTOCURRENCY SELECTION (Available on BOTH Coinbase and Gemini)
 # ============================================================================
 
-# FINAL: Best cryptos from comprehensive 146-pair scan (Oct 13, 2025)
-# Scanned ALL pairs on Coinbase + Gemini, found 32 profitable
-# Selected for: High profit + good volume + realistic spreads
+# FINAL: Best 17 cryptos from comprehensive 146-pair scan (Oct 13, 2025)
+# See RANKED_CRYPTOS_MASTER_LIST.md for full analysis
+# Selected for: Profit + volume + reliability + risk balance
 CURRENCY_PAIRS = [
-    # TIER 1: PRIMARY PAIRS (Best profit + volume)
-    'ZEC/USD',       # $1.37 profit, $1.5M volume, 1.875% spread - BEST OVERALL
-    'MOODENG/USDC',  # $2.43 profit, $102k volume, 2.933% spread
-    'BAT/USD',       # $3.01 profit, $45k volume, 3.511% spread
-    'COMP/USD',      # $0.70 profit, $23k volume, 1.203% spread - DeFi blue chip
-    'QNT/USD',       # $2.70 profit, $17k volume, 3.204% spread
-    'AMP/USD',       # $0.24 profit, $16k volume, 0.743% spread - Safe
+    # PRIMARY TIER (70% capital) - Best profit/volume ratio
+    'ZEC/USD',       # $0.55 profit, $1.5M volume - SAFEST (best volume)
+    'ZEC/USDC',      # $0.53 profit, $1.5M volume
+    'BAT/USD',       # $3.08 profit, $45k volume - High profit
+    'BAT/USDC',      # $3.08 profit, $45k volume
+    'COMP/USD',      # $0.95 profit, $23k volume - DeFi blue chip
+    'COMP/USDC',     # $0.95 profit, $23k volume
+    'QNT/USD',       # $1.97 profit, $17k volume
+    'QNT/USDC',      # $1.97 profit, $17k volume
     
-    # TIER 2: BACKUP PAIRS (Good opportunities)
-    'IMX/USD',       # $1.33 profit, $8k volume, 1.831% spread
-    'EUL/USD',       # $0.18 profit, $431k volume, 0.683% spread - SAFEST (huge volume)
-    'SKL/USD',       # $0.16 profit, $9k volume, 0.662% spread
-    'IOTX/USD',      # $0.31 profit, $1k volume, 0.810% spread
+    # SECONDARY TIER (20% capital) - Good backup opportunities
+    'MOODENG/USDC',  # $0.62 profit, $102k volume
+    'AMP/USD',       # $0.61 profit, $16k volume
+    'AMP/USDC',      # $0.61 profit, $16k volume
+    'INJ/USD',       # $0.21 profit, $26k volume
+    'INJ/USDC',      # $0.21 profit, $26k volume
     
-    # TIER 3: HIGH RISK / HIGH REWARD
-    'API3/USD',      # $4.76 profit, $5k volume, 5.257% spread - High profit, low volume
+    # HIGH RISK TIER (10% capital) - High reward but lower volume
+    'API3/USD',      # $3.88 profit, $5k volume - Highest profit
+    'API3/USDC',     # $3.88 profit, $5k volume
+    'IMX/USD',       # $1.42 profit, $8k volume
+    'IMX/USDC',      # $1.40 profit, $8k volume
 ]
 
-# Why these work:
-# - All have REAL positive spreads (0.66% - 5.26%)
-# - Profitable after 0.50% maker fees
-# - ZEC has best volume ($1.5M) - very safe
-# - Most have 2-3 min transfer times
-# - Verified available on BOTH Coinbase & Gemini
+# Why these 17:
+# - All profitable after 0.50% maker fees
+# - ZEC has massive $1.5M volume (safest)
+# - BAT/QNT have best profit/volume ratio
+# - All verified on BOTH Coinbase & Gemini
+# - Balanced risk: 70% safe, 20% moderate, 10% aggressive
 
 # ============================================================================
 # CRYPTO-SPECIFIC PARAMETERS
@@ -480,25 +486,32 @@ CURRENCY_PAIR_SPREADS = {
 # FINAL: Position percentages based on comprehensive 146-pair scan
 # Weighted by: profit potential + volume + liquidity + reliability
 BASE_POSITION_PERCENTAGES = {
-    # TIER 1: PRIMARY PAIRS (70% of capital)
-    'ZEC/USD': 0.20,       # 20% - BEST: $1.37 profit, $1.5M volume (safest)
-    'BAT/USD': 0.15,       # 15% - $3.01 profit, $45k volume
-    'COMP/USD': 0.12,      # 12% - $0.70 profit, $23k volume (DeFi blue chip)
-    'QNT/USD': 0.10,       # 10% - $2.70 profit, $17k volume
-    'AMP/USD': 0.08,       # 8%  - $0.24 profit, $16k volume (safe)
-    'MOODENG/USDC': 0.05,  # 5%  - $2.43 profit, $102k volume
+    # PRIMARY TIER (70% capital) - Safest bets
+    'ZEC/USD': 0.15,       # 15% - $0.55 profit, $1.5M volume (SAFEST)
+    'ZEC/USDC': 0.10,      # 10% - $0.53 profit, $1.5M volume
+    'BAT/USD': 0.12,       # 12% - $3.08 profit, $45k volume (high profit)
+    'BAT/USDC': 0.08,      # 8%  - $3.08 profit, $45k volume
+    'COMP/USD': 0.08,      # 8%  - $0.95 profit, $23k volume (DeFi blue chip)
+    'COMP/USDC': 0.05,     # 5%  - $0.95 profit, $23k volume
+    'QNT/USD': 0.07,       # 7%  - $1.97 profit, $17k volume
+    'QNT/USDC': 0.05,      # 5%  - $1.97 profit, $17k volume
     
-    # TIER 2: BACKUP PAIRS (25% of capital)
-    'EUL/USD': 0.10,       # 10% - $0.18 profit, $431k volume (HUGE volume)
-    'IMX/USD': 0.08,       # 8%  - $1.33 profit, $8k volume
-    'SKL/USD': 0.05,       # 5%  - $0.16 profit, $9k volume
-    'IOTX/USD': 0.02,      # 2%  - $0.31 profit, $1k volume
+    # SECONDARY TIER (20% capital) - Good backups
+    'MOODENG/USDC': 0.06,  # 6%  - $0.62 profit, $102k volume
+    'AMP/USD': 0.05,       # 5%  - $0.61 profit, $16k volume
+    'AMP/USDC': 0.03,      # 3%  - $0.61 profit, $16k volume
+    'INJ/USD': 0.03,       # 3%  - $0.21 profit, $26k volume
+    'INJ/USDC': 0.03,      # 3%  - $0.21 profit, $26k volume
     
-    # TIER 3: HIGH RISK (5% of capital)
-    'API3/USD': 0.05,      # 5%  - $4.76 profit, $5k volume (high risk/reward)
+    # HIGH RISK TIER (10% capital) - High reward
+    'API3/USD': 0.04,      # 4%  - $3.88 profit, $5k volume (highest profit)
+    'API3/USDC': 0.03,     # 3%  - $3.88 profit, $5k volume
+    'IMX/USD': 0.02,       # 2%  - $1.42 profit, $8k volume
+    'IMX/USDC': 0.01,      # 1%  - $1.40 profit, $8k volume
 }
 
-# Total: 100% across 11 cryptos (best from 146-pair scan)
+# Total: 100% across 17 cryptos (best from 146-pair scan)
+# Risk distribution: 70% safe (ZEC/BAT/COMP/QNT), 20% moderate, 10% aggressive
 
 # Position sizing limits
 MAX_POSITION_PERCENT_PER_TRADE = 0.15  # 15% of total account value per trade
