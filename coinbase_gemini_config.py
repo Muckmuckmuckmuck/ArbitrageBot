@@ -438,6 +438,27 @@ DYNAMIC_SLIPPAGE = {
 }
 
 # ============================================================================
+# EXCHANGE RATE LIMITS (Per exchange)
+# ============================================================================
+
+EXCHANGE_RATE_LIMITS = {
+    'coinbase': {
+        'requests_per_second': 15,  # 15 req/sec (1800/min documented)
+        'requests_per_minute': 900,  # Conservative: 900/min (50% of limit)
+        'requests_per_hour': 54000,  # 54k req/hour
+        'weight_per_request': 1,
+        'max_weight_per_minute': 900,
+    },
+    'gemini': {
+        'requests_per_second': 5,   # 5 req/sec (conservative)
+        'requests_per_minute': 120,  # 120 req/min documented
+        'requests_per_hour': 7200,   # 7.2k req/hour
+        'weight_per_request': 1,
+        'max_weight_per_minute': 120,
+    }
+}
+
+# ============================================================================
 # SMART RATE LIMITING
 # ============================================================================
 
@@ -628,6 +649,7 @@ class Config:
     # Dynamic adjustments
     DYNAMIC_SPREADS = DYNAMIC_SPREADS
     DYNAMIC_SLIPPAGE = DYNAMIC_SLIPPAGE
+    EXCHANGE_RATE_LIMITS = EXCHANGE_RATE_LIMITS
     SMART_RATE_LIMITING = SMART_RATE_LIMITING
     DYNAMIC_POSITION_SIZING = DYNAMIC_POSITION_SIZING
     
