@@ -22,12 +22,12 @@ logger = logging.getLogger(__name__)
 class CryptoViabilityScanner:
     def __init__(self):
         logger.info("="*100)
-        logger.info("🔍 CRYPTO VIABILITY SCANNER - FINDING BEST ARBITRAGE CRYPTOS")
+        logger.info("🔍 CRYPTO VIABILITY SCANNER - SCANNING 1000+ CRYPTOS")
         logger.info("="*100)
         logger.info("💡 Using MAKER FEES (limit orders): Coinbase 0.40% + Gemini 0.10% = 0.50% total")
         logger.info("="*100)
         
-        # Initialize exchanges
+        # Initialize PRIMARY exchanges (Coinbase + Gemini - our actual trading pair)
         self.coinbase = ccxt.coinbase({
             'apiKey': Config.COINBASE_API_KEY,
             'secret': Config.COINBASE_SECRET_KEY,
@@ -40,38 +40,101 @@ class CryptoViabilityScanner:
             'enableRateLimit': True,
         })
         
+        # Initialize ADDITIONAL exchanges (for comparison only - no API keys needed)
+        logger.info("Initializing additional exchanges for broader crypto coverage...")
+        self.additional_exchanges = {}
+        
+        try:
+            self.additional_exchanges['kraken'] = ccxt.kraken({'enableRateLimit': True})
+            logger.info("  ✅ Kraken initialized")
+        except:
+            logger.warning("  ⚠️  Kraken failed to initialize")
+        
+        try:
+            self.additional_exchanges['binanceus'] = ccxt.binanceus({'enableRateLimit': True})
+            logger.info("  ✅ Binance.US initialized")
+        except:
+            logger.warning("  ⚠️  Binance.US failed to initialize")
+        
+        try:
+            self.additional_exchanges['okx'] = ccxt.okx({'enableRateLimit': True})
+            logger.info("  ✅ OKX initialized")
+        except:
+            logger.warning("  ⚠️  OKX failed to initialize")
+        
+        try:
+            self.additional_exchanges['kucoin'] = ccxt.kucoin({'enableRateLimit': True})
+            logger.info("  ✅ KuCoin initialized")
+        except:
+            logger.warning("  ⚠️  KuCoin failed to initialize")
+        
         # Load markets
-        logger.info("Loading markets from Coinbase and Gemini...")
+        logger.info("\nLoading markets from all exchanges...")
         self.coinbase.load_markets()
         self.gemini.load_markets()
         
+        for name, exchange in self.additional_exchanges.items():
+            try:
+                exchange.load_markets()
+                logger.info(f"  ✅ {name.upper()} markets loaded: {len(exchange.markets)} pairs")
+            except Exception as e:
+                logger.warning(f"  ⚠️  {name.upper()} markets failed: {str(e)[:50]}")
+        
         # Get common pairs
         self.common_pairs = self._get_common_pairs()
-        logger.info(f"✅ Found {len(self.common_pairs)} common USD pairs to scan")
+        logger.info(f"\n✅ Found {len(self.common_pairs)} total pairs to scan")
+        logger.info("="*100)
         
     def _get_common_pairs(self):
-        """Get all common USD pairs between exchanges"""
-        # Get USD pairs (exclude stablecoins)
-        stablecoins = ['USDC', 'USDT', 'DAI', 'BUSD', 'TUSD', 'USDP', 'GUSD', 'PAX']
+        """Get ALL unique crypto pairs from ALL exchanges"""
+        logger.info("\n" + "="*100)
+        logger.info("📊 AGGREGATING CRYPTOS FROM ALL EXCHANGES")
+        logger.info("="*100)
         
-        cb_pairs = [
-            s for s in self.coinbase.markets.keys() 
-            if s.endswith('/USD') and not any(stable in s for stable in stablecoins)
+        # Collect ALL unique pairs from ALL exchanges
+        all_pairs = set()
+        
+        # Add Coinbase pairs
+        cb_pairs = [s for s in self.coinbase.markets.keys() if '/' in s]
+        all_pairs.update(cb_pairs)
+        logger.info(f"Coinbase: {len(cb_pairs)} pairs")
+        
+        # Add Gemini pairs
+        gem_pairs = [s for s in self.gemini.markets.keys() if '/' in s]
+        all_pairs.update(gem_pairs)
+        logger.info(f"Gemini: {len(gem_pairs)} pairs")
+        
+        # Add pairs from additional exchanges
+        for name, exchange in self.additional_exchanges.items():
+            try:
+                ex_pairs = [s for s in exchange.markets.keys() if '/' in s]
+                all_pairs.update(ex_pairs)
+                logger.info(f"{name.upper()}: {len(ex_pairs)} pairs")
+            except Exception as e:
+                logger.warning(f"{name.upper()}: Failed to get pairs - {str(e)[:50]}")
+        
+        # Filter to only USD, USDT, USDC quotes (for easier comparison)
+        quote_currencies = ['USD', 'USDT', 'USDC']
+        filtered_pairs = [
+            p for p in all_pairs 
+            if any(p.endswith(f'/{q}') for q in quote_currencies)
         ]
         
-        gem_pairs = [
-            s for s in self.gemini.markets.keys() 
-            if s.endswith('/USD') and not any(stable in s for stable in stablecoins)
-        ]
+        # Sort by quote currency and then alphabetically
+        filtered_pairs = sorted(filtered_pairs, key=lambda x: (x.split('/')[-1], x))
         
-        # Get common pairs
-        common = sorted(set(cb_pairs) & set(gem_pairs))
+        logger.info(f"="*100)
+        logger.info(f"📊 TOTAL UNIQUE PAIRS (USD/USDT/USDC): {len(filtered_pairs)}")
+        logger.info(f"="*100)
         
-        logger.info(f"Coinbase USD pairs: {len(cb_pairs)}")
-        logger.info(f"Gemini USD pairs: {len(gem_pairs)}")
-        logger.info(f"Common pairs: {len(common)}")
+        # Show breakdown by quote
+        for quote in quote_currencies:
+            count = len([p for p in filtered_pairs if p.endswith(f'/{quote}')])
+            logger.info(f"  {quote}: {count} pairs")
         
-        return common
+        logger.info(f"="*100)
+        
+        return filtered_pairs
     
     def calculate_potential_profit(self, symbol, spread_pct, price):
         """Calculate potential profit for a $100 position"""
@@ -100,11 +163,43 @@ class CryptoViabilityScanner:
     def scan_crypto(self, symbol):
         """Scan a single crypto for arbitrage opportunity"""
         try:
-            # Fetch tickers
-            cb_ticker = self.coinbase.fetch_ticker(symbol)
-            time.sleep(0.12)  # Rate limit protection
-            gem_ticker = self.gemini.fetch_ticker(symbol)
-            time.sleep(0.12)
+            # Try to fetch from Coinbase first
+            cb_ticker = None
+            try:
+                if symbol in self.coinbase.markets:
+                    cb_ticker = self.coinbase.fetch_ticker(symbol)
+                    time.sleep(0.12)
+            except:
+                pass
+            
+            # Try to fetch from Gemini
+            gem_ticker = None
+            try:
+                if symbol in self.gemini.markets:
+                    gem_ticker = self.gemini.fetch_ticker(symbol)
+                    time.sleep(0.12)
+            except:
+                pass
+            
+            # If not on Coinbase/Gemini, try other exchanges
+            if not cb_ticker:
+                for name, exchange in self.additional_exchanges.items():
+                    try:
+                        if symbol in exchange.markets:
+                            cb_ticker = exchange.fetch_ticker(symbol)
+                            time.sleep(0.12)
+                            break
+                    except:
+                        continue
+            
+            if not gem_ticker and not cb_ticker:
+                return None
+            
+            # If only one exchange has it, use it for both (to show it exists)
+            if not gem_ticker and cb_ticker:
+                gem_ticker = cb_ticker
+            elif not cb_ticker and gem_ticker:
+                cb_ticker = gem_ticker
             
             # Get prices
             cb_ask = cb_ticker.get('ask')
