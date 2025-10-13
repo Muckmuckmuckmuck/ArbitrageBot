@@ -590,7 +590,7 @@ class AutoRecoverySystem:
             health['issues_found'] += len(stuck)
             # AUTO-RECOVER stuck positions immediately!
             logger.info(f"🔄 Auto-recovering {len(stuck)} stuck positions...")
-            recovered = await self.recover_all_stuck_positions()
+            recovered = await self.auto_recover_all_stuck_positions()
             logger.info(f"✅ Recovered {recovered}/{len(stuck)} positions")
         
         # Check balance consistency

@@ -215,7 +215,13 @@ class CoinbaseGeminiArbitrageBot:
                 abs_spread_cb_gem = abs(spread_cb_to_gem_pct)
                 abs_spread_gem_cb = abs(spread_gem_to_cb_pct)
                 best_spread_pct = max(abs_spread_cb_gem, abs_spread_gem_cb)
-                best_direction = 'CB→GEM' if abs_spread_cb_gem > abs_spread_gem_cb else 'GEM→CB'
+                # Determine best direction based on which has higher ABSOLUTE spread
+                if abs_spread_cb_gem > abs_spread_gem_cb:
+                    best_direction = 'CB→GEM'
+                    best_raw_spread = spread_cb_to_gem_pct  # Keep raw for profit calc
+                else:
+                    best_direction = 'GEM→CB'
+                    best_raw_spread = spread_gem_to_cb_pct  # Keep raw for profit calc
                 
                 # Calculate estimated profit for logging (with error handling)
                 try:

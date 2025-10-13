@@ -53,4 +53,3 @@ else:
     print("\n✅ No QNT found on Gemini")
 
 print("="*80)
-
