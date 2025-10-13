@@ -49,20 +49,20 @@ class FixedPercentageBalanceManager:
             for exchange_name in ['coinbase', 'gemini']:
                 try:
                     exchange = self.exchange_manager.get_exchange(exchange_name)
-                    balance = await exchange.get_balance()
                     
-                    # Convert all balances to USD
-                    for currency, amount in balance.items():
-                        if amount > 0:
-                            if currency == 'USDT':
-                                total_value += amount
-                            else:
-                                try:
-                                    ticker = await exchange.get_ticker(f"{currency}/USDT")
-                                    total_value += amount * ticker['last']
-                                except Exception:
-                                    logger.warning(f"Could not get USDT value for {currency} on {exchange_name}")
-                                    pass
+                    # CCXT fetch_balance can be sync or async
+                    balance_result = exchange.fetch_balance()
+                    if hasattr(balance_result, '__await__'):
+                        balance = await balance_result
+                    else:
+                        balance = balance_result
+                    
+                    # Get USD/USDT balance
+                    for currency in ['USD', 'USDT']:
+                        if currency in balance.get('free', {}):
+                            total_value += balance['free'][currency]
+                        if currency in balance.get('total', {}):
+                            total_value += balance['total'][currency]
                                     
                 except Exception as e:
                     logger.error(f"Error fetching balance from {exchange_name}: {str(e)}")

@@ -44,7 +44,7 @@ class AutoRecoverySystem:
     def __init__(self, exchanges: Dict[str, Any], config: Any):
         self.exchanges = exchanges
         self.config = config
-        
+    
         # Track stuck positions
         self.stuck_positions: List[StuckPosition] = []
         
@@ -62,6 +62,28 @@ class AutoRecoverySystem:
         
         logger.info("Auto Recovery System initialized")
     
+    async def _fetch_balance_safe(self, exchange) -> Dict:
+        """Safely fetch balance handling both sync and async CCXT"""
+        try:
+            result = exchange.fetch_balance()
+            if hasattr(result, '__await__'):
+                return await result
+            return result
+        except Exception as e:
+            logger.error(f"Error fetching balance: {e}")
+            return {}
+    
+    async def _fetch_ticker_safe(self, exchange, symbol: str) -> Dict:
+        """Safely fetch ticker handling both sync and async CCXT"""
+        try:
+            result = exchange.fetch_ticker(symbol)
+            if hasattr(result, '__await__'):
+                return await result
+            return result
+        except Exception as e:
+            logger.error(f"Error fetching ticker {symbol}: {e}")
+            return {}
+    
     async def detect_stuck_positions(self) -> List[StuckPosition]:
         """Detect stuck positions on exchanges"""
         
@@ -69,7 +91,7 @@ class AutoRecoverySystem:
         
         try:
             for exchange_name, exchange in self.exchanges.items():
-                balance = await exchange.fetch_balance()
+                balance = await self._fetch_balance_safe(exchange)
                 
                 # Check for unexpected crypto balances
                 for symbol in self.config.CURRENCY_PAIRS:
@@ -79,7 +101,7 @@ class AutoRecoverySystem:
                     if crypto_amount > 0:
                         # Get value in USD
                         try:
-                            ticker = await exchange.fetch_ticker(symbol)
+                            ticker = await self._fetch_ticker_safe(exchange, symbol)
                             price = ticker['last']
                             value_usd = crypto_amount * price
                             
@@ -126,7 +148,7 @@ class AutoRecoverySystem:
             self.stats['recovery_attempts'] += 1
             
             # Get current price
-            ticker = await self.exchanges[stuck.exchange].fetch_ticker(stuck.symbol)
+            ticker = await self._fetch_ticker_safe(self.exchanges[stuck.exchange], stuck.symbol)
             current_price = ticker['last']
             
             # Sell at market to recover USDT
@@ -196,7 +218,7 @@ class AutoRecoverySystem:
             total_value = 0.0
             
             for exchange_name, exchange in self.exchanges.items():
-                balance = await exchange.fetch_balance()
+                balance = await self._fetch_balance_safe(exchange)
                 exchange_value = 0.0
                 
                 # USDT
@@ -209,7 +231,7 @@ class AutoRecoverySystem:
                     amount = balance.get(base, {}).get('free', 0)
                     
                     if amount > 0:
-                        ticker = await exchange.fetch_ticker(symbol)
+                        ticker = await self._fetch_ticker_safe(exchange, symbol)
                         price = ticker['last']
                         exchange_value += amount * price
                 
@@ -364,7 +386,7 @@ class AutoRecoverySystem:
             exchange = self.exchanges[exchange_name]
             
             # Try to fetch a ticker (lightweight check)
-            await exchange.fetch_ticker('BTC/USDT')
+            await self._fetch_ticker_safe(exchange, 'BTC/USD')
             
             logger.debug(f"✅ {exchange_name} is healthy")
             return True
@@ -495,7 +517,7 @@ class AutoRecoverySystem:
         
         try:
             for exchange_name, exchange in self.exchanges.items():
-                balance = await exchange.fetch_balance()
+                balance = await self._fetch_balance_safe(exchange)
                 
                 for symbol in self.config.CURRENCY_PAIRS:
                     base = symbol.split('/')[0]
