@@ -337,7 +337,7 @@ ORDER_TIMEOUT_SECONDS = 30          # 30 seconds for order to fill
 TRANSFER_TIMEOUT_SECONDS = 600      # 10 minutes for transfer to complete
 
 # Minimum profit threshold
-MIN_PROFIT_USD = 0.10              # Minimum $0.10 profit per trade
+MIN_PROFIT_USD = 0.02              # Minimum $0.02 profit per trade (covers slippage)
 
 # Dynamic spread adjustment
 DYNAMIC_SPREAD_ADJUSTMENT_PERCENT = 0.10  # Adjust spreads by 10%
