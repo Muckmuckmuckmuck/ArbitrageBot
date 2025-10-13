@@ -208,35 +208,38 @@ class CoinbaseGeminiArbitrageBot:
                 # Get minimum required spread
                 min_spread = self.spread_manager.get_min_spread(symbol)
                 
-                # Calculate estimated profit for logging
-                position_size = await self.balance_manager.get_adaptive_position_size(
-                    symbol, coinbase_ask if spread_cb_to_gem_pct > spread_gem_to_cb_pct else gemini_ask
-                )
-                
-                if spread_cb_to_gem_pct > spread_gem_to_cb_pct:
-                    est_profit = (spread_cb_to_gem * position_size) - \
-                                 (coinbase_ask * position_size * (Config.EXCHANGE_FEES['coinbase']['maker'] + 
-                                                                   Config.EXCHANGE_FEES['gemini']['maker']))
-                else:
-                    est_profit = (spread_gem_to_cb * position_size) - \
-                                 (gemini_ask * position_size * (Config.EXCHANGE_FEES['gemini']['maker'] + 
-                                                                 Config.EXCHANGE_FEES['coinbase']['maker']))
-                
-                # Track spread for logging (use best direction)
-                best_spread_pct = max(spread_cb_to_gem_pct, spread_gem_to_cb_pct)
-                is_spread_profitable = best_spread_pct >= min_spread * 100
-                is_profit_enough = est_profit >= Config.MIN_PROFIT_USD
-                
-                spread_info.append({
-                    'symbol': symbol,
-                    'spread': best_spread_pct,
-                    'required': min_spread * 100,
-                    'profitable': is_spread_profitable and is_profit_enough,
-                    'direction': 'CB→GEM' if spread_cb_to_gem_pct > spread_gem_to_cb_pct else 'GEM→CB',
-                    'est_profit': est_profit,
-                    'reason': 'OK' if (is_spread_profitable and is_profit_enough) else 
-                             ('Low profit' if is_spread_profitable else 'Low spread')
-                })
+                # Calculate estimated profit for logging (with error handling)
+                try:
+                    position_size = await self.balance_manager.get_adaptive_position_size(
+                        symbol, coinbase_ask if spread_cb_to_gem_pct > spread_gem_to_cb_pct else gemini_ask
+                    )
+                    
+                    if spread_cb_to_gem_pct > spread_gem_to_cb_pct:
+                        est_profit = (spread_cb_to_gem * position_size) - \
+                                     (coinbase_ask * position_size * (Config.EXCHANGE_FEES['coinbase']['maker'] + 
+                                                                       Config.EXCHANGE_FEES['gemini']['maker']))
+                    else:
+                        est_profit = (spread_gem_to_cb * position_size) - \
+                                     (gemini_ask * position_size * (Config.EXCHANGE_FEES['gemini']['maker'] + 
+                                                                     Config.EXCHANGE_FEES['coinbase']['maker']))
+                    
+                    # Track spread for logging (use best direction)
+                    best_spread_pct = max(spread_cb_to_gem_pct, spread_gem_to_cb_pct)
+                    is_spread_profitable = best_spread_pct >= min_spread * 100
+                    is_profit_enough = est_profit >= Config.MIN_PROFIT_USD
+                    
+                    spread_info.append({
+                        'symbol': symbol,
+                        'spread': best_spread_pct,
+                        'required': min_spread * 100,
+                        'profitable': is_spread_profitable and is_profit_enough,
+                        'direction': 'CB→GEM' if spread_cb_to_gem_pct > spread_gem_to_cb_pct else 'GEM→CB',
+                        'est_profit': est_profit,
+                        'reason': 'OK' if (is_spread_profitable and is_profit_enough) else 
+                                 ('Low profit' if is_spread_profitable else 'Low spread')
+                    })
+                except Exception as spread_err:
+                    self.logger.debug(f"Error calculating spread info for {symbol}: {spread_err}")
                 
                 # Check if either direction is profitable
                 if spread_cb_to_gem_pct >= min_spread * 100:
@@ -306,6 +309,8 @@ class CoinbaseGeminiArbitrageBot:
                     f"Profit: ${info['est_profit']:6.3f} | {status}"
                 )
             self.logger.info("=" * 80)
+        else:
+            self.logger.warning("⚠️  No spread data collected - check if tickers are loading")
         
         return opportunities
     
