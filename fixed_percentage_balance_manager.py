@@ -11,7 +11,10 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 from balance_validator import BalanceValidator, BalanceValidation
-from fixed_config import FixedConfig as Config
+try:
+    from coinbase_gemini_config import Config
+except ImportError:
+    from fixed_config import FixedConfig as Config
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +46,7 @@ class FixedPercentageBalanceManager:
         total_value = 0.0
         
         try:
-            for exchange_name in ['binance', 'okx']:
+            for exchange_name in ['coinbase', 'gemini']:
                 try:
                     exchange = self.exchange_manager.get_exchange(exchange_name)
                     balance = await exchange.get_balance()
@@ -112,7 +115,7 @@ class FixedPercentageBalanceManager:
         """Validate position size against available balances"""
         try:
             # Get exchanges
-            exchanges = ['binance', 'okx']
+            exchanges = ['coinbase', 'gemini']
             validated_sizes = []
             validation_details = []
             

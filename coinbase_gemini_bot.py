@@ -145,14 +145,7 @@ class CoinbaseGeminiArbitrageBot:
         self.slippage_detector = DynamicSlippageDetector(Config)
         self.rate_limiter = SmartRateLimiter(Config)
         self.balance_validator = BalanceValidator(self.exchange_manager)
-        self.balance_manager = FixedPercentageBalanceManager(
-            self.exchange_manager,
-            self.balance_validator,
-            Config.BASE_POSITION_PERCENTAGES,
-            Config.MAX_POSITION_PERCENT_PER_TRADE,
-            Config.MAX_TOTAL_EXPOSURE_PERCENT,
-            Config.RESERVE_PERCENT
-        )
+        self.balance_manager = FixedPercentageBalanceManager(self.exchange_manager)
         self.error_handler = ComprehensiveErrorHandler()
         self.transfer_manager = TransferManager(self.exchange_manager)
         self.recovery_system = AutoRecoverySystem(self.exchange_manager)
