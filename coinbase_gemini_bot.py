@@ -211,8 +211,11 @@ class CoinbaseGeminiArbitrageBot:
                 # Get minimum required spread
                 min_spread = self.spread_manager.get_min_spread(symbol)
                 
-                # Track spread for logging (use best direction)
-                best_spread_pct = max(spread_cb_to_gem_pct, spread_gem_to_cb_pct)
+                # Track spread for logging (use ABSOLUTE value - we can trade either direction!)
+                abs_spread_cb_gem = abs(spread_cb_to_gem_pct)
+                abs_spread_gem_cb = abs(spread_gem_to_cb_pct)
+                best_spread_pct = max(abs_spread_cb_gem, abs_spread_gem_cb)
+                best_direction = 'CB→GEM' if abs_spread_cb_gem > abs_spread_gem_cb else 'GEM→CB'
                 
                 # Calculate estimated profit for logging (with error handling)
                 try:
@@ -220,23 +223,27 @@ class CoinbaseGeminiArbitrageBot:
                         symbol, best_spread_pct / 100, 0.01  # spread_percent, volatility (1% default)
                     )
                     
-                    if spread_cb_to_gem_pct > spread_gem_to_cb_pct:
-                        est_profit = (spread_cb_to_gem * position_size) - \
+                    # Calculate profit based on best direction (using absolute spreads)
+                    if abs_spread_cb_gem > abs_spread_gem_cb:
+                        # CB→GEM direction
+                        est_profit = (abs(spread_cb_to_gem) * position_size) - \
                                      (coinbase_ask * position_size * (Config.EXCHANGE_FEES['coinbase']['maker'] + 
                                                                        Config.EXCHANGE_FEES['gemini']['maker']))
                     else:
-                        est_profit = (spread_gem_to_cb * position_size) - \
+                        # GEM→CB direction
+                        est_profit = (abs(spread_gem_to_cb) * position_size) - \
                                      (gemini_ask * position_size * (Config.EXCHANGE_FEES['gemini']['maker'] + 
                                                                      Config.EXCHANGE_FEES['coinbase']['maker']))
+                    
                     is_spread_profitable = best_spread_pct >= min_spread * 100
                     is_profit_enough = est_profit >= Config.MIN_PROFIT_USD
                     
                     spread_info.append({
                         'symbol': symbol,
-                        'spread': best_spread_pct,
+                        'spread': best_spread_pct,  # Always positive now!
                         'required': min_spread * 100,
                         'profitable': is_spread_profitable and is_profit_enough,
-                        'direction': 'CB→GEM' if spread_cb_to_gem_pct > spread_gem_to_cb_pct else 'GEM→CB',
+                        'direction': best_direction,
                         'est_profit': est_profit,
                         'reason': 'OK' if (is_spread_profitable and is_profit_enough) else 
                                  ('Low profit' if is_spread_profitable else 'Low spread')
@@ -244,15 +251,16 @@ class CoinbaseGeminiArbitrageBot:
                 except Exception as spread_err:
                     self.logger.debug(f"Error calculating spread info for {symbol}: {spread_err}")
                 
-                # Check if either direction is profitable
-                if spread_cb_to_gem_pct >= min_spread * 100:
+                # Check if EITHER direction is profitable (using absolute spreads)
+                # We can trade in BOTH directions, so check both!
+                if abs_spread_cb_gem >= min_spread * 100:
                     # Buy on Coinbase, sell on Gemini
                     position_size = await self.balance_manager.get_adaptive_position_size(
-                        symbol, spread_cb_to_gem_pct / 100, 0.01  # spread_percent, volatility
+                        symbol, abs_spread_cb_gem / 100, 0.01  # Use absolute spread
                     )
                     
                     # Use MAKER fees (limit orders) instead of TAKER fees (market orders)
-                    estimated_profit = (spread_cb_to_gem * position_size) - \
+                    estimated_profit = (abs(spread_cb_to_gem) * position_size) - \
                                      (coinbase_ask * position_size * (Config.EXCHANGE_FEES['coinbase']['maker'] + 
                                                                        Config.EXCHANGE_FEES['gemini']['maker']))
                     
@@ -263,21 +271,21 @@ class CoinbaseGeminiArbitrageBot:
                             sell_exchange='gemini',
                             buy_price=coinbase_ask,
                             sell_price=gemini_bid,
-                            spread=spread_cb_to_gem,
-                            spread_percent=spread_cb_to_gem_pct,
+                            spread=abs(spread_cb_to_gem),
+                            spread_percent=abs_spread_cb_gem,
                             position_size_usd=position_size,
                             estimated_profit=estimated_profit,
                             timestamp=datetime.now()
                         ))
                 
-                elif spread_gem_to_cb_pct >= min_spread * 100:
+                if abs_spread_gem_cb >= min_spread * 100:
                     # Buy on Gemini, sell on Coinbase
                     position_size = await self.balance_manager.get_adaptive_position_size(
-                        symbol, spread_gem_to_cb_pct / 100, 0.01  # spread_percent, volatility
+                        symbol, abs_spread_gem_cb / 100, 0.01  # Use absolute spread
                     )
                     
                     # Use MAKER fees (limit orders) instead of TAKER fees (market orders)
-                    estimated_profit = (spread_gem_to_cb * position_size) - \
+                    estimated_profit = (abs(spread_gem_to_cb) * position_size) - \
                                      (gemini_ask * position_size * (Config.EXCHANGE_FEES['gemini']['maker'] + 
                                                                      Config.EXCHANGE_FEES['coinbase']['maker']))
                     
@@ -288,8 +296,8 @@ class CoinbaseGeminiArbitrageBot:
                             sell_exchange='coinbase',
                             buy_price=gemini_ask,
                             sell_price=coinbase_bid,
-                            spread=spread_gem_to_cb,
-                            spread_percent=spread_gem_to_cb_pct,
+                            spread=abs(spread_gem_to_cb),
+                            spread_percent=abs_spread_gem_cb,
                             position_size_usd=position_size,
                             estimated_profit=estimated_profit,
                             timestamp=datetime.now()
