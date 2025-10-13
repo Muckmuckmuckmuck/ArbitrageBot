@@ -385,10 +385,88 @@ REBALANCE_INTERVAL_HOURS = 168      # Or every 7 days
 AUTO_SIZING = {
     'enabled': True,
     'lookback_trades': 20,  # Number of recent trades to analyze
-    'adjustment_factor': 0.10,  # 10% max adjustment per period
-    'min_trades_for_adjustment': 5,  # Minimum trades before adjusting
-    'win_rate_threshold': 0.60,  # 60% win rate to increase position
-    'loss_rate_threshold': 0.40,  # 40% win rate to decrease position
+    'scale_interval_trades': 10,  # Adjust after every 10 trades
+    'min_win_rate': 0.60,  # 60% win rate to scale up
+    'scale_up_factor': 1.10,  # Increase by 10%
+    'scale_down_factor': 0.90,  # Decrease by 10%
+    'min_position_percent': 0.05,  # 5% minimum
+    'max_position_percent': 0.15,  # 15% maximum
+}
+
+# ============================================================================
+# DYNAMIC SPREAD ADJUSTMENT
+# ============================================================================
+
+DYNAMIC_SPREADS = {
+    'enabled': True,
+    'adjustment_interval_minutes': 60,  # Adjust every hour
+    'lookback_hours': 24,  # Look at last 24 hours
+    
+    # Spread adjustment rules
+    'high_success_rate': 0.80,  # 80%+ success = lower spread requirement
+    'low_success_rate': 0.60,   # <60% success = higher spread requirement
+    'spread_adjustment_percent': 0.10,  # Adjust by 10%
+    
+    # Spread bounds
+    'min_spread_floor': 0.003,  # Never go below 0.3%
+    'max_spread_ceiling': 0.030,  # Never go above 3.0%
+}
+
+# ============================================================================
+# DYNAMIC SLIPPAGE DETECTION
+# ============================================================================
+
+DYNAMIC_SLIPPAGE = {
+    'enabled': True,
+    'real_time_detection': True,
+    
+    # Order book analysis
+    'order_book_depth_levels': 20,  # Analyze 20 levels
+    'min_liquidity_ratio': 5.0,  # 5x position size in order book
+    
+    # Slippage prediction
+    'use_ml_prediction': False,  # Simplified for now
+    'historical_lookback': 100,  # Last 100 trades
+    
+    # Slippage thresholds
+    'max_acceptable_slippage': 0.003,  # 0.3% max
+    'warning_slippage': 0.002,  # 0.2% warning
+    
+    # Position adjustment
+    'adjust_position_size': True,
+    'slippage_scale_factor': 0.50,  # Reduce size by 50% if high slippage
+}
+
+# ============================================================================
+# SMART RATE LIMITING
+# ============================================================================
+
+SMART_RATE_LIMITING = {
+    'enabled': True,
+    'safety_margin': 0.80,  # Use 80% of limit (20% buffer)
+    'adaptive_throttling': True,  # Slow down if approaching limit
+    'priority_queue': True,  # Prioritize important requests
+    
+    # Request batching
+    'batch_requests': False,  # Disabled for simplicity
+    'max_batch_size': 10,  # Max 10 requests per batch
+    
+    # Caching
+    'cache_enabled': True,
+    'cache_ttl_seconds': 2,  # Cache for 2 seconds
+    
+    # Monitoring
+    'track_usage': True,
+}
+
+# ============================================================================
+# DYNAMIC POSITION SIZING
+# ============================================================================
+
+DYNAMIC_POSITION_SIZING = {
+    'enabled': True,
+    'spread_multiplier': True,  # Increase size for bigger spreads
+    'max_multiplier': 1.5,  # Max 1.5x position size
 }
 
 # ============================================================================
@@ -546,6 +624,12 @@ class Config:
     
     # Auto-sizing
     AUTO_SIZING = AUTO_SIZING
+    
+    # Dynamic adjustments
+    DYNAMIC_SPREADS = DYNAMIC_SPREADS
+    DYNAMIC_SLIPPAGE = DYNAMIC_SLIPPAGE
+    SMART_RATE_LIMITING = SMART_RATE_LIMITING
+    DYNAMIC_POSITION_SIZING = DYNAMIC_POSITION_SIZING
     
     # Whitelist
     WHITELISTED_ADDRESSES = WHITELISTED_ADDRESSES
