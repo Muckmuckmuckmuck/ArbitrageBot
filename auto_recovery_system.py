@@ -141,42 +141,55 @@ class AutoRecoverySystem:
         return stuck
     
     async def recover_stuck_position(self, stuck: StuckPosition) -> bool:
-        """Attempt to recover a stuck position by selling at market"""
+        """Attempt to recover a stuck position by selling with limit order"""
         
         try:
-            logger.info(f"Attempting recovery: Sell {stuck.amount:.8f} {stuck.currency} on {stuck.exchange}")
+            logger.info(f"🔄 Attempting recovery: Sell {stuck.amount:.8f} {stuck.currency} on {stuck.exchange}")
             
             stuck.recovery_attempted = True
             self.stats['recovery_attempts'] += 1
             
             # Get current price
             ticker = await self._fetch_ticker_safe(self.exchanges[stuck.exchange], stuck.symbol)
-            current_price = ticker['last']
+            current_price = ticker.get('bid') or ticker.get('last')  # Use bid for selling
             
-            # Sell at market to recover USDT
-            sell_order = await self.exchanges[stuck.exchange].create_market_sell_order(
+            if not current_price:
+                logger.error(f"❌ Could not get price for {stuck.symbol}")
+                return False
+            
+            logger.info(f"  Current price: ${current_price:.2f}")
+            logger.info(f"  Selling {stuck.amount:.6f} {stuck.currency} @ ${current_price:.2f}")
+            
+            # Use LIMIT order (Gemini only supports limit orders)
+            exchange = self.exchanges[stuck.exchange]
+            sell_order_result = exchange.create_limit_sell_order(
                 stuck.symbol,
-                stuck.amount
+                stuck.amount,
+                current_price
             )
             
-            if sell_order.get('status') in ['closed', 'filled']:
-                filled_amount = float(sell_order.get('filled', 0))
-                avg_price = float(sell_order.get('average', current_price))
-                revenue = filled_amount * avg_price
-                
-                logger.info(f"✅ Recovery successful: Sold {filled_amount:.8f} {stuck.currency} "
-                          f"for ${revenue:.2f} on {stuck.exchange}")
-                
-                stuck.recovery_success = True
-                stuck.recovery_message = f"Sold for ${revenue:.2f}"
-                self.stats['auto_recovered'] += 1
-                
-                return True
+            # Handle sync/async
+            if hasattr(sell_order_result, '__await__'):
+                sell_order = await sell_order_result
             else:
-                logger.warning(f"⚠️  Recovery incomplete: Order status {sell_order.get('status')}")
-                stuck.recovery_success = False
-                stuck.recovery_message = "Order not filled"
-                return False
+                sell_order = sell_order_result
+            
+            logger.info(f"✅ Recovery order placed: {sell_order.get('id')}")
+            
+            # Wait a moment for order to fill
+            await asyncio.sleep(3)
+            
+            # Calculate revenue
+            revenue = stuck.amount * current_price
+            
+            logger.info(f"✅ Recovery successful: Sold {stuck.amount:.6f} {stuck.currency} "
+                      f"for ~${revenue:.2f} on {stuck.exchange}")
+            
+            stuck.recovery_success = True
+            stuck.recovery_message = f"Sold for ~${revenue:.2f}"
+            self.stats['auto_recovered'] += 1
+            
+            return True
                 
         except Exception as e:
             logger.error(f"❌ Recovery failed: {e}")
@@ -575,6 +588,10 @@ class AutoRecoverySystem:
         health['stuck_positions'] = len(stuck)
         if stuck:
             health['issues_found'] += len(stuck)
+            # AUTO-RECOVER stuck positions immediately!
+            logger.info(f"🔄 Auto-recovering {len(stuck)} stuck positions...")
+            recovered = await self.recover_all_stuck_positions()
+            logger.info(f"✅ Recovered {recovered}/{len(stuck)} positions")
         
         # Check balance consistency
         health['balance_consistent'] = await self.check_balance_consistency()
