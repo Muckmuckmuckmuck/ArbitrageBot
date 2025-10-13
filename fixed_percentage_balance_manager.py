@@ -148,18 +148,18 @@ class FixedPercentageBalanceManager:
                         validation_details.append({
                             'exchange': exchange_name,
                             'max_position': max_position,
-                            'available_usdt': buy_validation.available_amount,
-                            'required_usdt': required_usdt
+                            'available_quote': buy_validation.available_amount,
+                            'required_quote': required_quote
                         })
                         logger.info(f"✅ {exchange_name} can handle position: ${max_position:,.2f}")
                     else:
-                        logger.warning(f"❌ {exchange_name} insufficient USDT: {buy_validation.message}")
+                        logger.warning(f"❌ {exchange_name} insufficient {quote_currency}: {buy_validation.message}")
                         validated_sizes.append(0.0)
                         validation_details.append({
                             'exchange': exchange_name,
                             'max_position': 0.0,
-                            'available_usdt': buy_validation.available_amount,
-                            'required_usdt': required_usdt,
+                            'available_quote': buy_validation.available_amount,
+                            'required_quote': required_quote,
                             'error': buy_validation.message
                         })
                         
