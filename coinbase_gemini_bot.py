@@ -155,16 +155,83 @@ class CoinbaseGeminiArbitrageBot:
         self.auto_balance = AutoBalanceSystem(self.exchange_manager, Config)
         
         # Get initial balance
-        self.logger.info("Fetching initial balances...")
+        self.logger.info("\n" + "="*80)
+        self.logger.info("💰 CHECKING ACCOUNT BALANCES")
+        self.logger.info("="*80)
         total_balance = await self.balance_manager.get_total_account_value()
         self.stats['initial_balance_usd'] = total_balance
         self.stats['current_balance_usd'] = total_balance
         self.stats['start_time'] = datetime.now()
         
-        self.logger.info(f"✅ Initial balance: ${total_balance:,.2f}")
-        self.logger.info("=" * 80)
-        self.logger.info("BOT INITIALIZATION COMPLETE - READY FOR ARBITRAGE")
-        self.logger.info("=" * 80)
+        self.logger.info(f"✅ Total account value: ${total_balance:,.2f}")
+        
+        # STARTUP CLEANUP: Auto-fix any stuck positions
+        self.logger.info("\n" + "="*80)
+        self.logger.info("🧹 STARTUP CLEANUP - Detecting stuck positions")
+        self.logger.info("="*80)
+        
+        stuck_positions = await self.recovery_system.detect_stuck_positions()
+        
+        if stuck_positions:
+            self.logger.warning(f"\n⚠️  FOUND {len(stuck_positions)} STUCK POSITIONS:")
+            for sp in stuck_positions:
+                self.logger.warning(f"   • {sp.amount:.6f} {sp.currency} on {sp.exchange} = ${sp.value_usd:.2f}")
+            
+            self.logger.info(f"\n🔄 Starting auto-recovery (selling at best prices)...")
+            self.logger.info(f"   This will free up ${sum(sp.value_usd for sp in stuck_positions):.2f} for trading")
+            
+            recovered = await self.recovery_system.auto_recover_all_stuck_positions()
+            
+            if recovered > 0:
+                self.logger.info(f"\n✅ Successfully recovered {recovered}/{len(stuck_positions)} positions!")
+                self.logger.info(f"   Waiting 10 seconds for orders to settle...")
+                await asyncio.sleep(10)
+                
+                # Refresh balance after recovery
+                new_balance = await self.balance_manager.get_total_account_value()
+                balance_change = new_balance - total_balance
+                
+                self.logger.info(f"\n💰 BALANCE UPDATE:")
+                self.logger.info(f"   Before cleanup: ${total_balance:.2f}")
+                self.logger.info(f"   After cleanup: ${new_balance:.2f}")
+                self.logger.info(f"   Change: ${balance_change:+.2f}")
+                
+                self.stats['initial_balance_usd'] = new_balance
+                self.stats['current_balance_usd'] = new_balance
+            else:
+                self.logger.warning(f"\n⚠️  Auto-recovery failed for some positions")
+                self.logger.warning(f"   The bot will retry every 5 minutes")
+        else:
+            self.logger.info("✅ No stuck positions detected - account is clean!")
+        
+        self.logger.info("\n" + "="*80)
+        self.logger.info("✅ INITIALIZATION COMPLETE - READY TO TRADE")
+        self.logger.info("="*80)
+        
+        # Show what the bot will do
+        self.logger.info("\n📋 BOT CONFIGURATION:")
+        self.logger.info(f"   • Trading {len(Config.CURRENCY_PAIRS)} crypto pairs")
+        self.logger.info(f"   • Scan interval: {Config.CHECK_INTERVAL_SECONDS}s")
+        self.logger.info(f"   • Minimum profit: ${Config.MIN_PROFIT_USD}")
+        self.logger.info(f"   • Position sizing: 5-10% of account per trade")
+        self.logger.info(f"   • Fee structure: Maker fees (Coinbase 0.40%, Gemini 0.10%)")
+        self.logger.info(f"   • Transfers: FREE crypto transfers between exchanges")
+        self.logger.info(f"   • Auto-recovery: Every 5 minutes")
+        self.logger.info(f"   • Auto-balance: Every 10 scans")
+        
+        self.logger.info("\n🤖 WHAT THE BOT DOES:")
+        self.logger.info("   1. Scan both exchanges for price differences")
+        self.logger.info("   2. When spread > minimum:")
+        self.logger.info("      → Buy crypto on cheaper exchange")
+        self.logger.info("      → Transfer crypto to expensive exchange (FREE)")
+        self.logger.info("      → Sell crypto on expensive exchange")
+        self.logger.info("      → Keep profit!")
+        self.logger.info("   3. Auto-fix stuck positions (sell crypto, convert to USD)")
+        self.logger.info("   4. Auto-balance funds between exchanges")
+        
+        self.logger.info("\n" + "="*80)
+        self.logger.info("🚀 STARTING TRADING LOOPS")
+        self.logger.info("="*80)
         
         return True
     
@@ -323,6 +390,12 @@ class CoinbaseGeminiArbitrageBot:
             self.logger.info("=" * 80)
             self.logger.info("📊 CURRENT SPREADS")
             self.logger.info("=" * 80)
+            
+            # Count by status
+            tradeable = sum(1 for info in spread_info if info['profitable'])
+            low_spread = sum(1 for info in spread_info if not info['profitable'] and 'spread' in info['reason'].lower())
+            low_profit = sum(1 for info in spread_info if not info['profitable'] and 'profit' in info['reason'].lower())
+            
             for info in spread_info:
                 status = "✅ TRADE" if info['profitable'] else f"❌ {info['reason'].upper()}"
                 self.logger.info(
@@ -330,6 +403,9 @@ class CoinbaseGeminiArbitrageBot:
                     f"Spread: {info['spread']:6.3f}% | Req: {info['required']:5.3f}% | "
                     f"Profit: ${info['est_profit']:6.3f} | {status}"
                 )
+            
+            self.logger.info("=" * 80)
+            self.logger.info(f"Summary: {tradeable} tradeable, {low_profit} insufficient balance, {low_spread} low spread")
             self.logger.info("=" * 80)
         else:
             self.logger.warning("⚠️  No spread data collected - check if tickers are loading")
@@ -525,24 +601,41 @@ class CoinbaseGeminiArbitrageBot:
                 opportunities = await self.scan_for_opportunities()
                 
                 if opportunities:
-                    self.logger.info(f"📊 Found {len(opportunities)} opportunities")
+                    self.logger.info(f"\n🎯 FOUND {len(opportunities)} TRADE OPPORTUNITIES!")
                     self.stats['opportunities_found'] += len(opportunities)
                     
                     # Sort by estimated profit
                     opportunities.sort(key=lambda x: x.estimated_profit, reverse=True)
                     
+                    # Show top 3 opportunities
+                    for i, opp in enumerate(opportunities[:3], 1):
+                        self.logger.info(f"  {i}. {opp.symbol} | {opp.buy_exchange}→{opp.sell_exchange} | "
+                                       f"Spread: {opp.spread_percent:.3f}% | Profit: ${opp.estimated_profit:.2f}")
+                    
                     # Execute best opportunity
                     best_opp = opportunities[0]
-                    self.logger.info(f"🎯 Executing best opportunity: {best_opp.symbol} ({best_opp.spread_percent:.3f}%)")
+                    self.logger.info(f"\n💰 EXECUTING BEST TRADE: {best_opp.symbol}")
+                    self.logger.info(f"   Buy: {best_opp.buy_exchange} @ ${best_opp.buy_price:.2f}")
+                    self.logger.info(f"   Sell: {best_opp.sell_exchange} @ ${best_opp.sell_price:.2f}")
+                    self.logger.info(f"   Position: ${best_opp.position_size_usd:.2f}")
+                    self.logger.info(f"   Expected profit: ${best_opp.estimated_profit:.2f}")
                     
                     result = await self.execute_arbitrage(best_opp)
                     
                     if result.success:
                         self.stats['opportunities_executed'] += 1
-                        self.logger.info(f"✅ Trade successful: ${result.net_profit:.2f} profit")
+                        self.logger.info(f"\n✅ TRADE SUCCESSFUL: ${result.net_profit:.2f} profit")
                     else:
                         self.stats['failed_trades'] += 1
-                        self.logger.warning(f"⚠️ Trade failed: {result.error_message}")
+                        self.logger.warning(f"\n⚠️ TRADE FAILED: {result.error_message}")
+                else:
+                    # Log WHY no opportunities (only every 10 scans to reduce spam)
+                    if self.stats['scans'] % 10 == 0:
+                        self.logger.info(f"\n⏸️  NO EXECUTABLE TRADES (Scan #{self.stats['scans']})")
+                        self.logger.info(f"   All spreads either:")
+                        self.logger.info(f"     • Below minimum threshold, OR")
+                        self.logger.info(f"     • Insufficient USD balance to trade")
+                        self.logger.info(f"   💡 Check spread logs above for details")
                 
                 # Wait before next scan
                 await asyncio.sleep(Config.CHECK_INTERVAL_SECONDS)

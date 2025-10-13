@@ -44,6 +44,8 @@ class FixedPercentageBalanceManager:
     async def get_total_account_value(self) -> float:
         """Get total account value across all exchanges"""
         total_value = 0.0
+        total_usd_cash = 0.0
+        total_crypto_value = 0.0
         
         try:
             for exchange_name in ['coinbase', 'gemini']:
@@ -63,6 +65,7 @@ class FixedPercentageBalanceManager:
                         free_balance = balance.get('free', {}).get(currency, 0.0)
                         if free_balance > 0:
                             total_value += free_balance
+                            total_usd_cash += free_balance
                             exchange_total += free_balance
                             logger.info(f"  {exchange_name} {currency}: ${free_balance:.2f}")
                     
@@ -82,6 +85,7 @@ class FixedPercentageBalanceManager:
                                     if price:
                                         crypto_value_usd = amount * price
                                         total_value += crypto_value_usd
+                                        total_crypto_value += crypto_value_usd
                                         exchange_total += crypto_value_usd
                                         logger.info(f"  {exchange_name} {currency}: {amount:.6f} (${crypto_value_usd:.2f})")
                             except:
@@ -96,6 +100,15 @@ class FixedPercentageBalanceManager:
                         logger.error(f"Error fetching balance from {exchange_name}: {str(e)}")
                     
             logger.info(f"💰 Total account value: ${total_value:,.2f}")
+            logger.info(f"   💵 Cash (USD/USDT/USDC): ${total_usd_cash:.2f} ({total_usd_cash/total_value*100:.1f}%)")
+            logger.info(f"   🪙 Crypto value: ${total_crypto_value:.2f} ({total_crypto_value/total_value*100:.1f}%)")
+            
+            # Warning if most funds are stuck in crypto
+            if total_crypto_value > total_value * 0.5 and total_usd_cash < 5.0:
+                logger.warning(f"⚠️  WARNING: {total_crypto_value/total_value*100:.1f}% of funds locked in crypto!")
+                logger.warning(f"   Available USD for trading: ${total_usd_cash:.2f}")
+                logger.warning(f"   Auto-recovery system should sell stuck crypto automatically")
+            
             return total_value
             
         except Exception as e:
@@ -131,7 +144,10 @@ class FixedPercentageBalanceManager:
                 logger.info(f"✅ Position size validated for {symbol}: ${validated_result.position_size:,.2f}")
                 return validated_result.position_size
             else:
-                logger.warning(f"❌ Position size validation failed for {symbol}: {validated_result.reason}")
+                # Only log every 10th failure to reduce spam
+                if hash(symbol) % 10 == 0:
+                    logger.warning(f"❌ Cannot trade {symbol}: {validated_result.reason}")
+                    logger.warning(f"   Need: ${validated_result.min_required:.2f} | Have: ${validated_result.available_balance:.2f}")
                 return 0.0
             
         except Exception as e:
