@@ -71,6 +71,11 @@ class AutoBalanceSystem:
             
             logger.info(f"💰 Balance Distribution: Coinbase {cb_ratio:.1%} (${balances['coinbase']:.2f}), Gemini {gem_ratio:.1%} (${balances['gemini']:.2f})")
             
+            # SAFETY CHECK: Don't rebalance if Gemini has $0 (likely unsettled funds or master key issue)
+            if balances['gemini'] == 0:
+                logger.warning("⚠️  Gemini has $0 - skipping auto-rebalance (funds may be unsettled or API key issue)")
+                return False
+            
             # Check if rebalancing is needed
             if cb_ratio < self.rebalance_threshold or gem_ratio < self.rebalance_threshold:
                 logger.info(f"⚖️  Rebalancing needed! One exchange has < {self.rebalance_threshold:.0%}")

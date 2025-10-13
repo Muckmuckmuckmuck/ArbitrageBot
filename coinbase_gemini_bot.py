@@ -108,6 +108,7 @@ class CoinbaseGeminiArbitrageBot:
             'total_fees': 0.0,
             'opportunities_found': 0,
             'opportunities_executed': 0,
+            'scans': 0,  # Track number of scans
             'start_time': None,
             'initial_balance_usd': 0.0,
             'current_balance_usd': 0.0,
@@ -494,6 +495,9 @@ class CoinbaseGeminiArbitrageBot:
         
         while self.running and not self.shutdown_event.is_set():
             try:
+                # Increment scan counter
+                self.stats['scans'] += 1
+                
                 # Check if rebalancing is needed (every 10 scans)
                 if self.stats['scans'] % 10 == 0:
                     await self.auto_balance.check_and_rebalance()
