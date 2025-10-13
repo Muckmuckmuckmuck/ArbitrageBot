@@ -379,6 +379,19 @@ REBALANCE_THRESHOLD_PERCENT = 0.30  # Rebalance when 30% imbalanced
 REBALANCE_INTERVAL_HOURS = 168      # Or every 7 days
 
 # ============================================================================
+# AUTO-SIZING CONFIGURATION
+# ============================================================================
+
+AUTO_SIZING = {
+    'enabled': True,
+    'lookback_trades': 20,  # Number of recent trades to analyze
+    'adjustment_factor': 0.10,  # 10% max adjustment per period
+    'min_trades_for_adjustment': 5,  # Minimum trades before adjusting
+    'win_rate_threshold': 0.60,  # 60% win rate to increase position
+    'loss_rate_threshold': 0.40,  # 40% win rate to decrease position
+}
+
+# ============================================================================
 # LOGGING
 # ============================================================================
 
