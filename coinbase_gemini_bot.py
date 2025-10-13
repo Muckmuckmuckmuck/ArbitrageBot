@@ -141,9 +141,9 @@ class CoinbaseGeminiArbitrageBot:
         self.logger.info("Initializing trading components...")
         
         self.auto_sizer = AutoSizingManager(Config)
-        self.spread_manager = DynamicSpreadManager(Config.CURRENCY_PAIR_SPREADS)
-        self.slippage_detector = DynamicSlippageDetector(Config.SLIPPAGE_ESTIMATES)
-        self.rate_limiter = SmartRateLimiter(Config.RATE_LIMITS)
+        self.spread_manager = DynamicSpreadManager(Config)
+        self.slippage_detector = DynamicSlippageDetector(Config)
+        self.rate_limiter = SmartRateLimiter(Config)
         self.balance_validator = BalanceValidator(self.exchange_manager)
         self.balance_manager = FixedPercentageBalanceManager(
             self.exchange_manager,
