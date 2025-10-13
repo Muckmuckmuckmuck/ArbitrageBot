@@ -66,6 +66,27 @@ class FixedPercentageBalanceManager:
                             exchange_total += free_balance
                             logger.info(f"  {exchange_name} {currency}: ${free_balance:.2f}")
                     
+                    # Also count ALL crypto holdings (convert to USD value)
+                    for currency, amount in balance.get('free', {}).items():
+                        if currency not in ['USD', 'USDT', 'USDC'] and amount > 0:
+                            try:
+                                # Try to get USD value for this crypto
+                                ticker_symbol = f"{currency}/USD"
+                                if ticker_symbol in self.exchange_manager.get_exchange(exchange_name).markets:
+                                    ticker_result = self.exchange_manager.get_exchange(exchange_name).fetch_ticker(ticker_symbol)
+                                    if hasattr(ticker_result, '__await__'):
+                                        ticker = await ticker_result
+                                    else:
+                                        ticker = ticker_result
+                                    price = ticker.get('last') or ticker.get('close')
+                                    if price:
+                                        crypto_value_usd = amount * price
+                                        total_value += crypto_value_usd
+                                        exchange_total += crypto_value_usd
+                                        logger.info(f"  {exchange_name} {currency}: {amount:.6f} (${crypto_value_usd:.2f})")
+                            except:
+                                pass  # Skip if we can't get price
+                    
                     if exchange_total == 0:
                         logger.warning(f"  ⚠️  {exchange_name} has $0 balance in USD/USDT/USDC")
                                     
