@@ -125,8 +125,12 @@ class FixedPercentageBalanceManager:
                 try:
                     # Get current price
                     exchange = self.exchange_manager.get_exchange(exchange_name)
-                    ticker = await exchange.get_ticker(symbol)
-                    current_price = ticker['last']
+                    ticker_result = exchange.fetch_ticker(symbol)
+                    if hasattr(ticker_result, '__await__'):
+                        ticker = await ticker_result
+                    else:
+                        ticker = ticker_result
+                    current_price = ticker.get('last') or ticker.get('close')
                     
                     # Calculate required USDT for this position
                     required_usdt = position_size * current_price
