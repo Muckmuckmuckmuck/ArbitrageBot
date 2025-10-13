@@ -257,16 +257,19 @@ class CoinbaseGeminiArbitrageBot:
                 except Exception as spread_err:
                     self.logger.debug(f"Error calculating spread info for {symbol}: {spread_err}")
                 
-                # Check if EITHER direction is profitable (using absolute spreads)
-                # We can trade in BOTH directions, so check both!
-                if abs_spread_cb_gem >= min_spread * 100:
-                    # Buy on Coinbase, sell on Gemini
+                # Check if EITHER direction is profitable
+                # IMPORTANT: Only trade if the RAW spread is POSITIVE (profitable direction)
+                
+                # Direction 1: Buy on Coinbase, sell on Gemini
+                # Only trade if Gemini price > Coinbase price (positive spread)
+                if spread_cb_to_gem_pct >= min_spread * 100:
+                    # Buy on Coinbase (cheaper), sell on Gemini (more expensive)
                     position_size = await self.balance_manager.get_adaptive_position_size(
-                        symbol, abs_spread_cb_gem / 100, 0.01  # Use absolute spread
+                        symbol, spread_cb_to_gem_pct / 100, 0.01
                     )
                     
-                    # Use MAKER fees (limit orders) instead of TAKER fees (market orders)
-                    estimated_profit = (abs(spread_cb_to_gem) * position_size) - \
+                    # Use MAKER fees (limit orders)
+                    estimated_profit = (spread_cb_to_gem * position_size) - \
                                      (coinbase_ask * position_size * (Config.EXCHANGE_FEES['coinbase']['maker'] + 
                                                                        Config.EXCHANGE_FEES['gemini']['maker']))
                     
@@ -277,21 +280,23 @@ class CoinbaseGeminiArbitrageBot:
                             sell_exchange='gemini',
                             buy_price=coinbase_ask,
                             sell_price=gemini_bid,
-                            spread=abs(spread_cb_to_gem),
-                            spread_percent=abs_spread_cb_gem,
+                            spread=spread_cb_to_gem,
+                            spread_percent=spread_cb_to_gem_pct,
                             position_size_usd=position_size,
                             estimated_profit=estimated_profit,
                             timestamp=datetime.now()
                         ))
                 
-                if abs_spread_gem_cb >= min_spread * 100:
-                    # Buy on Gemini, sell on Coinbase
+                # Direction 2: Buy on Gemini, sell on Coinbase
+                # Only trade if Coinbase price > Gemini price (positive spread)
+                if spread_gem_to_cb_pct >= min_spread * 100:
+                    # Buy on Gemini (cheaper), sell on Coinbase (more expensive)
                     position_size = await self.balance_manager.get_adaptive_position_size(
-                        symbol, abs_spread_gem_cb / 100, 0.01  # Use absolute spread
+                        symbol, spread_gem_to_cb_pct / 100, 0.01
                     )
                     
-                    # Use MAKER fees (limit orders) instead of TAKER fees (market orders)
-                    estimated_profit = (abs(spread_gem_to_cb) * position_size) - \
+                    # Use MAKER fees (limit orders)
+                    estimated_profit = (spread_gem_to_cb * position_size) - \
                                      (gemini_ask * position_size * (Config.EXCHANGE_FEES['gemini']['maker'] + 
                                                                      Config.EXCHANGE_FEES['coinbase']['maker']))
                     
@@ -302,8 +307,8 @@ class CoinbaseGeminiArbitrageBot:
                             sell_exchange='coinbase',
                             buy_price=gemini_ask,
                             sell_price=coinbase_bid,
-                            spread=abs(spread_gem_to_cb),
-                            spread_percent=abs_spread_gem_cb,
+                            spread=spread_gem_to_cb,
+                            spread_percent=spread_gem_to_cb_pct,
                             position_size_usd=position_size,
                             estimated_profit=estimated_profit,
                             timestamp=datetime.now()
