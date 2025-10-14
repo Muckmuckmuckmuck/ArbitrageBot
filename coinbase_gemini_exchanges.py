@@ -86,7 +86,13 @@ class CoinbaseGeminiExchangeManager:
         """Fetch balance from exchange"""
         exchange = self.get_exchange(exchange_id)
         try:
-            balance = await exchange.fetch_balance()
+            # CCXT fetch_balance can be sync or async depending on version
+            result = exchange.fetch_balance()
+            # Check if it's a coroutine (async) or direct result (sync)
+            if hasattr(result, '__await__'):
+                balance = await result
+            else:
+                balance = result
             return balance
         except Exception as e:
             logger.error(f"Error fetching balance from {exchange_id}: {e}")
@@ -112,7 +118,12 @@ class CoinbaseGeminiExchangeManager:
         """Fetch order book from exchange"""
         exchange = self.get_exchange(exchange_id)
         try:
-            order_book = await exchange.fetch_order_book(symbol, limit)
+            # CCXT fetch_order_book can be sync or async
+            result = exchange.fetch_order_book(symbol, limit)
+            if hasattr(result, '__await__'):
+                order_book = await result
+            else:
+                order_book = result
             return order_book
         except Exception as e:
             logger.error(f"Error fetching order book {symbol} from {exchange_id}: {e}")
@@ -185,7 +196,12 @@ class CoinbaseGeminiExchangeManager:
         """Fetch deposit address for currency"""
         exchange = self.get_exchange(exchange_id)
         try:
-            address_info = await exchange.fetch_deposit_address(currency)
+            # CCXT fetch_deposit_address can be sync or async
+            result = exchange.fetch_deposit_address(currency)
+            if hasattr(result, '__await__'):
+                address_info = await result
+            else:
+                address_info = result
             logger.info(f"✅ Deposit address for {currency} on {exchange_id}: {address_info.get('address', '')[:10]}...")
             return address_info
         except Exception as e:
@@ -205,14 +221,20 @@ class CoinbaseGeminiExchangeManager:
             if tag:
                 logger.info(f"   Tag/Memo: {tag}")
             
-            # Execute withdrawal
-            withdrawal = await exchange.withdraw(
+            # Execute withdrawal (CCXT withdraw can be sync or async)
+            result = exchange.withdraw(
                 code=currency,
                 amount=amount,
                 address=address,
                 tag=tag,
                 params={}
             )
+            
+            # Handle both sync and async responses
+            if hasattr(result, '__await__'):
+                withdrawal = await result
+            else:
+                withdrawal = result
             
             logger.info(f"✅ Withdrawal initiated: {withdrawal.get('id', 'unknown')}")
             return withdrawal
@@ -226,7 +248,12 @@ class CoinbaseGeminiExchangeManager:
         """Fetch user's trade history"""
         exchange = self.get_exchange(exchange_id)
         try:
-            trades = await exchange.fetch_my_trades(symbol, since, limit)
+            # CCXT fetch_my_trades can be sync or async
+            result = exchange.fetch_my_trades(symbol, since, limit)
+            if hasattr(result, '__await__'):
+                trades = await result
+            else:
+                trades = result
             return trades
         except Exception as e:
             logger.error(f"Error fetching trades from {exchange_id}: {e}")
@@ -236,7 +263,12 @@ class CoinbaseGeminiExchangeManager:
         """Fetch current trading fees"""
         exchange = self.get_exchange(exchange_id)
         try:
-            fees = await exchange.fetch_trading_fees()
+            # CCXT fetch_trading_fees can be sync or async
+            result = exchange.fetch_trading_fees()
+            if hasattr(result, '__await__'):
+                fees = await result
+            else:
+                fees = result
             return fees
         except Exception as e:
             logger.warning(f"Could not fetch trading fees from {exchange_id}: {e}")

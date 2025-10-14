@@ -604,17 +604,19 @@ class CoinbaseGeminiArbitrageBot:
         """Main trading loop"""
         self.logger.info("🚀 Starting trading loop...")
         
-        # Check for rebalancing on startup
-        await self.auto_balance.check_and_rebalance()
+        # TEMPORARILY DISABLED: Auto-balance requires whitelisted addresses
+        # await self.auto_balance.check_and_rebalance()
+        self.logger.warning("⚠️  Auto-balance DISABLED (requires whitelisted withdrawal addresses)")
+        self.logger.info("   Manual rebalancing required - see MANUAL_REBALANCE_GUIDE.md")
         
         while self.running and not self.shutdown_event.is_set():
             try:
                 # Increment scan counter
                 self.stats['scans'] += 1
                 
-                # Check if rebalancing is needed (every 10 scans)
-                if self.stats['scans'] % 10 == 0:
-                    await self.auto_balance.check_and_rebalance()
+                # TEMPORARILY DISABLED: Auto-balance requires whitelisted addresses
+                # if self.stats['scans'] % 10 == 0:
+                #     await self.auto_balance.check_and_rebalance()
                 
                 # Scan for opportunities
                 opportunities = await self.scan_for_opportunities()
