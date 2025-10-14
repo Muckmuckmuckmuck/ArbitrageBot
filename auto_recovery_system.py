@@ -217,11 +217,22 @@ class AutoRecoverySystem:
                 logger.info(f"\n[STEP 2] Transferring to {best_exchange} for better price...")
                 logger.info(f"  Expected gain: ${price_diff * stuck.amount:.2f}")
                 
-                # Note: Transfer requires whitelisted addresses
-                # For now, we'll just sell on current exchange to avoid complexity
-                logger.warning(f"⚠️  Transfer would save ${price_diff * stuck.amount:.2f}, but selling locally for simplicity")
-                sell_exchange = current_exchange
-                sell_price = prices[current_exchange]
+                # Execute the transfer
+                transfer_success = await self._transfer_crypto(
+                    from_exchange=current_exchange,
+                    to_exchange=best_exchange,
+                    currency=stuck.currency,
+                    amount=stuck.amount
+                )
+                
+                if transfer_success:
+                    logger.info(f"✅ Transfer complete! Now selling on {best_exchange}")
+                    sell_exchange = best_exchange
+                    sell_price = best_price
+                else:
+                    logger.warning(f"❌ Transfer failed, selling on current exchange ({current_exchange})")
+                    sell_exchange = current_exchange
+                    sell_price = prices[current_exchange]
             else:
                 logger.info(f"\n[STEP 2] Selling on current exchange ({current_exchange})")
                 sell_exchange = current_exchange
@@ -352,6 +363,83 @@ class AutoRecoverySystem:
         except Exception as e:
             logger.error(f"Error checking balance consistency: {e}")
             return False
+    
+    async def _transfer_crypto(self, from_exchange: str, to_exchange: str,
+                              currency: str, amount: float) -> bool:
+        """
+        Transfer crypto from one exchange to another
+        Returns True if successful, False otherwise
+        """
+        try:
+            logger.info(f"🔄 Initiating transfer: {amount:.6f} {currency} from {from_exchange} → {to_exchange}")
+            
+            # STEP 1: Get deposit address from destination exchange
+            logger.info(f"  [1/3] Getting deposit address from {to_exchange}...")
+            try:
+                address_info = await self.exchanges[to_exchange].fetch_deposit_address(currency)
+                deposit_address = address_info['address']
+                tag = address_info.get('tag', None)
+                logger.info(f"  ✅ Deposit address: {deposit_address[:8]}...{deposit_address[-8:]}")
+                if tag:
+                    logger.info(f"  ✅ Tag/Memo: {tag}")
+            except Exception as e:
+                logger.error(f"  ❌ Failed to get deposit address: {e}")
+                return False
+            
+            # STEP 2: Withdraw from source exchange
+            logger.info(f"  [2/3] Withdrawing from {from_exchange}...")
+            try:
+                withdrawal = await self.exchanges[from_exchange].withdraw(
+                    currency,
+                    amount,
+                    deposit_address,
+                    tag,
+                    {}
+                )
+                tx_id = withdrawal.get('id', 'unknown')
+                logger.info(f"  ✅ Withdrawal initiated (TX: {tx_id})")
+            except Exception as e:
+                logger.error(f"  ❌ Withdrawal failed: {e}")
+                return False
+            
+            # STEP 3: Wait for transfer to complete
+            logger.info(f"  [3/3] Waiting for transfer to complete...")
+            logger.info(f"  ⏳ This usually takes 4-30 seconds for {currency}...")
+            
+            # Wait for the transfer (with timeout)
+            max_wait = 300  # 5 minutes max
+            check_interval = 5  # Check every 5 seconds
+            elapsed = 0
+            
+            initial_balance = await self._get_crypto_balance(to_exchange, currency)
+            
+            while elapsed < max_wait:
+                await asyncio.sleep(check_interval)
+                elapsed += check_interval
+                
+                current_balance = await self._get_crypto_balance(to_exchange, currency)
+                
+                if current_balance > initial_balance:
+                    logger.info(f"  ✅ Transfer complete! Balance increased by {current_balance - initial_balance:.6f} {currency}")
+                    return True
+                
+                if elapsed % 30 == 0:  # Log every 30 seconds
+                    logger.info(f"  ⏳ Still waiting... ({elapsed}s elapsed)")
+            
+            logger.warning(f"  ⚠️  Transfer timeout after {max_wait}s - it may still complete later")
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Transfer failed: {e}", exc_info=True)
+            return False
+    
+    async def _get_crypto_balance(self, exchange_name: str, currency: str) -> float:
+        """Get the free balance of a specific crypto on an exchange"""
+        try:
+            balance = await self._fetch_balance_safe(self.exchanges[exchange_name])
+            return balance.get('free', {}).get(currency, 0)
+        except:
+            return 0.0
     
     async def retry_failed_transfer(self, from_exchange: str, to_exchange: str,
                                    currency: str, amount: float, max_retries: int = 3) -> bool:
