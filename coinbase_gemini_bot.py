@@ -3,6 +3,7 @@
 Coinbase + Gemini Arbitrage Bot
 TRUE Cross-Exchange Arbitrage: Buy → Transfer → Sell → Rebalance
 Optimized for US markets with one-time address whitelisting
+Version: 2.1 (Min balance fix deployed)
 """
 
 import asyncio
