@@ -123,13 +123,21 @@ class CoinbaseGeminiExchangeManager:
         """Create order on exchange"""
         exchange = self.get_exchange(exchange_id)
         try:
-            order = await exchange.create_order(
+            # CCXT create_order is synchronous, check if it returns awaitable
+            order_result = exchange.create_order(
                 symbol=symbol,
                 type=order_type,
                 side=side,
                 amount=amount,
                 price=price,
             )
+            
+            # Handle both sync and async responses
+            if hasattr(order_result, '__await__'):
+                order = await order_result
+            else:
+                order = order_result
+            
             logger.info(f"✅ Order created on {exchange_id}: {side} {amount} {symbol} @ {price}")
             return order
         except Exception as e:
@@ -140,7 +148,15 @@ class CoinbaseGeminiExchangeManager:
         """Fetch order status"""
         exchange = self.get_exchange(exchange_id)
         try:
-            order = await exchange.fetch_order(order_id, symbol)
+            # CCXT fetch_order is synchronous, check if it returns awaitable
+            order_result = exchange.fetch_order(order_id, symbol)
+            
+            # Handle both sync and async responses
+            if hasattr(order_result, '__await__'):
+                order = await order_result
+            else:
+                order = order_result
+            
             return order
         except Exception as e:
             logger.error(f"Error fetching order {order_id} from {exchange_id}: {e}")
@@ -150,7 +166,15 @@ class CoinbaseGeminiExchangeManager:
         """Cancel order"""
         exchange = self.get_exchange(exchange_id)
         try:
-            result = await exchange.cancel_order(order_id, symbol)
+            # CCXT cancel_order is synchronous, check if it returns awaitable
+            result_obj = exchange.cancel_order(order_id, symbol)
+            
+            # Handle both sync and async responses
+            if hasattr(result_obj, '__await__'):
+                result = await result_obj
+            else:
+                result = result_obj
+            
             logger.info(f"✅ Order cancelled on {exchange_id}: {order_id}")
             return result
         except Exception as e:
