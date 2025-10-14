@@ -214,8 +214,9 @@ class FixedPercentageBalanceManager:
                         'error': str(e)
                     })
             
-            # Find the maximum validated position size (in USD)
-            max_validated = max(validated_sizes_usd) if validated_sizes_usd else 0.0
+            # Find the MINIMUM validated position size (in USD)
+            # Both exchanges need to handle the trade, so use the smaller limit
+            max_validated = min(validated_sizes_usd) if validated_sizes_usd else 0.0
             
             # Ensure minimum position size
             min_position = self.config.RISK_MANAGEMENT['min_position_percent'] * await self.get_total_account_value()
