@@ -92,27 +92,49 @@ class AutoRecoverySystem:
         stuck = []
         
         try:
+            logger.info("🔍 Scanning for stuck crypto positions...")
+            
             for exchange_name, exchange in self.exchanges.items():
+                logger.info(f"   Checking {exchange_name}...")
                 balance = await self._fetch_balance_safe(exchange)
                 
-                # Check for unexpected crypto balances
-                for symbol in self.config.CURRENCY_PAIRS:
-                    base = symbol.split('/')[0]
-                    crypto_amount = balance.get('free', {}).get(base, 0)  # Fixed: balance['free']['BTC'], not balance['BTC']['free']
+                # Check ALL crypto balances (not just configured pairs)
+                free_balances = balance.get('free', {})
+                
+                for currency, crypto_amount in free_balances.items():
+                    # Skip USD, USDT, USDC (these are cash, not stuck crypto)
+                    if currency in ['USD', 'USDT', 'USDC'] or crypto_amount <= 0:
+                        continue
                     
-                    if crypto_amount > 0:
-                        # Get value in USD
-                        try:
-                            ticker = await self._fetch_ticker_safe(exchange, symbol)
-                            price = ticker['last']
-                            value_usd = crypto_amount * price
-                            
-                            # If value > $0.50, consider it stuck (lowered from $10 to catch ALL stuck positions)
-                            if value_usd > 0.50:
+                    # Found crypto! Try to get its value
+                    try:
+                        # Try multiple symbol formats (USD, USDC, USDT)
+                        price = None
+                        working_symbol = None
+                        
+                        for quote in ['USD', 'USDC', 'USDT']:
+                            try:
+                                test_symbol = f"{currency}/{quote}"
+                                ticker = await self._fetch_ticker_safe(exchange, test_symbol)
+                                price = ticker.get('last') or ticker.get('bid') or ticker.get('ask')
+                                if price:
+                                    working_symbol = test_symbol
+                                    break
+                            except:
+                                continue
+                        
+                        if not price:
+                            logger.warning(f"   ⚠️  Found {crypto_amount:.6f} {currency} but couldn't get price")
+                            continue
+                        
+                        value_usd = crypto_amount * price
+                        
+                        # If value > $0.50, consider it stuck (lowered from $10 to catch ALL stuck positions)
+                        if value_usd > 0.50:
                                 # Check if this is a known stuck position
                                 is_known = any(
                                     sp.exchange == exchange_name and 
-                                    sp.currency == base and
+                                    sp.currency == currency and
                                     abs(sp.amount - crypto_amount) < 0.01
                                     for sp in self.stuck_positions
                                 )
@@ -120,8 +142,8 @@ class AutoRecoverySystem:
                                 if not is_known:
                                     stuck_pos = StuckPosition(
                                         exchange=exchange_name,
-                                        symbol=symbol,
-                                        currency=base,
+                                        symbol=working_symbol,  # Use the working symbol we found
+                                        currency=currency,
                                         amount=crypto_amount,
                                         value_usd=value_usd,
                                         stuck_since=datetime.now(),
@@ -130,13 +152,17 @@ class AutoRecoverySystem:
                                     stuck.append(stuck_pos)
                                     self.stuck_positions.append(stuck_pos)
                                     
-                                    logger.warning(f"⚠️  Detected stuck position: {crypto_amount:.8f} {base} "
-                                                 f"(${value_usd:.2f}) on {exchange_name}")
+                                    logger.warning(f"   ⚠️  Found: {crypto_amount:.6f} {currency} = ${value_usd:.2f}")
                         except Exception as e:
-                            logger.error(f"Error checking {base} on {exchange_name}: {e}")
+                            logger.error(f"   Error checking {currency} on {exchange_name}: {e}")
             
         except Exception as e:
             logger.error(f"Error detecting stuck positions: {e}", exc_info=True)
+        
+        if stuck:
+            logger.warning(f"\n⚠️  TOTAL: Found {len(stuck)} stuck positions worth ${sum(sp.value_usd for sp in stuck):.2f}")
+        else:
+            logger.info("   ✅ No stuck positions found")
         
         return stuck
     
