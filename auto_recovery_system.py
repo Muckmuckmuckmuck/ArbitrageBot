@@ -131,30 +131,30 @@ class AutoRecoverySystem:
                         
                         # If value > $0.50, consider it stuck (lowered from $10 to catch ALL stuck positions)
                         if value_usd > 0.50:
-                                # Check if this is a known stuck position
-                                is_known = any(
-                                    sp.exchange == exchange_name and 
-                                    sp.currency == currency and
-                                    abs(sp.amount - crypto_amount) < 0.01
-                                    for sp in self.stuck_positions
+                            # Check if this is a known stuck position
+                            is_known = any(
+                                sp.exchange == exchange_name and 
+                                sp.currency == currency and
+                                abs(sp.amount - crypto_amount) < 0.01
+                                for sp in self.stuck_positions
+                            )
+                            
+                            if not is_known:
+                                stuck_pos = StuckPosition(
+                                    exchange=exchange_name,
+                                    symbol=working_symbol,  # Use the working symbol we found
+                                    currency=currency,
+                                    amount=crypto_amount,
+                                    value_usd=value_usd,
+                                    stuck_since=datetime.now(),
+                                    reason="Unexpected crypto balance (possible failed transfer or incomplete cycle)"
                                 )
+                                stuck.append(stuck_pos)
+                                self.stuck_positions.append(stuck_pos)
                                 
-                                if not is_known:
-                                    stuck_pos = StuckPosition(
-                                        exchange=exchange_name,
-                                        symbol=working_symbol,  # Use the working symbol we found
-                                        currency=currency,
-                                        amount=crypto_amount,
-                                        value_usd=value_usd,
-                                        stuck_since=datetime.now(),
-                                        reason="Unexpected crypto balance (possible failed transfer or incomplete cycle)"
-                                    )
-                                    stuck.append(stuck_pos)
-                                    self.stuck_positions.append(stuck_pos)
-                                    
-                                    logger.warning(f"   ⚠️  Found: {crypto_amount:.6f} {currency} = ${value_usd:.2f}")
-                        except Exception as e:
-                            logger.error(f"   Error checking {currency} on {exchange_name}: {e}")
+                                logger.warning(f"   ⚠️  Found: {crypto_amount:.6f} {currency} = ${value_usd:.2f}")
+                    except Exception as e:
+                        logger.error(f"   Error checking {currency} on {exchange_name}: {e}")
             
         except Exception as e:
             logger.error(f"Error detecting stuck positions: {e}", exc_info=True)
