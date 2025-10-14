@@ -98,7 +98,7 @@ class AutoRecoverySystem:
                 # Check for unexpected crypto balances
                 for symbol in self.config.CURRENCY_PAIRS:
                     base = symbol.split('/')[0]
-                    crypto_amount = balance.get(base, {}).get('free', 0)
+                    crypto_amount = balance.get('free', {}).get(base, 0)  # Fixed: balance['free']['BTC'], not balance['BTC']['free']
                     
                     if crypto_amount > 0:
                         # Get value in USD
