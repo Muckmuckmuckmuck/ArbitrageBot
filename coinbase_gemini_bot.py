@@ -166,11 +166,19 @@ class CoinbaseGeminiArbitrageBot:
         self.logger.info(f"✅ Total account value: ${total_balance:,.2f}")
         
         # STARTUP CLEANUP: Auto-fix any stuck positions
-        self.logger.info("\n" + "="*80)
-        self.logger.info("🧹 STARTUP CLEANUP - Detecting stuck positions")
-        self.logger.info("="*80)
+        self.logger.info("\n" + "#" * 80)
+        self.logger.info("#" * 80)
+        self.logger.info("### 🧹 STARTUP CLEANUP - DETECTING STUCK POSITIONS (v2.0)")
+        self.logger.info("#" * 80)
+        self.logger.info("#" * 80)
         
-        stuck_positions = await self.recovery_system.detect_stuck_positions()
+        try:
+            self.logger.info("Calling detect_stuck_positions()...")
+            stuck_positions = await self.recovery_system.detect_stuck_positions()
+            self.logger.info(f"detect_stuck_positions() returned: {len(stuck_positions)} positions")
+        except Exception as e:
+            self.logger.error(f"❌ CRITICAL ERROR detecting stuck positions: {e}", exc_info=True)
+            stuck_positions = []
         
         if stuck_positions:
             self.logger.warning(f"\n⚠️  FOUND {len(stuck_positions)} STUCK POSITIONS:")
