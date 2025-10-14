@@ -627,7 +627,7 @@ RISK_MANAGEMENT = {
     'min_position_percent': 0.05,          # 5% min per position
     'min_trade_size_usd': 10.0,           # Minimum $10 per trade
     'max_trade_size_usd': None,           # No max (scales with balance)
-    'min_account_balance_usd': 20.0,      # Minimum $20 to operate
+    'min_account_balance_usd': 10.0,      # Minimum $10 to operate (lowered from $20)
     
     # Slippage protection
     'max_slippage_percent': 0.003,        # 0.3% max slippage
