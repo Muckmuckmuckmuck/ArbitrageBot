@@ -249,14 +249,60 @@ class AutoBalanceSystem:
             
             # STEP 2: Transfer crypto to destination exchange
             logger.info(f"[STEP 2] Transferring {plan.bridge_crypto} to {plan.to_exchange}...")
-            logger.info(f"  ⏱️  This will take ~{plan.estimated_time}s...")
+            logger.info(f"  ⏱️  Expected time: ~{plan.estimated_time}s")
             
-            # Get deposit address from destination exchange
-            # Note: This requires the transfer_manager to handle the actual transfer
-            logger.info(f"  🔄 Transfer initiated (handled by transfer_manager)")
+            # Get initial balance on destination
+            initial_balance = await self._get_crypto_balance(plan.to_exchange, plan.bridge_crypto)
+            logger.info(f"  📊 Initial {plan.bridge_crypto} balance on {plan.to_exchange}: {initial_balance:.6f}")
             
-            # Wait for transfer to complete
-            await asyncio.sleep(plan.estimated_time)
+            # Get deposit address
+            try:
+                address_info = await to_ex.fetch_deposit_address(plan.bridge_crypto)
+                deposit_address = address_info['address']
+                tag = address_info.get('tag', None)
+                logger.info(f"  ✅ Deposit address: {deposit_address[:8]}...{deposit_address[-8:]}")
+            except Exception as e:
+                logger.error(f"  ❌ Failed to get deposit address: {e}")
+                return False
+            
+            # Initiate withdrawal
+            try:
+                withdrawal = await from_ex.withdraw(
+                    plan.bridge_crypto,
+                    crypto_amount,
+                    deposit_address,
+                    tag,
+                    {}
+                )
+                tx_id = withdrawal.get('id', 'unknown')
+                logger.info(f"  ✅ Withdrawal initiated (TX: {tx_id})")
+            except Exception as e:
+                logger.error(f"  ❌ Withdrawal failed: {e}")
+                return False
+            
+            # Monitor transfer completion
+            logger.info(f"  ⏳ Monitoring transfer...")
+            max_wait = 300  # 5 minutes max
+            check_interval = 5
+            elapsed = 0
+            
+            while elapsed < max_wait:
+                await asyncio.sleep(check_interval)
+                elapsed += check_interval
+                
+                current_balance = await self._get_crypto_balance(plan.to_exchange, plan.bridge_crypto)
+                balance_increase = current_balance - initial_balance
+                
+                if balance_increase >= crypto_amount * 0.99:  # 1% tolerance
+                    logger.info(f"  ✅ Transfer complete! ({elapsed}s)")
+                    logger.info(f"     Received: {balance_increase:.6f} {plan.bridge_crypto}")
+                    break
+                
+                if elapsed % 30 == 0:
+                    logger.info(f"  ⏳ Still waiting... ({elapsed}s)")
+            else:
+                logger.error(f"  ❌ Transfer timeout after {max_wait}s")
+                return False
             
             # STEP 3: Sell crypto on destination exchange
             logger.info(f"[STEP 3] Selling {plan.bridge_crypto} on {plan.to_exchange}...")
@@ -294,6 +340,23 @@ class AutoBalanceSystem:
         except Exception as e:
             logger.error(f"Error executing transfer plan: {str(e)}")
             return False
+    
+    async def _get_crypto_balance(self, exchange_name: str, currency: str) -> float:
+        """Get the free balance of a specific crypto on an exchange"""
+        try:
+            exchange = self.exchange_manager.get_exchange(exchange_name)
+            balance_result = exchange.fetch_balance()
+            
+            if hasattr(balance_result, '__await__'):
+                balance = await balance_result
+            else:
+                balance = balance_result
+            
+            return balance.get('free', {}).get(currency, 0.0)
+        except Exception as e:
+            if 'master-keys are not-supported' not in str(e):
+                logger.error(f"Error getting {currency} balance from {exchange_name}: {e}")
+            return 0.0
     
     def should_rebalance(self, cb_balance: float, gem_balance: float) -> bool:
         """Check if rebalancing is needed"""
