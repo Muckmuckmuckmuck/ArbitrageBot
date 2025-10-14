@@ -448,12 +448,17 @@ class CoinbaseGeminiArbitrageBot:
                 current_ask=opp.buy_price
             )
             
-            actual_buy_amount = filled_order.get('filled', buy_amount)
-            actual_buy_price = filled_order.get('average', opp.buy_price)
-            buy_cost = filled_order.get('cost', actual_buy_amount * actual_buy_price)
+            # Convert to float (CCXT sometimes returns strings)
+            actual_buy_amount = float(filled_order.get('filled', buy_amount))
+            actual_buy_price = float(filled_order.get('average', opp.buy_price))
+            buy_cost = float(filled_order.get('cost', actual_buy_amount * actual_buy_price))
             
             # Use MAKER fee (not taker)
-            buy_fee = filled_order.get('fee', {}).get('cost', buy_cost * Config.EXCHANGE_FEES[opp.buy_exchange]['maker'])
+            fee_dict = filled_order.get('fee', {})
+            if isinstance(fee_dict, dict):
+                buy_fee = float(fee_dict.get('cost', buy_cost * Config.EXCHANGE_FEES[opp.buy_exchange]['maker']))
+            else:
+                buy_fee = buy_cost * Config.EXCHANGE_FEES[opp.buy_exchange]['maker']
             
             self.logger.info(f"✅ Buy complete: {actual_buy_amount:.8f} {base_currency} @ ${actual_buy_price:.6f}")
             self.logger.info(f"   Fee: ${buy_fee:.6f} (MAKER fee: {Config.EXCHANGE_FEES[opp.buy_exchange]['maker']*100:.2f}%)")
@@ -500,12 +505,17 @@ class CoinbaseGeminiArbitrageBot:
                 current_bid=opp.sell_price
             )
             
-            actual_sell_amount = filled_sell_order.get('filled', actual_buy_amount)
-            actual_sell_price = filled_sell_order.get('average', opp.sell_price)
-            sell_revenue = filled_sell_order.get('cost', actual_sell_amount * actual_sell_price)
+            # Convert to float (CCXT sometimes returns strings)
+            actual_sell_amount = float(filled_sell_order.get('filled', actual_buy_amount))
+            actual_sell_price = float(filled_sell_order.get('average', opp.sell_price))
+            sell_revenue = float(filled_sell_order.get('cost', actual_sell_amount * actual_sell_price))
             
             # Use MAKER fee (not taker)
-            sell_fee = filled_sell_order.get('fee', {}).get('cost', sell_revenue * Config.EXCHANGE_FEES[opp.sell_exchange]['maker'])
+            sell_fee_dict = filled_sell_order.get('fee', {})
+            if isinstance(sell_fee_dict, dict):
+                sell_fee = float(sell_fee_dict.get('cost', sell_revenue * Config.EXCHANGE_FEES[opp.sell_exchange]['maker']))
+            else:
+                sell_fee = sell_revenue * Config.EXCHANGE_FEES[opp.sell_exchange]['maker']
             
             self.logger.info(f"✅ Sell complete: {actual_sell_amount:.8f} {base_currency} @ ${actual_sell_price:.6f}")
             self.logger.info(f"   Fee: ${sell_fee:.6f} (MAKER fee: {Config.EXCHANGE_FEES[opp.sell_exchange]['maker']*100:.2f}%)")
