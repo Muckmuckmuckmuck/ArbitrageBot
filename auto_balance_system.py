@@ -43,9 +43,9 @@ class AutoBalanceSystem:
         ]
         
         # Minimum balance thresholds
-        self.min_balance_per_exchange = 20.0  # $20 minimum per exchange
+        self.min_balance_per_exchange = 5.0  # $5 minimum per exchange (lowered from $20)
         self.target_balance_ratio = 0.5  # 50/50 split
-        self.rebalance_threshold = 0.3  # Rebalance if one exchange has < 30%
+        self.rebalance_threshold = 0.2  # Rebalance if one exchange has < 20% (lowered from 30%)
         
         logger.info("Auto-Balance System initialized")
     
