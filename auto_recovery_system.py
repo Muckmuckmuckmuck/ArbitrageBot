@@ -280,28 +280,36 @@ class AutoRecoverySystem:
     async def auto_recover_all_stuck_positions(self) -> int:
         """Automatically recover all detected stuck positions"""
         
-        # Detect stuck positions
-        stuck_list = await self.detect_stuck_positions()
+        # Use the EXISTING stuck_positions list (don't detect again!)
+        # The positions were already detected by the caller
+        stuck_list = [sp for sp in self.stuck_positions if not sp.recovery_attempted]
         
         if not stuck_list:
-            logger.info("No stuck positions detected")
+            logger.info("No unrecovered stuck positions")
             return 0
         
-        logger.info(f"Found {len(stuck_list)} stuck positions, attempting recovery...")
+        logger.info(f"🔄 Attempting to recover {len(stuck_list)} stuck positions...")
         
         recovered = 0
         
         for stuck in stuck_list:
-            # Only attempt if not already tried
-            if not stuck.recovery_attempted:
-                success = await self.recover_stuck_position(stuck)
-                if success:
-                    recovered += 1
-                
-                # Wait between recoveries to avoid rate limits
-                await asyncio.sleep(2)
+            logger.info(f"\n{'='*80}")
+            logger.info(f"🔄 Recovery {recovered+1}/{len(stuck_list)}: {stuck.amount:.6f} {stuck.currency} on {stuck.exchange}")
+            logger.info(f"{'='*80}")
+            
+            success = await self.recover_stuck_position(stuck)
+            if success:
+                recovered += 1
+                logger.info(f"✅ Recovery {recovered}/{len(stuck_list)} successful!")
+            else:
+                logger.warning(f"❌ Recovery failed for {stuck.currency}")
+            
+            # Wait between recoveries to avoid rate limits
+            await asyncio.sleep(2)
         
-        logger.info(f"Recovery complete: {recovered}/{len(stuck_list)} positions recovered")
+        logger.info(f"\n{'='*80}")
+        logger.info(f"✅ Recovery complete: {recovered}/{len(stuck_list)} positions recovered")
+        logger.info(f"{'='*80}")
         
         return recovered
     
