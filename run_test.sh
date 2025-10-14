@@ -1,0 +1,31 @@
+#!/bin/bash
+# Run test script with Railway environment variables
+# Usage: ./run_test.sh
+
+echo "================================================================"
+echo "  CROSS-EXCHANGE ARBITRAGE TEST"
+echo "================================================================"
+echo ""
+echo "⚠️  NOTE: This test requires API keys to be set as environment variables"
+echo ""
+echo "To run this test:"
+echo ""
+echo "1. Export your API keys (one-time, in this terminal):"
+echo ""
+echo "   export COINBASE_API_KEY='your-coinbase-key'"
+echo "   export COINBASE_SECRET_KEY='your-coinbase-secret'"
+echo "   export GEMINI_API_KEY='your-gemini-key'"
+echo "   export GEMINI_SECRET_KEY='your-gemini-secret'"
+echo ""
+echo "2. Then run:"
+echo ""
+echo "   python3 test_arbitrage_cycle.py"
+echo ""
+echo "================================================================"
+echo ""
+echo "Or, if you have a .env file:"
+echo ""
+echo "   source .env && python3 test_arbitrage_cycle.py"
+echo ""
+echo "================================================================"
+
