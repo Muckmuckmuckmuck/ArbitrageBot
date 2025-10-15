@@ -32,8 +32,8 @@ class SmartOrderPlacer:
         self.logger = logger
         
         # Limit order configuration
-        self.MAX_WAIT_TIME = 30  # Max seconds to wait for fill
-        self.PRICE_IMPROVEMENT = 0.0005  # 0.05% better than market (to ensure maker)
+        self.MAX_WAIT_TIME = 10  # Max seconds to wait for fill (reduced from 30)
+        self.PRICE_IMPROVEMENT = 0.0001  # 0.01% better than market (more aggressive, fills faster)
         self.CHECK_INTERVAL = 0.5  # Check order status every 0.5 seconds
     
     async def place_smart_buy(
@@ -58,7 +58,7 @@ class SmartOrderPlacer:
         # Calculate limit price (slightly below market ask = maker order)
         limit_price = current_ask * (1 - self.PRICE_IMPROVEMENT)
         self.logger.info(f"   Market Ask: ${current_ask:.6f}")
-        self.logger.info(f"   Limit Price: ${limit_price:.6f} (0.05% better)")
+        self.logger.info(f"   Limit Price: ${limit_price:.6f} (0.01% better - AGGRESSIVE)")
         
         try:
             # Place limit buy order
@@ -121,7 +121,7 @@ class SmartOrderPlacer:
         # Calculate limit price (slightly above market bid = maker order)
         limit_price = current_bid * (1 + self.PRICE_IMPROVEMENT)
         self.logger.info(f"   Market Bid: ${current_bid:.6f}")
-        self.logger.info(f"   Limit Price: ${limit_price:.6f} (0.05% better)")
+        self.logger.info(f"   Limit Price: ${limit_price:.6f} (0.01% better - AGGRESSIVE)")
         
         try:
             # Place limit sell order
