@@ -128,7 +128,8 @@ async def transfer_xrp(source_exchange, source_name: str, dest_exchange, dest_na
     try:
         # Get deposit address
         log(f"   📍 Getting {dest_name} deposit address...", "DEBUG")
-        deposit_info = dest_exchange.fetch_deposit_address('XRP')
+        # Gemini requires network parameter
+        deposit_info = dest_exchange.fetch_deposit_address('XRP', {'network': 'XRP'})
         if hasattr(deposit_info, '__await__'):
             deposit_info = await deposit_info
         
