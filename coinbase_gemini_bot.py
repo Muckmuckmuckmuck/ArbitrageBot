@@ -338,7 +338,7 @@ class CoinbaseGeminiArbitrageBot:
                 
                 # Direction 1: Buy on Coinbase, sell on Gemini
                 # Only trade if Gemini price > Coinbase price (positive spread)
-                if spread_cb_to_gem_pct >= min_spread * 100:
+                if spread_cb_to_gem_pct > 0 and spread_cb_to_gem_pct >= min_spread * 100:
                     # Buy on Coinbase (cheaper), sell on Gemini (more expensive)
                     position_size = await self.balance_manager.get_adaptive_position_size(
                         symbol, spread_cb_to_gem_pct / 100, 0.01
@@ -348,6 +348,8 @@ class CoinbaseGeminiArbitrageBot:
                     estimated_profit = (spread_cb_to_gem * position_size) - \
                                      (coinbase_ask * position_size * (Config.EXCHANGE_FEES['coinbase']['maker'] + 
                                                                        Config.EXCHANGE_FEES['gemini']['maker']))
+                    
+                    self.logger.info(f"🔍 [{symbol}] CB→GEM: spread={spread_cb_to_gem_pct:.3f}%, pos=${position_size:.2f}, profit=${estimated_profit:.3f}, min=${Config.MIN_PROFIT_USD}")
                     
                     if estimated_profit >= Config.MIN_PROFIT_USD:
                         opportunities.append(TradeOpportunity(
@@ -365,7 +367,7 @@ class CoinbaseGeminiArbitrageBot:
                 
                 # Direction 2: Buy on Gemini, sell on Coinbase
                 # Only trade if Coinbase price > Gemini price (positive spread)
-                if spread_gem_to_cb_pct >= min_spread * 100:
+                if spread_gem_to_cb_pct > 0 and spread_gem_to_cb_pct >= min_spread * 100:
                     # Buy on Gemini (cheaper), sell on Coinbase (more expensive)
                     position_size = await self.balance_manager.get_adaptive_position_size(
                         symbol, spread_gem_to_cb_pct / 100, 0.01
@@ -375,6 +377,8 @@ class CoinbaseGeminiArbitrageBot:
                     estimated_profit = (spread_gem_to_cb * position_size) - \
                                      (gemini_ask * position_size * (Config.EXCHANGE_FEES['gemini']['maker'] + 
                                                                      Config.EXCHANGE_FEES['coinbase']['maker']))
+                    
+                    self.logger.info(f"🔍 [{symbol}] GEM→CB: spread={spread_gem_to_cb_pct:.3f}%, pos=${position_size:.2f}, profit=${estimated_profit:.3f}, min=${Config.MIN_PROFIT_USD}")
                     
                     if estimated_profit >= Config.MIN_PROFIT_USD:
                         opportunities.append(TradeOpportunity(
