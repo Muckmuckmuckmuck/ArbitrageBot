@@ -219,7 +219,7 @@ async def test_coinbase_to_gemini(cb, gem):
         # Buy on Coinbase
         log("", "")
         log("STEP 1/3: Buy XRP on Coinbase", "INFO")
-        if not await buy_xrp(cb, 'coinbase', 0.50, price):
+        if not await buy_xrp(cb, 'coinbase', 1.00, price):  # $1 minimum for Coinbase
             return False
         
         # Check how much we bought
@@ -293,7 +293,7 @@ async def test_gemini_to_coinbase(cb, gem):
         # Buy on Gemini
         log("", "")
         log("STEP 1/3: Buy XRP on Gemini", "INFO")
-        if not await buy_xrp(gem, 'gemini', 0.50, price):
+        if not await buy_xrp(gem, 'gemini', 1.00, price):  # $1 minimum for consistency
             return False
         
         # Check how much we bought
