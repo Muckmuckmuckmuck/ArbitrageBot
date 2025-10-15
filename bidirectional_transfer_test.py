@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-BI-DIRECTIONAL TRANSFER TEST v2.0
+BI-DIRECTIONAL TRANSFER TEST v2.1
 ----------------------------------
 This script tests transfers in BOTH directions:
-1. Buy $1.00 XRP on Coinbase → Transfer to Gemini → Sell on Gemini
-2. Buy $1.00 XRP on Gemini → Transfer to Coinbase → Sell on Coinbase
+1. Buy $2.00 XRP on Coinbase → Transfer to Gemini → Sell on Gemini
+2. Buy $2.00 XRP on Gemini → Transfer to Coinbase → Sell on Coinbase
 
 This validates the full arbitrage pipeline.
+(Using $2.00 to meet Coinbase's minimum order size requirement)
 """
 
 import asyncio
@@ -219,7 +220,7 @@ async def test_coinbase_to_gemini(cb, gem):
         # Buy on Coinbase
         log("", "")
         log("STEP 1/3: Buy XRP on Coinbase", "INFO")
-        if not await buy_xrp(cb, 'coinbase', 1.00, price):  # $1 minimum for Coinbase
+        if not await buy_xrp(cb, 'coinbase', 2.00, price):  # $2 minimum for Coinbase
             return False
         
         # Check how much we bought
@@ -293,7 +294,7 @@ async def test_gemini_to_coinbase(cb, gem):
         # Buy on Gemini
         log("", "")
         log("STEP 1/3: Buy XRP on Gemini", "INFO")
-        if not await buy_xrp(gem, 'gemini', 1.00, price):  # $1 minimum for consistency
+        if not await buy_xrp(gem, 'gemini', 2.00, price):  # $2 for consistency
             return False
         
         # Check how much we bought
