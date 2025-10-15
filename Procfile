@@ -1,2 +1,3 @@
-# Railway Procfile for Coinbase + Gemini Arbitrage Bot
-worker: python coinbase_gemini_bot.py
+# TEMPORARY: Running transfer test only
+# Original bot command backed up in Procfile.bot_backup
+worker: python mini_transfer_test.py
