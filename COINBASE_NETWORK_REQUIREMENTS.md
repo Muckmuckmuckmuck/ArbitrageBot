@@ -2,6 +2,15 @@
 
 ## 🎯 **CRITICAL: Network Information for Each Crypto**
 
+### **BRIDGE CRYPTO (For Transfers)**
+
+#### 0. **XRP (Ripple)**
+- **Network:** `XRP Ledger`
+- **Coinbase Parameter:** `{'network': 'XRP'}`
+- **Transfer Time:** ~3-5 minutes
+- **Fee:** FREE on Coinbase
+- **Notes:** XRP Ledger network, requires destination_tag for some exchanges
+
 ### **PRIMARY TIER (70% capital)**
 
 #### 1. **ZEC (Zcash)**
@@ -75,6 +84,14 @@
 
 ## 🔧 **API Implementation**
 
+### **For XRP (XRP Ledger):**
+```python
+withdraw_params = {
+    'network': 'XRP',
+    'destination_tag': tag  # Required for some exchanges
+}
+```
+
 ### **For ZEC (Zcash Network):**
 ```python
 withdraw_params = {
@@ -101,6 +118,7 @@ withdraw_params = {
 ## ⚠️ **CRITICAL WARNINGS**
 
 ### **1. Network Mismatch = Lost Funds**
+- **XRP on Ethereum network** = ❌ **FUNDS LOST**
 - **ZEC on Ethereum network** = ❌ **FUNDS LOST**
 - **BAT on Zcash network** = ❌ **FUNDS LOST**
 - **Always use correct network!**
@@ -119,19 +137,25 @@ withdraw_params = {
 
 ## 🧪 **Testing Strategy**
 
-### **Phase 1: Test ZEC (Safest)**
+### **Phase 1: Test XRP (Fastest)**
+```python
+# XRP uses XRP Ledger network
+withdraw_params = {'network': 'XRP', 'destination_tag': tag}
+```
+
+### **Phase 2: Test ZEC (Safest)**
 ```python
 # ZEC uses native Zcash network
 withdraw_params = {'network': 'ZEC'}
 ```
 
-### **Phase 2: Test ERC-20 (BAT)**
+### **Phase 3: Test ERC-20 (BAT)**
 ```python
 # BAT uses Ethereum network
 withdraw_params = {'network': 'ETH'}
 ```
 
-### **Phase 3: Test MOODENG**
+### **Phase 4: Test MOODENG**
 ```python
 # MOODENG - VERIFY NETWORK FIRST
 withdraw_params = {'network': 'ETH'}  # Likely, but verify
@@ -142,14 +166,16 @@ withdraw_params = {'network': 'ETH'}  # Likely, but verify
 ## 📋 **Whitelist Requirements**
 
 ### **On Coinbase:**
-1. **ZEC addresses** (Zcash network)
-2. **Ethereum addresses** (for BAT, COMP, QNT, AMP, INJ, API3, IMX)
-3. **MOODENG addresses** (verify network first)
+1. **XRP addresses** (XRP Ledger network)
+2. **ZEC addresses** (Zcash network)
+3. **Ethereum addresses** (for BAT, COMP, QNT, AMP, INJ, API3, IMX)
+4. **MOODENG addresses** (verify network first)
 
 ### **On Gemini:**
-1. **ZEC addresses** (Zcash network)
-2. **Ethereum addresses** (for ERC-20 tokens)
-3. **MOODENG addresses** (verify network first)
+1. **XRP addresses** (XRP Ledger network)
+2. **ZEC addresses** (Zcash network)
+3. **Ethereum addresses** (for ERC-20 tokens)
+4. **MOODENG addresses** (verify network first)
 
 ---
 
@@ -157,6 +183,7 @@ withdraw_params = {'network': 'ETH'}  # Likely, but verify
 
 | Crypto | Network | Parameter | Transfer Time | Fee |
 |--------|---------|-----------|---------------|-----|
+| XRP | XRP Ledger | `{'network': 'XRP'}` | ~3-5 min | FREE |
 | ZEC | Zcash | `{'network': 'ZEC'}` | ~10 min | FREE |
 | BAT | Ethereum | `{'network': 'ETH'}` | ~3-15 min | FREE |
 | COMP | Ethereum | `{'network': 'ETH'}` | ~3-15 min | FREE |
@@ -181,6 +208,7 @@ withdraw_params = {'network': 'ETH'}  # Likely, but verify
 
 ### **3. Whitelist Addresses**
 - Add addresses for each network type
+- XRP addresses (XRP Ledger network)
 - ZEC addresses (Zcash network)
 - Ethereum addresses (ERC-20 tokens)
 
