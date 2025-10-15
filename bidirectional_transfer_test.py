@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-BI-DIRECTIONAL TRANSFER TEST
------------------------------
+BI-DIRECTIONAL TRANSFER TEST v2.0
+----------------------------------
 This script tests transfers in BOTH directions:
-1. Buy XRP on Coinbase → Transfer to Gemini → Sell on Gemini
-2. Buy XRP on Gemini → Transfer to Coinbase → Sell on Coinbase
+1. Buy $1.00 XRP on Coinbase → Transfer to Gemini → Sell on Gemini
+2. Buy $1.00 XRP on Gemini → Transfer to Coinbase → Sell on Coinbase
 
 This validates the full arbitrage pipeline.
 """
