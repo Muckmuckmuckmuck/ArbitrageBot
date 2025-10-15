@@ -93,10 +93,13 @@ async def main():
         try:
             log(f"Placing market buy order for {xrp_amount:.4f} XRP...", "DEBUG")
             
-            # Coinbase v3 API: Use simple market buy with price
-            order = cb.create_market_buy_order(
+            # Coinbase requires price for market buy orders
+            order = cb.create_order(
                 symbol='XRP/USD',
-                amount=xrp_amount
+                type='market',
+                side='buy',
+                amount=xrp_amount,
+                price=price  # Required by Coinbase
             )
             if hasattr(order, '__await__'):
                 order = await order

@@ -1,3 +1,3 @@
-# TEMPORARY: Running transfer test only
+# TEMPORARY: Running bi-directional transfer test
 # Original bot command backed up in Procfile.bot_backup
-worker: python mini_transfer_test.py
+worker: python bidirectional_transfer_test.py
