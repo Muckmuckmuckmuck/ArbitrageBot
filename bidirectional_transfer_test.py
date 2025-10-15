@@ -147,9 +147,18 @@ async def transfer_xrp(source_exchange, source_name: str, dest_exchange, dest_na
         # Initiate withdrawal
         log(f"   💸 Initiating withdrawal from {source_name}...", "DEBUG")
         
-        withdraw_params = {'network': 'XRP'}
-        if tag:
-            withdraw_params['tag'] = tag
+        # Coinbase uses 'destination_tag', Gemini uses 'tag'
+        withdraw_params = {}
+        if source_name == 'coinbase':
+            withdraw_params['network'] = 'XRP'
+            if tag:
+                withdraw_params['destination_tag'] = tag  # Coinbase format
+        else:  # gemini
+            withdraw_params['network'] = 'XRP'
+            if tag:
+                withdraw_params['tag'] = tag  # Gemini format
+        
+        log(f"   Withdrawal params: {withdraw_params}", "DEBUG")
         
         withdrawal = source_exchange.withdraw(
             code='XRP',
