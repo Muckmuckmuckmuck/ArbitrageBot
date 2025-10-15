@@ -89,14 +89,14 @@ class SmartOrderPlacer:
             await self._cancel_order(exchange_id, order_id, symbol)
             
             return await self._fallback_market_order(
-                exchange_id, symbol, 'buy', amount
+                exchange_id, symbol, 'buy', amount, current_ask
             )
             
         except Exception as e:
             self.logger.error(f"❌ Smart buy failed: {e}")
             # Fallback to market order
             return await self._fallback_market_order(
-                exchange_id, symbol, 'buy', amount
+                exchange_id, symbol, 'buy', amount, current_ask
             )
     
     async def place_smart_sell(
@@ -152,14 +152,14 @@ class SmartOrderPlacer:
             await self._cancel_order(exchange_id, order_id, symbol)
             
             return await self._fallback_market_order(
-                exchange_id, symbol, 'sell', amount
+                exchange_id, symbol, 'sell', amount, current_bid
             )
             
         except Exception as e:
             self.logger.error(f"❌ Smart sell failed: {e}")
             # Fallback to market order
             return await self._fallback_market_order(
-                exchange_id, symbol, 'sell', amount
+                exchange_id, symbol, 'sell', amount, current_bid
             )
     
     async def _wait_for_fill(
@@ -221,18 +221,38 @@ class SmartOrderPlacer:
         exchange_id: str,
         symbol: str,
         side: str,
-        amount: float
+        amount: float,
+        current_price: Optional[float] = None
     ) -> Dict:
         """Fallback to market order if limit order fails"""
         self.logger.warning(f"Using market order (taker fees) as fallback")
         
-        order = await self.exchange_manager.create_order(
-            exchange_id=exchange_id,
-            symbol=symbol,
-            order_type='market',
-            side=side,
-            amount=amount
-        )
+        # For Coinbase market buy orders, CCXT requires createMarketBuyOrderRequiresPrice=False
+        # OR passing the cost in the 'amount' parameter
+        # We'll get the current price and pass the cost for buy orders on Coinbase
+        if exchange_id == 'coinbase' and side == 'buy' and current_price:
+            # Coinbase market buy orders expect the cost (quote currency amount)
+            cost = amount * current_price
+            self.logger.info(f"   Coinbase market buy: ${cost:.2f} worth of {symbol}")
+            
+            # Use the exchange's createMarketBuyOrderRequiresPrice workaround
+            order = await self.exchange_manager.create_order(
+                exchange_id=exchange_id,
+                symbol=symbol,
+                order_type='market',
+                side=side,
+                amount=amount,
+                price=current_price  # Pass price for Coinbase to calculate cost
+            )
+        else:
+            # Standard market order for other exchanges or sell orders
+            order = await self.exchange_manager.create_order(
+                exchange_id=exchange_id,
+                symbol=symbol,
+                order_type='market',
+                side=side,
+                amount=amount
+            )
         
         await asyncio.sleep(1)
         
