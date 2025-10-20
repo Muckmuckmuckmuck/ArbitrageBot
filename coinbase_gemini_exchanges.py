@@ -24,8 +24,8 @@ class CoinbaseGeminiExchangeManager:
         logger.info("Initializing Coinbase + Gemini exchanges...")
         
         try:
-            # Initialize Coinbase Advanced (formerly Coinbase Pro)
-            self.coinbase = ccxt.coinbasepro({
+            # Initialize Coinbase Advanced
+            self.coinbase = ccxt.coinbase({
                 'apiKey': Config.COINBASE_API_KEY,
                 'secret': Config.COINBASE_SECRET_KEY,
                 'password': Config.COINBASE_PASSPHRASE,
