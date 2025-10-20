@@ -614,14 +614,14 @@ RISK_MANAGEMENT = {
     
     # Position sizing
     'max_position_percent': 0.15,          # 15% max per position
-    'min_position_percent': 0.05,          # 5% min per position
-    'min_trade_size_usd': 10.0,           # Minimum $10 per trade
+    'min_position_percent': 0.02,          # 2% min per position (aggressive mode)
+    'min_trade_size_usd': 5.0,            # Minimum $5 per trade (aggressive mode)
     'max_trade_size_usd': None,           # No max (scales with balance)
-    'min_account_balance_usd': 10.0,      # Minimum $10 to operate (lowered from $20)
+    'min_account_balance_usd': 5.0,       # Minimum $5 to operate (aggressive mode)
     
     # Slippage protection
-    'max_slippage_percent': 0.003,        # 0.3% max slippage
-    'slippage_rejection_threshold': 0.003, # Reject if predicted slippage > 0.3%
+    'max_slippage_percent': 0.005,        # 0.5% max slippage (aggressive mode)
+    'slippage_rejection_threshold': 0.005, # Reject if predicted slippage > 0.5%
     
     # Performance tracking
     'min_sharpe_ratio': 1.0,              # Minimum Sharpe ratio
@@ -659,7 +659,7 @@ ORDER_TIMEOUT_SECONDS = 30          # 30 seconds for order to fill
 TRANSFER_TIMEOUT_SECONDS = 600      # 10 minutes for transfer to complete
 
 # Minimum profit threshold
-MIN_PROFIT_USD = 0.02              # Minimum $0.02 profit per trade (covers slippage)
+MIN_PROFIT_USD = 0.005             # Minimum $0.005 profit per trade (aggressive mode)
 
 # Dynamic spread adjustment
 DYNAMIC_SPREAD_ADJUSTMENT_PERCENT = 0.10  # Adjust spreads by 10%

@@ -94,12 +94,17 @@ class DynamicOrderManager:
         self.active_opportunities: Dict[str, OpportunityInfo] = {}
         self.order_history: List[OrderInfo] = []
         
-        # Configuration
-        self.max_order_age_minutes = 10  # Cancel orders older than 10 minutes
-        self.price_chase_increment = 0.001  # 0.1% price increment for chasing
-        self.max_price_chase_percent = 0.02  # Max 2% price chase
-        self.opportunity_timeout_minutes = 5  # Cancel opportunity after 5 minutes
-        self.retry_delay_seconds = [1, 3, 5, 10]  # Exponential backoff delays
+        # Configuration - AGGRESSIVE MODE
+        self.max_order_age_minutes = 5   # Cancel orders older than 5 minutes (aggressive)
+        self.price_chase_increment = 0.0005  # 0.05% price increment for chasing (more aggressive)
+        self.max_price_chase_percent = 0.01  # Max 1% price chase (more aggressive)
+        self.opportunity_timeout_minutes = 3  # Cancel opportunity after 3 minutes (aggressive)
+        self.retry_delay_seconds = [0.5, 1, 2, 5]  # Faster retry delays (aggressive)
+        
+        # Stuck position prevention
+        self.stuck_position_threshold_minutes = 2  # Consider stuck after 2 minutes
+        self.aggressive_price_chase = True  # Enable aggressive price chasing
+        self.auto_market_sell_stuck = True  # Auto market sell stuck positions
         
         # Monitoring
         self.last_cleanup = datetime.now()
