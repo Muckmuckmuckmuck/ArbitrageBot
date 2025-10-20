@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class USDUSDCConverter:
     """Handles automatic USD to USDC conversion"""
     
-    def __init__(self, exchange_manager: ExchangeManager):
+    def __init__(self, exchange_manager: CoinbaseGeminiExchangeManager):
         self.exchange_manager = exchange_manager
         self.conversion_fees = {
             'coinbase': 0.0,  # Free conversion on Coinbase

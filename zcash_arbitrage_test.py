@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Dict, Optional, Tuple
 
 # Import our modules
-from coinbase_gemini_exchanges import ExchangeManager
+from coinbase_gemini_exchanges import CoinbaseGeminiExchangeManager
 from coinbase_gemini_config import Config
 from usd_usdc_converter import USDUSDCConverter
 from dynamic_order_manager import DynamicOrderManager
@@ -36,7 +36,7 @@ class ZcashArbitrageTest:
     """Test Zcash arbitrage between Coinbase and Gemini"""
     
     def __init__(self):
-        self.exchange_manager = ExchangeManager()
+        self.exchange_manager = CoinbaseGeminiExchangeManager()
         self.usd_converter = USDUSDCConverter(self.exchange_manager)
         self.order_manager = DynamicOrderManager(
             self.exchange_manager.exchanges, 
@@ -155,7 +155,7 @@ class ZcashArbitrageTest:
             logger.info(f"   GEM→CB spread: {spread_gem_to_cb*100:.3f}%")
             
             # Determine best direction
-            if spread_cb_to_gem > 0.005:  # 0.5% minimum spread
+            if spread_cb_to_gem > 0.01:  # 1.0% minimum spread for test
                 logger.info(f"✅ Found opportunity: Buy on Coinbase, sell on Gemini")
                 return {
                     'direction': 'cb_to_gem',
@@ -166,7 +166,7 @@ class ZcashArbitrageTest:
                     'spread_percent': spread_cb_to_gem * 100,
                     'estimated_profit': self.test_amount_usd * spread_cb_to_gem
                 }
-            elif spread_gem_to_cb > 0.005:  # 0.5% minimum spread
+            elif spread_gem_to_cb > 0.01:  # 1.0% minimum spread for test
                 logger.info(f"✅ Found opportunity: Buy on Gemini, sell on Coinbase")
                 return {
                     'direction': 'gem_to_cb',
@@ -178,7 +178,7 @@ class ZcashArbitrageTest:
                     'estimated_profit': self.test_amount_usd * spread_gem_to_cb
                 }
             else:
-                logger.warning("⚠️ No profitable opportunity found (spread < 0.5%)")
+                logger.warning("⚠️ No profitable opportunity found (spread < 1.0%)")
                 return None
                 
         except Exception as e:
