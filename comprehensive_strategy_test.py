@@ -138,7 +138,7 @@ class ComprehensiveStrategyTest:
                 logger.info(f"   ✅ {exchange_name.upper()}: Loaded {len(markets)} markets")
                 
                 # Test fetch ticker
-                ticker = await exchange.fetch_ticker(self.test_symbol)
+                ticker = exchange.fetch_ticker(self.test_symbol)
                 if hasattr(ticker, '__await__'):
                     ticker = await ticker
                 
@@ -168,7 +168,7 @@ class ComprehensiveStrategyTest:
                 logger.info(f"   Testing {exchange_name.upper()} balance fetching...")
                 
                 # Test balance fetching
-                balance = await exchange.fetch_balance()
+                balance = exchange.fetch_balance()
                 if hasattr(balance, '__await__'):
                     balance = await balance
                 
@@ -180,7 +180,7 @@ class ComprehensiveStrategyTest:
                 # Test price fetching for multiple symbols
                 for symbol in ['XRP/USD', 'ZEC/USD', 'BAT/USD']:
                     try:
-                        ticker = await exchange.fetch_ticker(symbol)
+                        ticker = exchange.fetch_ticker(symbol)
                         if hasattr(ticker, '__await__'):
                             ticker = await ticker
                         
@@ -293,11 +293,11 @@ class ComprehensiveStrategyTest:
             gem_exchange = self.exchange_manager.exchanges['gemini']
             
             # Get initial balances
-            cb_balance = await cb_exchange.fetch_balance()
+            cb_balance = cb_exchange.fetch_balance()
             if hasattr(cb_balance, '__await__'):
                 cb_balance = await cb_balance
             
-            gem_balance = await gem_exchange.fetch_balance()
+            gem_balance = gem_exchange.fetch_balance()
             if hasattr(gem_balance, '__await__'):
                 gem_balance = await gem_balance
             
@@ -318,7 +318,7 @@ class ComprehensiveStrategyTest:
                 return
             
             # Get current XRP price
-            ticker = await cb_exchange.fetch_ticker(self.test_symbol)
+            ticker = cb_exchange.fetch_ticker(self.test_symbol)
             if hasattr(ticker, '__await__'):
                 ticker = await ticker
             
@@ -357,7 +357,7 @@ class ComprehensiveStrategyTest:
             await asyncio.sleep(5)
             
             # Check new balance
-            cb_balance_after = await cb_exchange.fetch_balance()
+            cb_balance_after = cb_exchange.fetch_balance()
             if hasattr(cb_balance_after, '__await__'):
                 cb_balance_after = await cb_balance_after
             
@@ -387,7 +387,7 @@ class ComprehensiveStrategyTest:
                 logger.info(f"   Gemini tag: {tag}")
             
             # Record Gemini balance before transfer
-            gem_balance_before_transfer = await gem_exchange.fetch_balance()
+            gem_balance_before_transfer = gem_exchange.fetch_balance()
             if hasattr(gem_balance_before_transfer, '__await__'):
                 gem_balance_before_transfer = await gem_balance_before_transfer
             
@@ -423,7 +423,7 @@ class ComprehensiveStrategyTest:
                 await asyncio.sleep(check_interval)
                 elapsed += check_interval
                 
-                gem_balance_now = await gem_exchange.fetch_balance()
+                gem_balance_now = gem_exchange.fetch_balance()
                 if hasattr(gem_balance_now, '__await__'):
                     gem_balance_now = await gem_balance_now
                 
@@ -446,7 +446,7 @@ class ComprehensiveStrategyTest:
             if transfer_success:
                 logger.info("   Testing sell on Gemini...")
                 
-                gem_xrp_final = await gem_exchange.fetch_balance()
+                gem_xrp_final = gem_exchange.fetch_balance()
                 if hasattr(gem_xrp_final, '__await__'):
                     gem_xrp_final = await gem_xrp_final
                 
@@ -454,7 +454,7 @@ class ComprehensiveStrategyTest:
                 
                 if xrp_to_sell > 0.001:  # More than 0.001 XRP
                     # Get current price
-                    gem_ticker = await gem_exchange.fetch_ticker(self.test_symbol)
+                    gem_ticker = gem_exchange.fetch_ticker(self.test_symbol)
                     if hasattr(gem_ticker, '__await__'):
                         gem_ticker = await gem_ticker
                     
