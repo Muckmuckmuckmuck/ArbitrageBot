@@ -119,7 +119,6 @@ CURRENCY_PAIRS = [
     'QNT/USDC',      # $1.97 profit, $17k volume
     
     # SECONDARY TIER (20% capital) - Good backup opportunities
-    'MOODENG/USDC',  # $0.62 profit, $102k volume
     'AMP/USD',       # $0.61 profit, $16k volume
     'AMP/USDC',      # $0.61 profit, $16k volume
     'INJ/USD',       # $0.21 profit, $26k volume
@@ -132,12 +131,13 @@ CURRENCY_PAIRS = [
     'IMX/USDC',      # $1.40 profit, $8k volume
 ]
 
-# Why these 17:
+# Why these 16:
 # - All profitable after 0.50% maker fees
 # - ZEC has massive $1.5M volume (safest)
 # - BAT/QNT have best profit/volume ratio
 # - All verified on BOTH Coinbase & Gemini
 # - Balanced risk: 70% safe, 20% moderate, 10% aggressive
+# - Removed MOODENG (network uncertainty)
 
 # ============================================================================
 # CRYPTO-SPECIFIC PARAMETERS
@@ -158,16 +158,6 @@ CURRENCY_PAIR_SPREADS = {
         'frequency': 0.30,        # 30%
         'category': 'Privacy',
         'liquidity_score': 0.9,   # Excellent volume
-    },
-    'MOODENG/USDC': {
-        'min_spread': 0.008,      # 0.8% (actual: 2.933%)
-        'safe_spread': 0.015,     # 1.5%
-        'max_spread': 0.040,      # 4.0%
-        'slippage': 0.00150,      # 0.15%
-        'transfer_time': 120,     # 2 min
-        'frequency': 0.25,        # 25%
-        'category': 'Meme',
-        'liquidity_score': 0.7,
     },
     'BAT/USD': {
         'min_spread': 0.008,      # 0.8% (actual: 3.511%)
@@ -589,8 +579,7 @@ BASE_POSITION_PERCENTAGES = {
     'QNT/USDC': 0.05,      # 5%  - $1.97 profit, $17k volume
     
     # SECONDARY TIER (20% capital) - Good backups
-    'MOODENG/USDC': 0.06,  # 6%  - $0.62 profit, $102k volume
-    'AMP/USD': 0.05,       # 5%  - $0.61 profit, $16k volume
+    'AMP/USD': 0.08,       # 8%  - $0.61 profit, $16k volume (increased from 5%)
     'AMP/USDC': 0.03,      # 3%  - $0.61 profit, $16k volume
     'INJ/USD': 0.03,       # 3%  - $0.21 profit, $26k volume
     'INJ/USDC': 0.03,      # 3%  - $0.21 profit, $26k volume
@@ -602,8 +591,9 @@ BASE_POSITION_PERCENTAGES = {
     'IMX/USDC': 0.01,      # 1%  - $1.40 profit, $8k volume
 }
 
-# Total: 100% across 17 cryptos (best from 146-pair scan)
+# Total: 100% across 16 cryptos (best from 146-pair scan)
 # Risk distribution: 70% safe (ZEC/BAT/COMP/QNT), 20% moderate, 10% aggressive
+# Removed MOODENG (network uncertainty)
 
 # Position sizing limits
 MAX_POSITION_PERCENT_PER_TRADE = 0.15  # 15% of total account value per trade
