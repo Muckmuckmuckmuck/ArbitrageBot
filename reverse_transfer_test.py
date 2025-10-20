@@ -120,13 +120,14 @@ class ReverseTransferTest:
             logger.info(f"   ZEC price: ${current_price:.2f}")
             logger.info(f"   Buying: {zec_amount:.6f} ZEC")
             
-            # Create market buy order
+            # Create limit buy order (Coinbase is in limit-only mode)
+            buy_price = current_price * 1.001  # Slightly above market to ensure fill
             order = coinbase.create_order(
                 symbol='ZEC/USD',
-                type='market',
+                type='limit',
                 side='buy',
                 amount=zec_amount,
-                price=current_price
+                price=buy_price
             )
             
             if hasattr(order, '__await__'):
