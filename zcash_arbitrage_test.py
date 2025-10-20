@@ -42,7 +42,7 @@ class ZcashArbitrageTest:
             self.exchange_manager.exchanges, 
             Config
         )
-        self.test_amount_usd = 10.0  # Test with $10
+        self.test_amount_usd = 4.0   # Test with $4 (available on Gemini)
         
     async def run_test(self) -> bool:
         """Run the complete Zcash arbitrage test"""
