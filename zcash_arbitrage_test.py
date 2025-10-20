@@ -81,16 +81,18 @@ class ZcashArbitrageTest:
         try:
             logger.info("🔧 Initializing exchanges...")
             
-            # Initialize Coinbase
-            coinbase = await self.exchange_manager.get_exchange('coinbase')
+            # Initialize the exchange manager first
+            await self.exchange_manager.initialize()
+            
+            # Verify both exchanges are available
+            coinbase = self.exchange_manager.get_exchange('coinbase')
             if not coinbase:
-                logger.error("❌ Failed to initialize Coinbase")
+                logger.error("❌ Failed to get Coinbase exchange")
                 return False
                 
-            # Initialize Gemini
-            gemini = await self.exchange_manager.get_exchange('gemini')
+            gemini = self.exchange_manager.get_exchange('gemini')
             if not gemini:
-                logger.error("❌ Failed to initialize Gemini")
+                logger.error("❌ Failed to get Gemini exchange")
                 return False
                 
             logger.info("✅ Both exchanges initialized successfully")
