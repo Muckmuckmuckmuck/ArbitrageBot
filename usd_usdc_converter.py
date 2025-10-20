@@ -6,7 +6,7 @@ Automatically converts USD to USDC when needed for trading
 import logging
 import asyncio
 from typing import Dict, Optional, Tuple
-from coinbase_gemini_exchanges import ExchangeManager
+from coinbase_gemini_exchanges import CoinbaseGeminiExchangeManager
 
 logger = logging.getLogger(__name__)
 

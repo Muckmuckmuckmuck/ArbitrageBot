@@ -150,8 +150,8 @@ CURRENCY_PAIRS = [
 CURRENCY_PAIR_SPREADS = {
     # TIER 1: PRIMARY PAIRS
     'ZEC/USD': {
-        'min_spread': 0.012,      # 1.2% (increased for profitability)
-        'safe_spread': 0.015,     # 1.5%
+        'min_spread': 0.006,      # 0.6% (test mode - just cover fees)
+        'safe_spread': 0.010,     # 1.0%
         'max_spread': 0.030,      # 3.0%
         'slippage': 0.00100,      # 0.1%
         'transfer_time': 180,     # 3 min
@@ -202,8 +202,8 @@ CURRENCY_PAIR_SPREADS = {
     
     # USDC PAIRS (same as USD pairs)
     'ZEC/USDC': {
-        'min_spread': 0.012,
-        'safe_spread': 0.015,
+        'min_spread': 0.006,
+        'safe_spread': 0.010,
         'max_spread': 0.030,
         'slippage': 0.00100,
         'transfer_time': 180,

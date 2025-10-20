@@ -155,7 +155,7 @@ class ZcashArbitrageTest:
             logger.info(f"   GEM→CB spread: {spread_gem_to_cb*100:.3f}%")
             
             # Determine best direction
-            if spread_cb_to_gem > 0.01:  # 1.0% minimum spread for test
+            if spread_cb_to_gem > 0.005:  # 0.5% minimum spread for test (just cover fees)
                 logger.info(f"✅ Found opportunity: Buy on Coinbase, sell on Gemini")
                 return {
                     'direction': 'cb_to_gem',
@@ -166,7 +166,7 @@ class ZcashArbitrageTest:
                     'spread_percent': spread_cb_to_gem * 100,
                     'estimated_profit': self.test_amount_usd * spread_cb_to_gem
                 }
-            elif spread_gem_to_cb > 0.01:  # 1.0% minimum spread for test
+            elif spread_gem_to_cb > 0.005:  # 0.5% minimum spread for test (just cover fees)
                 logger.info(f"✅ Found opportunity: Buy on Gemini, sell on Coinbase")
                 return {
                     'direction': 'gem_to_cb',
@@ -178,7 +178,7 @@ class ZcashArbitrageTest:
                     'estimated_profit': self.test_amount_usd * spread_gem_to_cb
                 }
             else:
-                logger.warning("⚠️ No profitable opportunity found (spread < 1.0%)")
+                logger.warning("⚠️ No opportunity found (spread < 0.5%)")
                 return None
                 
         except Exception as e:
