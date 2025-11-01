@@ -92,6 +92,12 @@ class ReverseTransferTest:
             cb_usd = cb_balance.get('free', {}).get('USD', 0)
             logger.info(f"   Coinbase USD: ${cb_usd:.2f}")
             
+            # Safety check: Exit if funds are too low to prevent repeated failures
+            if cb_usd < self.test_amount_usd * 2:
+                logger.error(f"❌ Insufficient Coinbase funds: ${cb_usd:.2f} < ${self.test_amount_usd * 2}")
+                logger.error("🛑 Stopping test to prevent fund drainage. Please add funds or fix the transfer issue.")
+                return False
+            
             if cb_usd < self.test_amount_usd:
                 logger.error(f"❌ Insufficient Coinbase funds: ${cb_usd:.2f} < ${self.test_amount_usd}")
                 return False
@@ -163,50 +169,72 @@ class ReverseTransferTest:
             return False
             
     async def _transfer_zec_to_gemini(self) -> bool:
-        """Transfer ZEC from Coinbase to Gemini"""
-        try:
-            logger.info(f"🚚 Transferring {self.zec_amount:.6f} ZEC from Coinbase to Gemini...")
-            
-            # Get Gemini deposit address
-            gemini = self.exchange_manager.get_exchange('gemini')
-            deposit_address = gemini.fetch_deposit_address('ZEC', {'network': 'ZEC'})
-            if hasattr(deposit_address, '__await__'):
-                deposit_address = await deposit_address
+        """Transfer ZEC from Coinbase to Gemini with retry logic"""
+        max_retries = 3
+        retry_delays = [5, 15, 30]  # Exponential backoff in seconds
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"🚚 Transferring {self.zec_amount:.6f} ZEC from Coinbase to Gemini... (Attempt {attempt + 1}/{max_retries})")
                 
-            address = deposit_address['address']
-            logger.info(f"   Gemini address: {address}")
-            
-            # Withdraw from Coinbase
-            coinbase = self.exchange_manager.get_exchange('coinbase')
-            withdrawal = coinbase.withdraw('ZEC', self.zec_amount, address, None, {'network': 'ZEC'})
-            if hasattr(withdrawal, '__await__'):
-                withdrawal = await withdrawal
+                # Get Gemini deposit address
+                gemini = self.exchange_manager.get_exchange('gemini')
+                deposit_address = gemini.fetch_deposit_address('ZEC', {'network': 'ZEC'})
+                if hasattr(deposit_address, '__await__'):
+                    deposit_address = await deposit_address
+                    
+                address = deposit_address['address']
+                logger.info(f"   Gemini address: {address}")
                 
-            withdrawal_id = withdrawal.get('id', 'unknown')
-            logger.info(f"✅ Withdrawal initiated: {withdrawal_id}")
-            
-            # Wait for transfer
-            logger.info("⏳ Waiting for transfer to complete...")
-            await asyncio.sleep(30)  # Wait 30 seconds
-            
-            # Check if ZEC arrived on Gemini
-            gemini_balance = gemini.fetch_balance()
-            if hasattr(gemini_balance, '__await__'):
-                gemini_balance = await gemini_balance
+                # Withdraw from Coinbase
+                coinbase = self.exchange_manager.get_exchange('coinbase')
+                withdrawal = coinbase.withdraw('ZEC', self.zec_amount, address, None, {'network': 'ZEC'})
+                if hasattr(withdrawal, '__await__'):
+                    withdrawal = await withdrawal
+                    
+                withdrawal_id = withdrawal.get('id', 'unknown')
+                logger.info(f"✅ Withdrawal initiated: {withdrawal_id}")
                 
-            new_gemini_zec = gemini_balance.get('free', {}).get('ZEC', 0)
-            logger.info(f"   New Gemini ZEC: {new_gemini_zec:.6f}")
-            
-            if new_gemini_zec >= self.zec_amount * 0.99:
-                logger.info("✅ Transfer completed successfully!")
-                return True
-            else:
-                logger.warning("⚠️ Transfer may not have completed yet, continuing...")
-                return True  # Continue with test
+                # Wait for transfer
+                logger.info("⏳ Waiting for transfer to complete...")
+                await asyncio.sleep(30)  # Wait 30 seconds
                 
-        except Exception as e:
-            logger.error(f"❌ Transfer failed: {e}")
-            return False
+                # Check if ZEC arrived on Gemini
+                gemini_balance = gemini.fetch_balance()
+                if hasattr(gemini_balance, '__await__'):
+                    gemini_balance = await gemini_balance
+                    
+                new_gemini_zec = gemini_balance.get('free', {}).get('ZEC', 0)
+                logger.info(f"   New Gemini ZEC: {new_gemini_zec:.6f}")
+                
+                if new_gemini_zec >= self.zec_amount * 0.99:
+                    logger.info("✅ Transfer completed successfully!")
+                    return True
+                else:
+                    logger.warning("⚠️ Transfer may not have completed yet, continuing...")
+                    return True  # Continue with test
+                    
+            except Exception as e:
+                error_str = str(e)
+                logger.warning(f"⚠️ Transfer attempt {attempt + 1} failed: {error_str}")
+                
+                # Check if it's a Coinbase internal server error
+                if 'internal_server_error' in error_str or 'internal error' in error_str.lower():
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delays[attempt]
+                        logger.info(f"⏳ Coinbase server error detected. Waiting {wait_time}s before retry...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"❌ Coinbase withdrawal failed after {max_retries} attempts with internal server errors.")
+                        logger.error("💡 This appears to be a Coinbase server-side issue. Please contact Coinbase support.")
+                        return False
+                else:
+                    # Other errors - don't retry
+                    logger.error(f"❌ Transfer failed with non-retryable error: {e}")
+                    return False
+        
+        return False
             
     async def _sell_zec_on_gemini(self) -> bool:
         """Sell ZEC on Gemini"""
@@ -277,16 +305,26 @@ class ReverseTransferTest:
 
 async def main():
     """Main test function"""
-    test = ReverseTransferTest()
-    success = await test.run_test()
-    
-    if success:
-        logger.info("🎉 Reverse Transfer test completed successfully!")
-        return 0
-    else:
-        logger.error("💥 Reverse Transfer test failed!")
+    try:
+        test = ReverseTransferTest()
+        success = await test.run_test()
+        
+        if success:
+            logger.info("🎉 Reverse Transfer test completed successfully!")
+            return 0
+        else:
+            logger.error("💥 Reverse Transfer test failed!")
+            logger.info("⏸️  Test completed. Exiting gracefully to prevent auto-restart.")
+            return 1
+            
+    except KeyboardInterrupt:
+        logger.info("🛑 Test interrupted by user")
+        return 130
+    except Exception as e:
+        logger.error(f"💥 Unexpected error: {e}")
         return 1
 
 if __name__ == "__main__":
     exit_code = asyncio.run(main())
+    logger.info(f"👋 Exiting with code {exit_code}")
     exit(exit_code)
