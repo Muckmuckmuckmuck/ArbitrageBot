@@ -4,10 +4,10 @@ API3 Bidirectional Transfer Test
 =================================
 
 Complete test of API3 transfers in both directions:
-1. Buy API3 on Gemini
-2. Buy API3 on Coinbase
-3. Transfer API3 from Gemini → Coinbase
-4. Transfer API3 from Coinbase → Gemini
+1. Check existing API3 on Gemini
+2. Transfer API3 from Gemini → Coinbase
+3. Verify transfer arrival on Coinbase
+4. Transfer API3 from Coinbase → Gemini back
 
 Uses ONLY proven patterns that we know work.
 Completely documents what works and what doesn't.
@@ -44,10 +44,13 @@ class API3BidirectionalTransferTest:
         
         # Test results documentation
         self.results = {
-            'buy_gemini': {'status': 'pending', 'details': {}},
             'transfer_gemini_to_coinbase': {'status': 'pending', 'details': {}},
             'transfer_coinbase_to_gemini': {'status': 'pending', 'details': {}},
         }
+        
+        # Track amounts
+        self.gemini_api3_available = 0.0
+        self.coinbase_api3_to_send = 0.0
         
     async def run_test(self) -> bool:
         """Run complete bidirectional transfer test"""
@@ -57,7 +60,7 @@ class API3BidirectionalTransferTest:
             logger.info("=" * 60)
             logger.info(f"Crypto: {self.test_crypto}")
             logger.info(f"Network: {self.network} (Ethereum ERC-20)")
-            logger.info(f"Test Amount: ${self.test_amount_usd} per purchase")
+            logger.info("Using existing API3 on Gemini (no purchase needed)")
             logger.info("=" * 60)
             
             # Step 1: Initialize exchanges (PROVEN WORKING)
@@ -65,38 +68,32 @@ class API3BidirectionalTransferTest:
             if not await self._initialize_exchanges():
                 return False
                 
-            # Step 2: Check initial balances
+            # Step 2: Check initial balances and verify we have API3
             logger.info("\n📋 STEP 2: Check Initial Balances")
             if not await self._check_initial_balances():
                 return False
                 
-            # Step 3: Buy API3 on Gemini only (PROVEN WORKING - limit orders)
-            logger.info("\n📋 STEP 3: Buy API3 on Gemini")
-            if not await self._buy_api3_on_gemini():
-                logger.error("❌ Failed to buy API3 on Gemini - cannot continue")
-                return False
-                
-            # Step 4: Forward transfer (Gemini → Coinbase)
-            logger.info("\n📋 STEP 4: Forward Transfer (Gemini → Coinbase)")
+            # Step 3: Forward transfer (Gemini → Coinbase)
+            logger.info("\n📋 STEP 3: Forward Transfer (Gemini → Coinbase)")
             if not await self._transfer_gemini_to_coinbase():
                 logger.error("❌ Forward transfer failed")
                 self._print_results()
                 return False
                 
-            # Step 5: Wait for forward transfer to settle and verify
+            # Step 4: Wait for forward transfer to settle and verify
             logger.info("\n⏳ Waiting 90 seconds for forward transfer to settle...")
             logger.info("   (ERC-20 transfers typically take 1-5 minutes)")
             await asyncio.sleep(90)
             
-            # Step 6: Verify forward transfer and get amount that arrived
-            logger.info("\n📋 STEP 5: Verify Forward Transfer")
+            # Step 5: Verify forward transfer and get amount that arrived
+            logger.info("\n📋 STEP 4: Verify Forward Transfer")
             if not await self._verify_forward_transfer():
                 logger.error("❌ Forward transfer verification failed")
                 self._print_results()
                 return False
                 
-            # Step 7: Reverse transfer (Coinbase → Gemini) - use the amount that arrived
-            logger.info("\n📋 STEP 6: Reverse Transfer (Coinbase → Gemini)")
+            # Step 6: Reverse transfer (Coinbase → Gemini) - use the amount that arrived
+            logger.info("\n📋 STEP 5: Reverse Transfer (Coinbase → Gemini)")
             if not await self._transfer_coinbase_to_gemini():
                 logger.error("❌ Reverse transfer failed")
                 self._print_results()
@@ -116,8 +113,7 @@ class API3BidirectionalTransferTest:
             logger.info("=" * 60)
             
             # Determine overall success
-            if (self.results['buy_gemini']['status'] == 'success' and
-                self.results['transfer_gemini_to_coinbase']['status'] == 'success' and
+            if (self.results['transfer_gemini_to_coinbase']['status'] == 'success' and
                 self.results['transfer_coinbase_to_gemini']['status'] == 'success'):
                 logger.info("\n🎉 COMPLETE SUCCESS - All operations passed!")
                 return True
@@ -174,13 +170,21 @@ class API3BidirectionalTransferTest:
             self.initial_coinbase_usd = coinbase_usd
             self.initial_coinbase_api3 = coinbase_api3
             
-            # Check if we have enough USD on Gemini (only need to buy on Gemini)
-            if gemini_usd < self.test_amount_usd:
-                logger.error(f"❌ Insufficient USD on Gemini: ${gemini_usd:.2f} < ${self.test_amount_usd}")
-                logger.error("💡 Need at least $5 USD on Gemini to buy API3")
+            # Check if we have API3 on Gemini to transfer
+            self.gemini_api3_available = gemini_api3
+            
+            if gemini_api3 < 0.01:  # Need at least 0.01 API3 for test
+                logger.error(f"❌ Insufficient API3 on Gemini: {gemini_api3:.6f} < 0.01")
+                logger.error("💡 Need at least 0.01 API3 on Gemini to transfer")
                 return False
                 
-            logger.info("✅ Sufficient balance on Gemini (Coinbase will receive transfer)")
+            # Use a small amount for test (about 5% of available, minimum 0.1 API3)
+            transfer_amount = max(0.1, gemini_api3 * 0.05)
+            self.gemini_api3_available = transfer_amount
+            
+            logger.info(f"✅ API3 available on Gemini: {gemini_api3:.6f}")
+            logger.info(f"   Will transfer: {transfer_amount:.6f} API3")
+            logger.info("   (Coinbase will receive transfer)")
             return True
             
         except Exception as e:
@@ -365,22 +369,28 @@ class API3BidirectionalTransferTest:
             try:
                 logger.info(f"🚚 Transferring API3 from Gemini to Coinbase... (Attempt {attempt + 1}/{max_retries})")
                 
-                # Get Coinbase deposit address (PROVEN WORKING)
+                # Get Coinbase deposit address (FIXED: Handle None properly)
                 coinbase = self.exchange_manager.get_exchange('coinbase')
                 deposit_address = coinbase.fetch_deposit_address(self.test_crypto, {'network': self.network})
                 if hasattr(deposit_address, '__await__'):
                     deposit_address = await deposit_address
                     
+                if deposit_address is None or 'address' not in deposit_address:
+                    raise ValueError(f"Failed to get deposit address from Coinbase: {deposit_address}")
+                    
                 address = deposit_address['address']
+                tag = deposit_address.get('tag', None)
                 logger.info(f"   Coinbase address: {address}")
+                if tag:
+                    logger.info(f"   Coinbase tag: {tag}")
                 
                 # Withdraw from Gemini (PROVEN WORKING PATTERN)
                 gemini = self.exchange_manager.get_exchange('gemini')
                 withdrawal = gemini.withdraw(
                     self.test_crypto,
-                    self.gemini_api3_bought,
+                    self.gemini_api3_available,
                     address,
-                    None,
+                    tag,
                     {'network': self.network}
                 )
                 if hasattr(withdrawal, '__await__'):
@@ -397,7 +407,7 @@ class API3BidirectionalTransferTest:
                     'status': 'success',
                     'details': {
                         'withdrawal_id': withdrawal_id,
-                        'amount': self.gemini_api3_bought,
+                        'amount': self.gemini_api3_available,
                         'destination_address': address,
                         'network': self.network
                     }
@@ -451,25 +461,31 @@ class API3BidirectionalTransferTest:
             try:
                 logger.info(f"🚚 Transferring API3 from Coinbase to Gemini... (Attempt {attempt + 1}/{max_retries})")
                 
-                # Get Gemini deposit address (PROVEN WORKING)
+                # Get Gemini deposit address (FIXED: Handle None properly)
                 gemini = self.exchange_manager.get_exchange('gemini')
                 deposit_address = gemini.fetch_deposit_address(self.test_crypto, {'network': self.network})
                 if hasattr(deposit_address, '__await__'):
                     deposit_address = await deposit_address
                     
+                if deposit_address is None or 'address' not in deposit_address:
+                    raise ValueError(f"Failed to get deposit address from Gemini: {deposit_address}")
+                    
                 address = deposit_address['address']
+                tag = deposit_address.get('tag', None)
                 logger.info(f"   Gemini address: {address}")
+                if tag:
+                    logger.info(f"   Gemini tag: {tag}")
                 
                 # Withdraw from Coinbase (PROVEN WORKING PATTERN)
                 # Use the amount that arrived from Gemini (may be less due to fees)
-                amount_to_send = getattr(self, 'coinbase_api3_to_send', self.gemini_api3_bought)
+                amount_to_send = getattr(self, 'coinbase_api3_to_send', self.gemini_api3_available)
                 
                 coinbase = self.exchange_manager.get_exchange('coinbase')
                 withdrawal = coinbase.withdraw(
                     self.test_crypto,
                     amount_to_send,
                     address,
-                    None,
+                    tag,
                     {'network': self.network}
                 )
                 if hasattr(withdrawal, '__await__'):
@@ -550,7 +566,7 @@ class API3BidirectionalTransferTest:
             
             logger.info(f"   Initial Coinbase API3: {self.initial_coinbase_api3:.6f}")
             logger.info(f"   Current Coinbase API3: {new_coinbase_api3:.6f}")
-            logger.info(f"   Amount sent: {self.gemini_api3_bought:.6f}")
+            logger.info(f"   Amount sent: {self.gemini_api3_available:.6f}")
             
             # Calculate amount that arrived (may be less due to network fees)
             api3_arrived = new_coinbase_api3 - self.initial_coinbase_api3
@@ -561,7 +577,7 @@ class API3BidirectionalTransferTest:
                 # Store the amount that arrived for reverse transfer
                 self.coinbase_api3_to_send = api3_arrived
                 
-                if api3_arrived >= self.gemini_api3_bought * 0.9:  # At least 90% arrived (accounting for fees)
+                if api3_arrived >= self.gemini_api3_available * 0.9:  # At least 90% arrived (accounting for fees)
                     logger.info("✅ Forward transfer verified - sufficient API3 arrived!")
                     return True
                 else:
@@ -609,12 +625,12 @@ class API3BidirectionalTransferTest:
             
             logger.info(f"   Initial Gemini API3: {self.initial_gemini_api3:.6f}")
             logger.info(f"   Current Gemini API3: {new_gemini_api3:.6f}")
-            logger.info(f"   Expected increase: {self.coinbase_api3_bought:.6f}")
+            logger.info(f"   Expected increase: {getattr(self, 'coinbase_api3_to_send', 0):.6f}")
             
-            expected_api3 = self.initial_gemini_api3 - self.gemini_api3_bought + self.coinbase_api3_bought
+            expected_api3 = self.initial_gemini_api3 - self.gemini_api3_available + getattr(self, 'coinbase_api3_to_send', 0)
             difference = new_gemini_api3 - expected_api3
             
-            if abs(difference) < self.coinbase_api3_bought * 0.1:  # Within 10% tolerance
+            if abs(difference) < getattr(self, 'coinbase_api3_to_send', 0) * 0.1:  # Within 10% tolerance
                 logger.info("✅ Reverse transfer verified - API3 arrived on Gemini!")
                 return True
             else:
@@ -632,21 +648,8 @@ class API3BidirectionalTransferTest:
         logger.info("📊 COMPLETE TEST RESULTS DOCUMENTATION")
         logger.info("=" * 60)
         
-        # Buy Gemini
-        logger.info("\n1. BUY API3 ON GEMINI:")
-        logger.info(f"   Status: {self.results['buy_gemini']['status'].upper()}")
-        if self.results['buy_gemini']['status'] == 'success':
-            details = self.results['buy_gemini']['details']
-            logger.info(f"   ✅ Order ID: {details.get('order_id', 'N/A')}")
-            logger.info(f"   ✅ Amount: {details.get('amount', 0):.6f} API3")
-            logger.info(f"   ✅ Price: ${details.get('price', 0):.4f}")
-            logger.info(f"   ✅ Total Cost: ${details.get('total_cost', 0):.4f}")
-            logger.info("   ✅ WORKING: Limit orders work perfectly on Gemini")
-        else:
-            logger.info(f"   ❌ Error: {self.results['buy_gemini']['details']}")
-            
         # Forward Transfer
-        logger.info("\n2. TRANSFER GEMINI → COINBASE:")
+        logger.info("\n1. TRANSFER GEMINI → COINBASE:")
         logger.info(f"   Status: {self.results['transfer_gemini_to_coinbase']['status'].upper()}")
         if self.results['transfer_gemini_to_coinbase']['status'] == 'success':
             details = self.results['transfer_gemini_to_coinbase']['details']
@@ -669,7 +672,7 @@ class API3BidirectionalTransferTest:
             logger.info(f"   ❌ Error: {self.results['transfer_gemini_to_coinbase']['details']}")
             
         # Reverse Transfer
-        logger.info("\n3. TRANSFER COINBASE → GEMINI (BACK):")
+        logger.info("\n2. TRANSFER COINBASE → GEMINI (BACK):")
         logger.info(f"   Status: {self.results['transfer_coinbase_to_gemini']['status'].upper()}")
         if self.results['transfer_coinbase_to_gemini']['status'] == 'success':
             details = self.results['transfer_coinbase_to_gemini']['details']
@@ -696,11 +699,6 @@ class API3BidirectionalTransferTest:
         logger.info("📝 SUMMARY OF WHAT WORKS / DOESN'T WORK:")
         logger.info("=" * 60)
         
-        if self.results['buy_gemini']['status'] == 'success':
-            logger.info("✅ BUYING on Gemini: WORKING (limit orders)")
-        else:
-            logger.info("❌ BUYING on Gemini: NOT WORKING")
-            
         if self.results['transfer_gemini_to_coinbase']['status'] == 'success':
             logger.info("✅ GEMINI → COINBASE transfer: WORKING (API call succeeds)")
         else:
