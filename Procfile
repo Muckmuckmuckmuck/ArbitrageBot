@@ -1,4 +1,5 @@
-# COMPREHENSIVE STRATEGY TEST
-# This tests all components of our arbitrage strategy
+# BIDIRECTIONAL TRANSFER TEST
+# Tests SOL transfers in both directions: Gemini→Coinbase and Coinbase→Gemini
+# This is ONLY a test - NOT the trading bot
 # Original bot command backed up in Procfile.bot_backup
-worker: python reverse_transfer_test.py
+worker: python bidirectional_transfer_test.py
