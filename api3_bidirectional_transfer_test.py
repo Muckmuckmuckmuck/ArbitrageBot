@@ -369,14 +369,45 @@ class API3BidirectionalTransferTest:
             try:
                 logger.info(f"🚚 Transferring API3 from Gemini to Coinbase... (Attempt {attempt + 1}/{max_retries})")
                 
-                # Get Coinbase deposit address (FIXED: Handle None properly)
+                # Get Coinbase deposit address (FIXED: Try multiple methods)
+                deposit_address = None
                 coinbase = self.exchange_manager.get_exchange('coinbase')
-                deposit_address = coinbase.fetch_deposit_address(self.test_crypto, {'network': self.network})
-                if hasattr(deposit_address, '__await__'):
-                    deposit_address = await deposit_address
+                
+                # Try 1: Exchange manager method (without network)
+                try:
+                    deposit_address = await self.exchange_manager.fetch_deposit_address('coinbase', self.test_crypto)
+                    logger.info(f"✅ Got deposit address via exchange manager")
+                except Exception as e:
+                    logger.warning(f"Exchange manager method failed: {e}")
+                
+                # Try 2: Direct call without network parameter
+                if deposit_address is None or (isinstance(deposit_address, dict) and 'address' not in deposit_address):
+                    try:
+                        deposit_address = coinbase.fetch_deposit_address(self.test_crypto)
+                        if hasattr(deposit_address, '__await__'):
+                            deposit_address = await deposit_address
+                        logger.info(f"✅ Got deposit address via direct call (no network)")
+                    except Exception as e:
+                        logger.warning(f"Direct call without network failed: {e}")
+                
+                # Try 3: Direct call with network parameter
+                if deposit_address is None or (isinstance(deposit_address, dict) and 'address' not in deposit_address):
+                    try:
+                        deposit_address = coinbase.fetch_deposit_address(self.test_crypto, {'network': self.network})
+                        if hasattr(deposit_address, '__await__'):
+                            deposit_address = await deposit_address
+                        logger.info(f"✅ Got deposit address via direct call (with network)")
+                    except Exception as e:
+                        logger.warning(f"Direct call with network failed: {e}")
                     
-                if deposit_address is None or 'address' not in deposit_address:
-                    raise ValueError(f"Failed to get deposit address from Coinbase: {deposit_address}")
+                if deposit_address is None or (isinstance(deposit_address, dict) and 'address' not in deposit_address):
+                    # If all methods failed, Coinbase may need deposit address created
+                    logger.error(f"❌ All methods failed to get {self.test_crypto} deposit address from Coinbase")
+                    logger.error("💡 Coinbase returned None - this may require:")
+                    logger.error("   1. Enabling deposit addresses for API3 in Coinbase UI")
+                    logger.error("   2. Generating a new deposit address for API3")
+                    logger.error("   3. Checking if API3 deposits are enabled on your account")
+                    raise ValueError(f"Failed to get deposit address from Coinbase after all attempts: {deposit_address}")
                     
                 address = deposit_address['address']
                 tag = deposit_address.get('tag', None)
@@ -461,13 +492,20 @@ class API3BidirectionalTransferTest:
             try:
                 logger.info(f"🚚 Transferring API3 from Coinbase to Gemini... (Attempt {attempt + 1}/{max_retries})")
                 
-                # Get Gemini deposit address (FIXED: Handle None properly)
-                gemini = self.exchange_manager.get_exchange('gemini')
-                deposit_address = gemini.fetch_deposit_address(self.test_crypto, {'network': self.network})
-                if hasattr(deposit_address, '__await__'):
-                    deposit_address = await deposit_address
+                # Get Gemini deposit address (FIXED: Use exchange manager method)
+                try:
+                    deposit_address = await self.exchange_manager.fetch_deposit_address('gemini', self.test_crypto)
+                except Exception as e:
+                    logger.error(f"Error fetching deposit address: {e}")
+                    # Try direct call with network parameter as fallback
+                    gemini = self.exchange_manager.get_exchange('gemini')
+                    deposit_address = gemini.fetch_deposit_address(self.test_crypto, {'network': self.network})
+                    if hasattr(deposit_address, '__await__'):
+                        deposit_address = await deposit_address
                     
                 if deposit_address is None or 'address' not in deposit_address:
+                    logger.error(f"❌ Gemini returned None for {self.test_crypto} deposit address")
+                    logger.error("💡 This may require enabling/generating deposit address on Gemini first")
                     raise ValueError(f"Failed to get deposit address from Gemini: {deposit_address}")
                     
                 address = deposit_address['address']
