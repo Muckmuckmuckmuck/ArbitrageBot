@@ -1,0 +1,79 @@
+Subject: API Withdrawal Issues - Internal Server Errors & Address Book Requirements
+
+Dear Coinbase Support Team,
+
+I am experiencing issues with cryptocurrency withdrawals via the Coinbase API and would appreciate your assistance in resolving them.
+
+ACCOUNT INFORMATION:
+- Account Type: [Your Account Type]
+- API Access: Coinbase Advanced Trade API / Coinbase Prime API
+- API Permissions: Currently have wallet permissions enabled
+
+ISSUE 1: INTERNAL SERVER ERRORS ON WITHDRAWALS
+
+When attempting to withdraw cryptocurrency (specifically ERC-20 tokens like API3) via the API, I am receiving internal_server_error responses:
+
+{
+  "errors": [
+    {
+      "id": "internal_server_error",
+      "message": "An internal error has occurred."
+    }
+  ]
+}
+
+This occurs when attempting to withdraw API3 (ERC-20 token on Ethereum network) using the withdrawal API endpoint. The withdrawal request is being rejected immediately with a server error, and this happens consistently across multiple attempts with retry logic, regardless of time of day or withdrawal amount.
+
+I have verified the following:
+- Account has sufficient balance for the withdrawal
+- API key has withdrawal permissions enabled
+- Withdrawal addresses are properly allowlisted in my Address Book
+- Network parameters are correct (Ethereum for ERC-20 tokens)
+- API credentials are valid and authenticated properly
+
+ISSUE 2: ADDRESS BOOK VS API DEPOSIT ADDRESS DISCREPANCY
+
+I have noticed a discrepancy between addresses:
+
+1. My Address Book shows API3 address: 0xf417Dfe4f978d8DbcBD511B8a6F90e2140B65E40
+2. API fetch_deposit_address returns: 0xa13EdA5E3bD538499C1C1e0a8bc8e3eB8161a40E
+
+These are different addresses. I need clarification on:
+- Which address should I use for withdrawals?
+- Are deposit addresses and withdrawal addresses different in Coinbase?
+- Is Address Book allowlisting required for API withdrawals, and if so, are there additional approval steps beyond adding addresses?
+
+TECHNICAL DETAILS:
+
+I am using the CCXT library for API access and following Coinbase API v2/v3 documentation. My withdrawal request format follows this structure:
+
+{
+  "currency": "API3",
+  "amount": "<amount>",
+  "crypto_address": "<destination_address>",
+  "network": "ETH"
+}
+
+The API consistently returns the internal_server_error response shown above.
+
+WHAT I NEED:
+
+1. Clarification on the internal server error: Is this a known issue? Are there account restrictions preventing withdrawals? Is there a different endpoint or method I should use?
+
+2. Address Book / Allowlist guidance: Which address should I use for withdrawals? Do I need to take any action beyond adding addresses to the Address Book? Are there any approval workflows required?
+
+3. Account Settings: Are there any account settings I need to enable for API withdrawals? Do I need special permissions or account verification beyond what I currently have?
+
+ADDITIONAL CONTEXT:
+
+I am building an automated trading system that requires reliable bidirectional cryptocurrency transfers between exchanges. The ability to withdraw via API is critical for this functionality to work properly.
+
+I am available to provide any additional information, transaction IDs, API request details, or perform additional tests as needed to help resolve these issues.
+
+Thank you for your time and assistance.
+
+Best regards,
+[Your Name]
+[Your Email]
+[Your Phone Number (Optional)]
+
