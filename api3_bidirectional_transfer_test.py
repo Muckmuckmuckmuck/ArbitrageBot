@@ -415,17 +415,15 @@ class API3BidirectionalTransferTest:
                 if tag:
                     logger.info(f"   Coinbase tag: {tag}")
                 
-                # Withdraw from Gemini (PROVEN WORKING PATTERN)
-                gemini = self.exchange_manager.get_exchange('gemini')
-                withdrawal = gemini.withdraw(
+                # Withdraw from Gemini (FIXED: Use exchange manager with network parameter)
+                withdrawal = await self.exchange_manager.withdraw(
+                    'gemini',
                     self.test_crypto,
                     self.gemini_api3_available,
                     address,
-                    tag,
-                    {'network': self.network}
+                    tag=tag,
+                    network=self.network
                 )
-                if hasattr(withdrawal, '__await__'):
-                    withdrawal = await withdrawal
                     
                 withdrawal_id = withdrawal.get('id', 'unknown')
                 logger.info(f"✅ Withdrawal initiated from Gemini: {withdrawal_id}")
@@ -514,20 +512,19 @@ class API3BidirectionalTransferTest:
                 if tag:
                     logger.info(f"   Gemini tag: {tag}")
                 
-                # Withdraw from Coinbase (PROVEN WORKING PATTERN)
+                # Withdraw from Coinbase (FIXED: Use exchange manager with network parameter)
                 # Use the amount that arrived from Gemini (may be less due to fees)
                 amount_to_send = getattr(self, 'coinbase_api3_to_send', self.gemini_api3_available)
                 
-                coinbase = self.exchange_manager.get_exchange('coinbase')
-                withdrawal = coinbase.withdraw(
+                # Use exchange manager's withdraw method with network parameter
+                withdrawal = await self.exchange_manager.withdraw(
+                    'coinbase',
                     self.test_crypto,
                     amount_to_send,
                     address,
-                    tag,
-                    {'network': self.network}
+                    tag=tag,
+                    network=self.network
                 )
-                if hasattr(withdrawal, '__await__'):
-                    withdrawal = await withdrawal
                     
                 withdrawal_id = withdrawal.get('id', 'unknown')
                 logger.info(f"✅ Withdrawal initiated from Coinbase: {withdrawal_id}")

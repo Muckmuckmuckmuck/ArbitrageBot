@@ -209,8 +209,19 @@ class CoinbaseGeminiExchangeManager:
             raise
     
     async def withdraw(self, exchange_id: str, currency: str, amount: float, 
-                      address: str, tag: Optional[str] = None) -> Dict:
-        """Withdraw crypto from exchange"""
+                      address: str, tag: Optional[str] = None, 
+                      network: Optional[str] = None, params: Optional[Dict] = None) -> Dict:
+        """Withdraw crypto from exchange
+        
+        Args:
+            exchange_id: 'coinbase' or 'gemini'
+            currency: Currency code (e.g., 'API3', 'ZEC', 'XRP')
+            amount: Amount to withdraw
+            address: Destination address
+            tag: Tag/memo (optional, for XRP and similar)
+            network: Network parameter (e.g., 'ETH', 'ZEC', 'XRP')
+            params: Additional parameters dict (will be merged with network/tag)
+        """
         exchange = self.get_exchange(exchange_id)
         try:
             # Log withdrawal attempt
@@ -218,16 +229,36 @@ class CoinbaseGeminiExchangeManager:
             logger.info(f"   Currency: {currency}")
             logger.info(f"   Amount: {amount}")
             logger.info(f"   Address: {address[:10]}...{address[-6:]}")
+            
+            # Build params dict (following successful pattern from mini_transfer_test.py)
+            withdraw_params = {}
+            if params:
+                withdraw_params.update(params)
+            
+            # Add network if provided (required for Coinbase ERC-20 tokens)
+            if network:
+                withdraw_params['network'] = network
+                logger.info(f"   Network: {network}")
+            
+            # Add tag to params (some exchanges require tag in params, not as separate arg)
+            # For Coinbase XRP, use 'destination_tag'; for others use 'tag'
             if tag:
-                logger.info(f"   Tag/Memo: {tag}")
+                if exchange_id == 'coinbase' and currency == 'XRP':
+                    withdraw_params['destination_tag'] = tag
+                    logger.info(f"   Destination Tag: {tag}")
+                else:
+                    withdraw_params['tag'] = tag
+                    logger.info(f"   Tag/Memo: {tag}")
             
             # Execute withdrawal (CCXT withdraw can be sync or async)
+            # Note: For some exchanges, tag should be in params, not as separate parameter
+            # Following successful pattern: pass tag inside params
             result = exchange.withdraw(
                 code=currency,
                 amount=amount,
                 address=address,
-                tag=tag,
-                params={}
+                tag=None,  # Don't pass tag separately - it's in params
+                params=withdraw_params
             )
             
             # Handle both sync and async responses
@@ -236,7 +267,8 @@ class CoinbaseGeminiExchangeManager:
             else:
                 withdrawal = result
             
-            logger.info(f"✅ Withdrawal initiated: {withdrawal.get('id', 'unknown')}")
+            withdrawal_id = withdrawal.get('id', 'unknown')
+            logger.info(f"✅ Withdrawal initiated: {withdrawal_id}")
             return withdrawal
             
         except Exception as e:
