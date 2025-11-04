@@ -62,6 +62,38 @@ class AutoRecoverySystem:
         
         logger.info("Auto Recovery System initialized")
     
+    def _get_network_for_currency(self, currency: str) -> Optional[str]:
+        """Get network parameter for a currency
+        
+        Returns network parameter required for Coinbase withdrawals.
+        ERC-20 tokens require 'ETH' network, native tokens use their own network.
+        
+        Args:
+            currency: Currency code (e.g., 'API3', 'ZEC', 'XRP')
+        
+        Returns:
+            Network string (e.g., 'ETH', 'ZEC', 'XRP') or None if unknown
+        """
+        # Import helper function from exchange manager
+        try:
+            from coinbase_gemini_exchanges import get_network_for_currency
+            return get_network_for_currency(currency)
+        except ImportError:
+            # Fallback network mapping
+            network_map = {
+                'XRP': 'XRP',
+                'ZEC': 'ZEC',
+                'SOL': 'SOL',
+                'BAT': 'ETH',
+                'COMP': 'ETH',
+                'QNT': 'ETH',
+                'AMP': 'ETH',
+                'INJ': 'ETH',
+                'API3': 'ETH',
+                'IMX': 'ETH',
+            }
+            return network_map.get(currency.upper())
+    
     async def _fetch_balance_safe(self, exchange) -> Dict:
         """Safely fetch balance handling both sync and async CCXT"""
         try:
@@ -406,7 +438,25 @@ class AutoRecoverySystem:
                 # STEP 1: Get deposit address from destination exchange
                 logger.info(f"\n  [1/4] Getting deposit address from {to_exchange}...")
                 try:
-                    address_info = await self.exchanges[to_exchange].fetch_deposit_address(currency)
+                    # Determine network parameter (required for ERC-20 tokens)
+                    network = self._get_network_for_currency(currency)
+                    if network:
+                        logger.info(f"     Using network: {network}")
+                        # CCXT fetch_deposit_address accepts params as second argument
+                        address_info_result = self.exchanges[to_exchange].fetch_deposit_address(
+                            currency, {'network': network}
+                        )
+                        if hasattr(address_info_result, '__await__'):
+                            address_info = await address_info_result
+                        else:
+                            address_info = address_info_result
+                    else:
+                        address_info_result = self.exchanges[to_exchange].fetch_deposit_address(currency)
+                        if hasattr(address_info_result, '__await__'):
+                            address_info = await address_info_result
+                        else:
+                            address_info = address_info_result
+                        
                     deposit_address = address_info['address']
                     tag = address_info.get('tag', None)
                     
@@ -458,12 +508,26 @@ class AutoRecoverySystem:
                 logger.info(f"     Destination: {deposit_address[:12]}...{deposit_address[-8:]}")
                 
                 try:
+                    # Determine network parameter (required for ERC-20 tokens on Coinbase)
+                    network = self._get_network_for_currency(currency)
+                    withdraw_params = {}
+                    if network:
+                        withdraw_params['network'] = network
+                        logger.info(f"     Network: {network}")
+                    
+                    # For Coinbase XRP, use destination_tag; for others use tag
+                    if tag:
+                        if from_exchange == 'coinbase' and currency == 'XRP':
+                            withdraw_params['destination_tag'] = tag
+                        else:
+                            withdraw_params['tag'] = tag
+                    
                     withdrawal = await self.exchanges[from_exchange].withdraw(
                         currency,
                         amount,
                         deposit_address,
-                        tag,
-                        {}
+                        None,  # Tag is in params, not separate parameter
+                        withdraw_params
                     )
                     
                     tx_id = withdrawal.get('id', 'unknown')

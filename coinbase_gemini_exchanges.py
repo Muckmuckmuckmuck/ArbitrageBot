@@ -192,12 +192,34 @@ class CoinbaseGeminiExchangeManager:
             logger.error(f"Error cancelling order {order_id} on {exchange_id}: {e}")
             raise
     
-    async def fetch_deposit_address(self, exchange_id: str, currency: str) -> Dict:
-        """Fetch deposit address for currency"""
+    async def fetch_deposit_address(self, exchange_id: str, currency: str, 
+                                    network: Optional[str] = None, params: Optional[Dict] = None) -> Dict:
+        """Fetch deposit address for currency
+        
+        Args:
+            exchange_id: 'coinbase' or 'gemini'
+            currency: Currency code (e.g., 'API3', 'ZEC', 'XRP')
+            network: Network parameter (e.g., 'ETH', 'ZEC', 'XRP') - required for ERC-20 tokens on Coinbase
+            params: Additional parameters dict (will be merged with network)
+        """
         exchange = self.get_exchange(exchange_id)
         try:
+            # Build params dict
+            fetch_params = {}
+            if params:
+                fetch_params.update(params)
+            
+            # Add network if provided (required for ERC-20 tokens on Coinbase)
+            if network:
+                fetch_params['network'] = network
+                logger.info(f"   Using network: {network}")
+            
             # CCXT fetch_deposit_address can be sync or async
-            result = exchange.fetch_deposit_address(currency)
+            if fetch_params:
+                result = exchange.fetch_deposit_address(currency, fetch_params)
+            else:
+                result = exchange.fetch_deposit_address(currency)
+                
             if hasattr(result, '__await__'):
                 address_info = await result
             else:
@@ -272,7 +294,94 @@ class CoinbaseGeminiExchangeManager:
             return withdrawal
             
         except Exception as e:
-            logger.error(f"Error withdrawing {currency} from {exchange_id}: {e}")
+            # Extract detailed error information
+            from datetime import datetime
+            error_details = {
+                'timestamp': datetime.now().isoformat(),
+                'error_message': str(e),
+                'error_type': type(e).__name__,
+                'exchange': exchange_id,
+                'currency': currency,
+                'amount': amount,
+                'address': address[:10] + '...' + address[-6:] if len(address) > 16 else address,
+                'network': network,
+                'tag': tag
+            }
+            
+            # Try to extract correlation ID, request ID, or other details from exception
+            error_str = str(e)
+            
+            # Check exception attributes
+            if hasattr(e, 'args') and e.args:
+                for arg in e.args:
+                    if isinstance(arg, dict):
+                        # Check for correlation ID, request ID, or error details
+                        if 'correlation_id' in arg:
+                            error_details['correlation_id'] = arg['correlation_id']
+                        if 'request_id' in arg:
+                            error_details['request_id'] = arg['request_id']
+                        if 'id' in arg:
+                            error_details['error_id'] = arg['id']
+                        if 'message' in arg:
+                            error_details['api_message'] = arg['message']
+                        # Store full error dict if available
+                        error_details['full_error_dict'] = arg
+                    elif isinstance(arg, str):
+                        # Sometimes error details are in string format
+                        if 'correlation' in arg.lower():
+                            error_details['raw_error_string'] = arg
+            
+            # Check if CCXT exception has response attribute
+            if hasattr(e, 'response'):
+                try:
+                    response = e.response
+                    if hasattr(response, 'headers'):
+                        # Check headers for correlation ID
+                        headers = response.headers
+                        if 'x-correlation-id' in headers:
+                            error_details['correlation_id'] = headers['x-correlation-id']
+                        if 'x-request-id' in headers:
+                            error_details['request_id'] = headers['x-request-id']
+                        error_details['response_headers'] = dict(headers)
+                    if hasattr(response, 'status_code'):
+                        error_details['http_status_code'] = response.status_code
+                    if hasattr(response, 'text'):
+                        error_details['response_body'] = response.text
+                except:
+                    pass
+            
+            # Log detailed error information
+            logger.error("=" * 80)
+            logger.error(f"❌ ERROR DETAILS - Withdrawal Failed")
+            logger.error("=" * 80)
+            logger.error(f"Timestamp: {error_details['timestamp']}")
+            logger.error(f"Error Type: {error_details['error_type']}")
+            logger.error(f"Error Message: {error_details['error_message']}")
+            logger.error("")
+            if 'correlation_id' in error_details:
+                logger.error(f"Correlation ID: {error_details['correlation_id']}")
+            if 'request_id' in error_details:
+                logger.error(f"Request ID: {error_details['request_id']}")
+            if 'error_id' in error_details:
+                logger.error(f"Error ID: {error_details['error_id']}")
+            if 'http_status_code' in error_details:
+                logger.error(f"HTTP Status Code: {error_details['http_status_code']}")
+            logger.error("")
+            logger.error("Request Details:")
+            logger.error(f"  Exchange: {exchange_id}")
+            logger.error(f"  Currency: {currency}")
+            logger.error(f"  Amount: {amount}")
+            logger.error(f"  Network: {network}")
+            logger.error(f"  Address: {error_details['address']}")
+            if tag:
+                logger.error(f"  Tag: {tag}")
+            logger.error("")
+            if 'response_body' in error_details:
+                logger.error(f"Response Body: {error_details['response_body']}")
+            if 'full_error_dict' in error_details:
+                logger.error(f"Full Error Dict: {error_details['full_error_dict']}")
+            logger.error("=" * 80)
+            
             raise
     
     async def fetch_my_trades(self, exchange_id: str, symbol: Optional[str] = None, 
@@ -348,6 +457,44 @@ def get_base_currency(symbol: str) -> str:
 def get_quote_currency(symbol: str) -> str:
     """Extract quote currency from symbol (e.g., 'BTC/USD' -> 'USD')"""
     return symbol.split('/')[1]
+
+def get_network_for_currency(currency: str) -> Optional[str]:
+    """Get network parameter for a currency
+    
+    Returns network parameter required for Coinbase withdrawals.
+    ERC-20 tokens require 'ETH' network, native tokens use their own network.
+    
+    Args:
+        currency: Currency code (e.g., 'API3', 'ZEC', 'XRP')
+    
+    Returns:
+        Network string (e.g., 'ETH', 'ZEC', 'XRP') or None if unknown
+    """
+    # Network mapping based on Coinbase documentation
+    network_map = {
+        # Native blockchains
+        'XRP': 'XRP',  # XRP Ledger
+        'ZEC': 'ZEC',  # Zcash Network
+        'SOL': 'SOL',  # Solana
+        
+        # ERC-20 tokens on Ethereum
+        'BAT': 'ETH',   # Basic Attention Token
+        'COMP': 'ETH',  # Compound
+        'QNT': 'ETH',   # Quant
+        'AMP': 'ETH',   # Amp
+        'INJ': 'ETH',   # Injective Protocol
+        'API3': 'ETH',  # API3
+        'IMX': 'ETH',   # Immutable X
+        
+        # Add more ERC-20 tokens as needed
+        'USDC': 'ETH',  # USD Coin (usually ERC-20)
+        'USDT': 'ETH',  # Tether (check specific network needed)
+        'LINK': 'ETH',  # Chainlink
+        'UNI': 'ETH',   # Uniswap
+        'AAVE': 'ETH',  # Aave
+    }
+    
+    return network_map.get(currency.upper())
 
 def calculate_total_fees(buy_exchange: str, sell_exchange: str, 
                         is_maker_buy: bool = False, is_maker_sell: bool = False) -> float:

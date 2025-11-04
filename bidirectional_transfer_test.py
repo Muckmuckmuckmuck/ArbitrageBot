@@ -142,11 +142,12 @@ class BidirectionalTransferTest:
             try:
                 logger.info(f"   Attempt {attempt + 1}/{max_retries}: Transferring {self.test_amount_sol} SOL from Gemini to Coinbase...")
                 
-                # Get Coinbase deposit address
-                coinbase = self.exchange_manager.get_exchange('coinbase')
-                deposit_address = coinbase.fetch_deposit_address(self.test_crypto, {'network': 'SOL'})
-                if hasattr(deposit_address, '__await__'):
-                    deposit_address = await deposit_address
+                # Get Coinbase deposit address (FIXED: Use exchange manager with network parameter)
+                deposit_address = await self.exchange_manager.fetch_deposit_address(
+                    'coinbase',
+                    self.test_crypto,
+                    network='SOL'
+                )
                     
                 address = deposit_address['address']
                 logger.info(f"   Coinbase address: {address}")
@@ -219,26 +220,25 @@ class BidirectionalTransferTest:
             try:
                 logger.info(f"   Attempt {attempt + 1}/{max_retries}: Transferring {self.test_amount_sol} SOL from Coinbase to Gemini...")
                 
-                # Get Gemini deposit address
-                gemini = self.exchange_manager.get_exchange('gemini')
-                deposit_address = gemini.fetch_deposit_address(self.test_crypto, {'network': 'SOL'})
-                if hasattr(deposit_address, '__await__'):
-                    deposit_address = await deposit_address
+                # Get Gemini deposit address (FIXED: Use exchange manager with network parameter)
+                deposit_address = await self.exchange_manager.fetch_deposit_address(
+                    'gemini',
+                    self.test_crypto,
+                    network='SOL'
+                )
                     
                 address = deposit_address['address']
                 logger.info(f"   Gemini address: {address}")
                 
-                # Withdraw from Coinbase
-                coinbase = self.exchange_manager.get_exchange('coinbase')
-                withdrawal = coinbase.withdraw(
+                # Withdraw from Coinbase (FIXED: Use exchange manager with network parameter)
+                withdrawal = await self.exchange_manager.withdraw(
+                    'coinbase',
                     self.test_crypto,
                     self.test_amount_sol,
                     address,
-                    None,
-                    {'network': 'SOL'}
+                    tag=None,
+                    network='SOL'
                 )
-                if hasattr(withdrawal, '__await__'):
-                    withdrawal = await withdrawal
                     
                 withdrawal_id = withdrawal.get('id', 'unknown')
                 logger.info(f"✅ Withdrawal initiated from Coinbase: {withdrawal_id}")

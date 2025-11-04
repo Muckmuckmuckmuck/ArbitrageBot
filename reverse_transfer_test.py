@@ -177,20 +177,25 @@ class ReverseTransferTest:
             try:
                 logger.info(f"🚚 Transferring {self.zec_amount:.6f} ZEC from Coinbase to Gemini... (Attempt {attempt + 1}/{max_retries})")
                 
-                # Get Gemini deposit address
-                gemini = self.exchange_manager.get_exchange('gemini')
-                deposit_address = gemini.fetch_deposit_address('ZEC', {'network': 'ZEC'})
-                if hasattr(deposit_address, '__await__'):
-                    deposit_address = await deposit_address
+                # Get Gemini deposit address (FIXED: Use exchange manager with network parameter)
+                deposit_address = await self.exchange_manager.fetch_deposit_address(
+                    'gemini',
+                    'ZEC',
+                    network='ZEC'
+                )
                     
                 address = deposit_address['address']
                 logger.info(f"   Gemini address: {address}")
                 
-                # Withdraw from Coinbase
-                coinbase = self.exchange_manager.get_exchange('coinbase')
-                withdrawal = coinbase.withdraw('ZEC', self.zec_amount, address, None, {'network': 'ZEC'})
-                if hasattr(withdrawal, '__await__'):
-                    withdrawal = await withdrawal
+                # Withdraw from Coinbase (FIXED: Use exchange manager with network parameter)
+                withdrawal = await self.exchange_manager.withdraw(
+                    'coinbase',
+                    'ZEC',
+                    self.zec_amount,
+                    address,
+                    tag=None,
+                    network='ZEC'
+                )
                     
                 withdrawal_id = withdrawal.get('id', 'unknown')
                 logger.info(f"✅ Withdrawal initiated: {withdrawal_id}")

@@ -57,6 +57,27 @@ class TransferManager:
         
         logger.info("Transfer Manager initialized")
     
+    def _get_network_for_currency(self, currency: str) -> Optional[str]:
+        """Get network parameter for a currency"""
+        try:
+            from coinbase_gemini_exchanges import get_network_for_currency
+            return get_network_for_currency(currency)
+        except ImportError:
+            # Fallback network mapping
+            network_map = {
+                'XRP': 'XRP',
+                'ZEC': 'ZEC',
+                'SOL': 'SOL',
+                'BAT': 'ETH',
+                'COMP': 'ETH',
+                'QNT': 'ETH',
+                'AMP': 'ETH',
+                'INJ': 'ETH',
+                'API3': 'ETH',
+                'IMX': 'ETH',
+            }
+            return network_map.get(currency.upper())
+    
     async def get_deposit_address(self, exchange_name: str, currency: str) -> str:
         """Get deposit address for a currency on an exchange"""
         
@@ -68,8 +89,12 @@ class TransferManager:
         try:
             exchange = self.exchanges[exchange_name]
             
-            # Fetch deposit address
-            address_info = await exchange.fetch_deposit_address(currency)
+            # Determine network parameter (required for ERC-20 tokens on Coinbase)
+            network = self._get_network_for_currency(currency)
+            if network:
+                address_info = await exchange.fetch_deposit_address(currency, {'network': network})
+            else:
+                address_info = await exchange.fetch_deposit_address(currency)
             
             if 'address' in address_info:
                 address = address_info['address']
@@ -109,18 +134,24 @@ class TransferManager:
             # Execute withdrawal from source exchange
             logger.info(f"Withdrawing {amount} {currency} from {from_exchange}...")
             
-            withdrawal_params = {
-                'address': deposit_address,
-            }
+            # Determine network parameter (required for ERC-20 tokens on Coinbase)
+            network = self._get_network_for_currency(currency)
+            withdrawal_params = {}
+            if network:
+                withdrawal_params['network'] = network
             
             if tag:
-                withdrawal_params['tag'] = tag
+                # For Coinbase XRP, use destination_tag; for others use tag
+                if from_exchange == 'coinbase' and currency == 'XRP':
+                    withdrawal_params['destination_tag'] = tag
+                else:
+                    withdrawal_params['tag'] = tag
             
             withdrawal = await self.exchanges[from_exchange].withdraw(
                 currency,
                 amount,
                 deposit_address,
-                tag,
+                None,  # Tag is in params, not separate parameter
                 withdrawal_params
             )
             

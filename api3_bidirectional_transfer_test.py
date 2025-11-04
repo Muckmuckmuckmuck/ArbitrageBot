@@ -369,45 +369,25 @@ class API3BidirectionalTransferTest:
             try:
                 logger.info(f"🚚 Transferring API3 from Gemini to Coinbase... (Attempt {attempt + 1}/{max_retries})")
                 
-                # Get Coinbase deposit address (FIXED: Try multiple methods)
-                deposit_address = None
-                coinbase = self.exchange_manager.get_exchange('coinbase')
-                
-                # Try 1: Exchange manager method (without network)
+                # Get Coinbase deposit address (FIXED: Use exchange manager with network parameter)
                 try:
-                    deposit_address = await self.exchange_manager.fetch_deposit_address('coinbase', self.test_crypto)
-                    logger.info(f"✅ Got deposit address via exchange manager")
+                    deposit_address = await self.exchange_manager.fetch_deposit_address(
+                        'coinbase', 
+                        self.test_crypto,
+                        network=self.network  # ERC-20 tokens require network parameter
+                    )
+                    logger.info(f"✅ Got deposit address via exchange manager (network: {self.network})")
                 except Exception as e:
-                    logger.warning(f"Exchange manager method failed: {e}")
-                
-                # Try 2: Direct call without network parameter
-                if deposit_address is None or (isinstance(deposit_address, dict) and 'address' not in deposit_address):
-                    try:
-                        deposit_address = coinbase.fetch_deposit_address(self.test_crypto)
-                        if hasattr(deposit_address, '__await__'):
-                            deposit_address = await deposit_address
-                        logger.info(f"✅ Got deposit address via direct call (no network)")
-                    except Exception as e:
-                        logger.warning(f"Direct call without network failed: {e}")
-                
-                # Try 3: Direct call with network parameter
-                if deposit_address is None or (isinstance(deposit_address, dict) and 'address' not in deposit_address):
-                    try:
-                        deposit_address = coinbase.fetch_deposit_address(self.test_crypto, {'network': self.network})
-                        if hasattr(deposit_address, '__await__'):
-                            deposit_address = await deposit_address
-                        logger.info(f"✅ Got deposit address via direct call (with network)")
-                    except Exception as e:
-                        logger.warning(f"Direct call with network failed: {e}")
+                    logger.error(f"❌ Failed to get deposit address: {e}")
+                    raise ValueError(f"Failed to get deposit address from Coinbase: {e}")
                     
                 if deposit_address is None or (isinstance(deposit_address, dict) and 'address' not in deposit_address):
-                    # If all methods failed, Coinbase may need deposit address created
-                    logger.error(f"❌ All methods failed to get {self.test_crypto} deposit address from Coinbase")
-                    logger.error("💡 Coinbase returned None - this may require:")
+                    logger.error(f"❌ Coinbase returned invalid deposit address: {deposit_address}")
+                    logger.error("💡 This may require:")
                     logger.error("   1. Enabling deposit addresses for API3 in Coinbase UI")
                     logger.error("   2. Generating a new deposit address for API3")
                     logger.error("   3. Checking if API3 deposits are enabled on your account")
-                    raise ValueError(f"Failed to get deposit address from Coinbase after all attempts: {deposit_address}")
+                    raise ValueError(f"Invalid deposit address from Coinbase: {deposit_address}")
                     
                 address = deposit_address['address']
                 tag = deposit_address.get('tag', None)
@@ -447,7 +427,42 @@ class API3BidirectionalTransferTest:
                     
             except Exception as e:
                 error_str = str(e)
-                logger.warning(f"⚠️ Forward transfer attempt {attempt + 1} failed: {error_str}")
+                
+                # Extract detailed error information
+                error_details = {
+                    'timestamp': datetime.now().isoformat(),
+                    'error_message': error_str,
+                    'currency': self.test_crypto,
+                    'amount': self.gemini_api3_available,
+                    'network': self.network,
+                    'destination_address': address if 'address' in locals() else 'unknown',
+                    'attempt': attempt + 1
+                }
+                
+                # Try to extract correlation ID, request ID, or other details from exception
+                if hasattr(e, 'args') and e.args:
+                    for arg in e.args:
+                        if isinstance(arg, dict):
+                            if 'correlation_id' in arg:
+                                error_details['correlation_id'] = arg['correlation_id']
+                            if 'request_id' in arg:
+                                error_details['request_id'] = arg['request_id']
+                            if 'id' in arg:
+                                error_details['error_id'] = arg['id']
+                
+                # Log detailed error information
+                logger.error(f"❌ Forward transfer attempt {attempt + 1} failed:")
+                logger.error(f"   Timestamp: {error_details['timestamp']}")
+                logger.error(f"   Error Message: {error_str}")
+                if 'correlation_id' in error_details:
+                    logger.error(f"   Correlation ID: {error_details['correlation_id']}")
+                if 'request_id' in error_details:
+                    logger.error(f"   Request ID: {error_details['request_id']}")
+                logger.error(f"   Request Details:")
+                logger.error(f"     - Currency: {self.test_crypto}")
+                logger.error(f"     - Amount: {self.gemini_api3_available:.6f}")
+                logger.error(f"     - Network: {self.network}")
+                logger.error(f"     - Destination: {error_details['destination_address']}")
                 
                 # Check if it's a whitelist error (non-retryable)
                 if 'whitelist' in error_str.lower() or 'whitelists are not enabled' in error_str:
@@ -455,10 +470,7 @@ class API3BidirectionalTransferTest:
                     logger.error("💡 Gemini requires address whitelisting for withdrawals")
                     self.results['transfer_gemini_to_coinbase'] = {
                         'status': 'failed',
-                        'details': {
-                            'error': 'whitelisting_required',
-                            'error_message': error_str
-                        }
+                        'details': error_details
                     }
                     return False
                     
@@ -490,21 +502,22 @@ class API3BidirectionalTransferTest:
             try:
                 logger.info(f"🚚 Transferring API3 from Coinbase to Gemini... (Attempt {attempt + 1}/{max_retries})")
                 
-                # Get Gemini deposit address (FIXED: Use exchange manager method)
+                # Get Gemini deposit address (FIXED: Use exchange manager with network parameter)
                 try:
-                    deposit_address = await self.exchange_manager.fetch_deposit_address('gemini', self.test_crypto)
+                    deposit_address = await self.exchange_manager.fetch_deposit_address(
+                        'gemini',
+                        self.test_crypto,
+                        network=self.network  # ERC-20 tokens require network parameter
+                    )
+                    logger.info(f"✅ Got deposit address via exchange manager (network: {self.network})")
                 except Exception as e:
-                    logger.error(f"Error fetching deposit address: {e}")
-                    # Try direct call with network parameter as fallback
-                    gemini = self.exchange_manager.get_exchange('gemini')
-                    deposit_address = gemini.fetch_deposit_address(self.test_crypto, {'network': self.network})
-                    if hasattr(deposit_address, '__await__'):
-                        deposit_address = await deposit_address
+                    logger.error(f"❌ Failed to get deposit address: {e}")
+                    raise ValueError(f"Failed to get deposit address from Gemini: {e}")
                     
                 if deposit_address is None or 'address' not in deposit_address:
-                    logger.error(f"❌ Gemini returned None for {self.test_crypto} deposit address")
+                    logger.error(f"❌ Gemini returned invalid deposit address: {deposit_address}")
                     logger.error("💡 This may require enabling/generating deposit address on Gemini first")
-                    raise ValueError(f"Failed to get deposit address from Gemini: {deposit_address}")
+                    raise ValueError(f"Invalid deposit address from Gemini: {deposit_address}")
                     
                 address = deposit_address['address']
                 tag = deposit_address.get('tag', None)
