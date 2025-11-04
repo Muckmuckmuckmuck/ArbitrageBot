@@ -367,9 +367,41 @@ class CoinbaseGeminiExchangeManager:
             
             # Log ALL exception attributes for debugging
             logger.error("   Exception attributes:")
+            logger.error(f"     Exception type: {type(e).__name__}")
+            logger.error(f"     Exception class: {type(e).__module__}.{type(e).__name__}")
+            
+            # Try dir() to see all attributes
+            try:
+                all_attrs = dir(e)
+                logger.error(f"     All attributes ({len(all_attrs)}): {', '.join(all_attrs[:20])}...")
+            except:
+                pass
+            
+            # Check __dict__ if it exists
             if hasattr(e, '__dict__'):
-                for key, value in e.__dict__.items():
-                    logger.error(f"     {key}: {type(value).__name__} = {str(value)[:200]}")
+                try:
+                    attrs_dict = e.__dict__
+                    logger.error(f"     __dict__ has {len(attrs_dict)} items")
+                    for key, value in attrs_dict.items():
+                        try:
+                            value_str = str(value)[:200]
+                            value_type = type(value).__name__
+                            logger.error(f"       {key}: {value_type} = {value_str}")
+                        except:
+                            logger.error(f"       {key}: {type(value).__name__} = [could not stringify]")
+                except Exception as dict_error:
+                    logger.error(f"     Could not access __dict__: {dict_error}")
+            else:
+                logger.error("     No __dict__ attribute")
+            
+            # Try to get common CCXT attributes directly
+            for attr in ['status', 'code', 'message', 'response', 'headers', 'statusCode', 'httpStatus']:
+                if hasattr(e, attr):
+                    try:
+                        value = getattr(e, attr)
+                        logger.error(f"     {attr}: {type(value).__name__} = {str(value)[:200]}")
+                    except:
+                        pass
             
             # Check if CCXT exception has response attribute
             if hasattr(e, 'response'):
