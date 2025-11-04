@@ -31,7 +31,12 @@ In this directory (`/Users/jayreddy/Algotrading bot`):
 railway link
 ```
 
-Select your Railway project when prompted.
+When prompted, select your project: **"lively-playfulness"**
+
+Or link directly:
+```bash
+railway link lively-playfulness
+```
 
 ### Step 4: View Logs
 
