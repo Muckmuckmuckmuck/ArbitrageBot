@@ -308,7 +308,11 @@ class CoinbaseGeminiExchangeManager:
             Withdrawal response dict
         """
         # Use Exchange API endpoint (api.exchange.coinbase.com)
-        # This is the correct endpoint for crypto withdrawals to external addresses
+        # But we'll use CCXT's authentication method since it works for trading
+        # Check if CCXT has access to Exchange API base URL
+        exchange = self.get_exchange('coinbase')
+        
+        # Try Exchange API first (correct endpoint for withdrawals)
         base_url = 'https://api.exchange.coinbase.com'
         endpoint = '/withdrawals/crypto'
         url = base_url + endpoint
@@ -336,25 +340,29 @@ class CoinbaseGeminiExchangeManager:
         
         body_json = json.dumps(body)
         
-        # Generate authentication headers
-        timestamp = str(int(time.time()))
-        signature = self._generate_coinbase_exchange_signature(
-            timestamp, 'POST', endpoint, body_json
+        # Use CCXT's sign method to generate headers (same method that works for trading!)
+        # This ensures we use the exact same authentication that works for purchases
+        exchange = self.get_exchange('coinbase')
+        
+        # CCXT's sign method signature: sign(path, api=[], method='GET', params={}, headers=None, body=None)
+        # For Exchange API, we need to use the full path
+        signed_headers = exchange.sign(
+            path=endpoint,
+            api=['private'],
+            method='POST',
+            params={},
+            headers={'Content-Type': 'application/json'},
+            body=body_json
         )
         
-        # Coinbase Exchange API uses passphrase as-is (not base64 encoded)
-        # Try both formats to ensure compatibility
-        headers = {
-            'CB-ACCESS-KEY': Config.COINBASE_API_KEY,
-            'CB-ACCESS-SIGN': signature,
-            'CB-ACCESS-TIMESTAMP': timestamp,
-            'CB-ACCESS-PASSPHRASE': Config.COINBASE_PASSPHRASE,  # Plain text, not encoded
-            'Content-Type': 'application/json'
-        }
+        # CCXT returns headers dict, merge with our body
+        headers = signed_headers
+        headers['Content-Type'] = 'application/json'
         
         # Make request
         logger.info(f"   API: Exchange API (api.exchange.coinbase.com)")
         logger.info(f"   Endpoint: POST {endpoint}")
+        logger.info(f"   Using CCXT's sign method for authentication")
         
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, data=body_json) as response:
