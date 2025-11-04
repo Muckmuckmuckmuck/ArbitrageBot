@@ -320,10 +320,8 @@ class CoinbaseGeminiExchangeManager:
         # We need to get account ID from accounts endpoint
         account_id = None
         
-        # Try to get account ID using v2 API
+        # Try to get account ID using v2 API (same API that works for trading!)
         try:
-            # Use CCXT's internal API call to get accounts
-            # CCXT might have this, or we make direct call with CCXT's auth
             timestamp = str(int(time.time()))
             method = 'GET'
             path = '/v2/accounts'
@@ -341,19 +339,34 @@ class CoinbaseGeminiExchangeManager:
                 'Content-Type': 'application/json'
             }
             
+            logger.info(f"   Fetching account ID from api.coinbase.com/v2/accounts...")
             async with aiohttp.ClientSession() as session:
                 async with session.get('https://api.coinbase.com/v2/accounts', headers=headers) as response:
+                    response_text = await response.text()
                     if response.status == 200:
                         accounts_data = await response.json()
                         accounts = accounts_data.get('data', [])
+                        logger.info(f"   Found {len(accounts)} accounts")
                         # Find account for the currency
                         for account in accounts:
-                            if account.get('currency', {}).get('code') == currency:
+                            account_currency = account.get('currency', {}).get('code', '')
+                            if account_currency == currency:
                                 account_id = account.get('id')
-                                logger.info(f"   Found account ID for {currency}: {account_id}")
+                                logger.info(f"   ✅ Found account ID for {currency}: {account_id}")
                                 break
+                        if not account_id:
+                            logger.warning(f"   ⚠️  No account found for {currency} in {len(accounts)} accounts")
+                            # Log first few accounts for debugging
+                            for i, acc in enumerate(accounts[:3]):
+                                logger.info(f"      Account {i+1}: {acc.get('currency', {}).get('code', 'unknown')} - {acc.get('id', 'no id')}")
+                    else:
+                        logger.error(f"   ❌ Failed to get accounts: Status {response.status}")
+                        logger.error(f"   Response: {response_text[:200]}")
+                        raise Exception(f"Failed to get accounts: {response.status}")
         except Exception as e:
-            logger.warning(f"   Could not get account ID: {e}")
+            logger.error(f"   ❌ Could not get account ID: {e}")
+            import traceback
+            logger.error(f"   Traceback: {traceback.format_exc()}")
         
         # If we got account_id, use main Coinbase API v2
         if account_id:
