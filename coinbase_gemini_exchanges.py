@@ -224,7 +224,41 @@ class CoinbaseGeminiExchangeManager:
                 address_info = await result
             else:
                 address_info = result
-            logger.info(f"✅ Deposit address for {currency} on {exchange_id}: {address_info.get('address', '')[:10]}...")
+            
+            # Check if address_info is None (Coinbase may return None if address needs to be generated)
+            if address_info is None:
+                logger.warning(f"⚠️ {exchange_id} returned None for {currency} deposit address")
+                logger.warning(f"   This may mean:")
+                logger.warning(f"   1. Deposit address needs to be generated first (check Coinbase UI)")
+                logger.warning(f"   2. Network parameter '{network}' may not be correct")
+                logger.warning(f"   3. Trying without network parameter as fallback...")
+                
+                # Try without network parameter as fallback
+                try:
+                    fallback_result = exchange.fetch_deposit_address(currency)
+                    if hasattr(fallback_result, '__await__'):
+                        address_info = await fallback_result
+                    else:
+                        address_info = fallback_result
+                    
+                    if address_info is None:
+                        raise ValueError(f"{exchange_id} returned None for {currency} deposit address. You may need to generate a deposit address in the {exchange_id} UI first.")
+                except Exception as fallback_error:
+                    raise ValueError(f"Failed to get {currency} deposit address from {exchange_id} (with and without network parameter): {fallback_error}")
+            
+            # Validate address_info is a dict
+            if not isinstance(address_info, dict):
+                raise ValueError(f"{exchange_id} returned invalid deposit address format: {type(address_info)} (expected dict)")
+            
+            # Check if address key exists
+            if 'address' not in address_info:
+                raise ValueError(f"{exchange_id} deposit address response missing 'address' key: {address_info}")
+            
+            address = address_info.get('address', '')
+            if not address:
+                raise ValueError(f"{exchange_id} returned empty address for {currency}")
+            
+            logger.info(f"✅ Deposit address for {currency} on {exchange_id}: {address[:10]}...")
             return address_info
         except Exception as e:
             logger.error(f"Error fetching deposit address for {currency} on {exchange_id}: {e}")
