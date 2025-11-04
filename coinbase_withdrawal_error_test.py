@@ -52,19 +52,61 @@ async def test_coinbase_withdrawal():
         
         logger.info(f"   Coinbase: USD=${coinbase_usd:.2f}, API3={coinbase_api3:.6f}")
         
-        # Check if we have API3 on Coinbase, if not try to buy some
+        # Check if we have API3 on Coinbase, if not buy some
         test_amount = 0.1  # Small amount for testing
         if coinbase_api3 < test_amount:
             logger.warning(f"⚠️ Insufficient API3 on Coinbase: {coinbase_api3:.6f} < {test_amount}")
-            logger.warning("   Need to buy API3 first or use existing balance")
             if coinbase_usd < 5.0:
                 logger.error(f"❌ Insufficient USD on Coinbase: ${coinbase_usd:.2f} < $5.0")
                 logger.error("   Cannot buy API3 for test")
+                logger.error("   Please add at least $5 USD to Coinbase to buy API3")
                 return
             else:
-                logger.info("   Would buy API3 here, but skipping for error capture test")
-                logger.info("   Using minimal amount if available")
-                test_amount = min(coinbase_api3 * 0.1, 0.01) if coinbase_api3 > 0 else 0
+                logger.info(f"   Buying {test_amount} API3 worth (~$5) on Coinbase...")
+                try:
+                    # Get current price
+                    ticker = await exchange_manager.fetch_ticker('coinbase', 'API3/USD')
+                    current_price = ticker.get('last', 0)
+                    if current_price <= 0:
+                        logger.error("❌ Could not get API3 price")
+                        return
+                    
+                    buy_amount_usd = 5.0  # Buy $5 worth
+                    buy_amount_api3 = buy_amount_usd / current_price
+                    
+                    logger.info(f"   Current API3 price: ${current_price:.4f}")
+                    logger.info(f"   Buying {buy_amount_api3:.6f} API3 (~${buy_amount_usd:.2f})")
+                    
+                    # Create limit buy order (slightly above market to ensure fill)
+                    buy_price = current_price * 1.001
+                    order = await exchange_manager.create_order(
+                        'coinbase',
+                        'API3/USD',
+                        'limit',
+                        'buy',
+                        buy_amount_api3,
+                        buy_price
+                    )
+                    
+                    logger.info(f"✅ Buy order placed: {order.get('id', 'unknown')}")
+                    logger.info(f"   Waiting 10 seconds for order to fill...")
+                    await asyncio.sleep(10)
+                    
+                    # Check new balance
+                    coinbase_balance = await exchange_manager.fetch_balance('coinbase')
+                    coinbase_api3 = coinbase_balance.get('free', {}).get('API3', 0)
+                    logger.info(f"   New API3 balance: {coinbase_api3:.6f}")
+                    
+                    if coinbase_api3 < test_amount:
+                        logger.warning(f"⚠️ Order may not have filled yet, using available: {coinbase_api3:.6f}")
+                        test_amount = min(coinbase_api3 * 0.9, 0.05) if coinbase_api3 > 0 else 0
+                    else:
+                        test_amount = 0.1  # Use the test amount
+                        
+                except Exception as e:
+                    logger.error(f"❌ Failed to buy API3: {e}")
+                    logger.error("   Will use existing balance if available")
+                    test_amount = min(coinbase_api3 * 0.9, 0.05) if coinbase_api3 > 0 else 0
         
         if test_amount <= 0:
             logger.error("❌ No API3 available for withdrawal test")

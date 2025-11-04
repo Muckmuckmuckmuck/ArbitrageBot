@@ -1,6 +1,5 @@
-# API3 BIDIRECTIONAL TRANSFER TEST
-# Complete test: Buy API3 on both exchanges, then test transfers in both directions
-# Uses ONLY proven patterns - no experimentation
-# This is ONLY a test - NOT the trading bot
+# COINBASE WITHDRAWAL ERROR TEST
+# Purpose: Capture correlation ID, timestamp, and request details for Coinbase support
+# This will attempt a Coinbase withdrawal and capture all error details
 # Original bot command backed up in Procfile.bot_backup
-worker: python api3_bidirectional_transfer_test.py
+worker: python coinbase_withdrawal_error_test.py
