@@ -49,39 +49,54 @@ async def test_coinbase_withdrawal():
         coinbase_balance = await exchange_manager.fetch_balance('coinbase')
         coinbase_api3 = coinbase_balance.get('free', {}).get('API3', 0)
         coinbase_usd = coinbase_balance.get('free', {}).get('USD', 0)
+        coinbase_usdc = coinbase_balance.get('free', {}).get('USDC', 0)
         
-        logger.info(f"   Coinbase: USD=${coinbase_usd:.2f}, API3={coinbase_api3:.6f}")
+        logger.info(f"   Coinbase: USD=${coinbase_usd:.2f}, USDC=${coinbase_usdc:.2f}, API3={coinbase_api3:.6f}")
+        
+        # USDC is essentially USD, so combine them
+        total_usd_equivalent = coinbase_usd + coinbase_usdc
+        logger.info(f"   Total USD equivalent: ${total_usd_equivalent:.2f}")
         
         # Check if we have API3 on Coinbase, if not buy some
         test_amount = 0.1  # Small amount for testing
         if coinbase_api3 < test_amount:
             logger.warning(f"⚠️ Insufficient API3 on Coinbase: {coinbase_api3:.6f} < {test_amount}")
-            if coinbase_usd < 5.0:
-                logger.error(f"❌ Insufficient USD on Coinbase: ${coinbase_usd:.2f} < $5.0")
+            if total_usd_equivalent < 5.0:
+                logger.error(f"❌ Insufficient USD/USDC on Coinbase: ${total_usd_equivalent:.2f} < $5.0")
                 logger.error("   Cannot buy API3 for test")
-                logger.error("   Please add at least $5 USD to Coinbase to buy API3")
+                logger.error("   Please add at least $5 USD or USDC to Coinbase to buy API3")
                 return
             else:
-                logger.info(f"   Buying {test_amount} API3 worth (~$5) on Coinbase...")
+                logger.info(f"   Buying ~$5 worth of API3 on Coinbase...")
                 try:
+                    # Determine which trading pair to use (USD or USDC)
+                    use_usdc = coinbase_usdc >= 5.0 and coinbase_usd < 5.0
+                    trading_pair = 'API3/USDC' if use_usdc else 'API3/USD'
+                    quote_currency = 'USDC' if use_usdc else 'USD'
+                    
+                    logger.info(f"   Using {trading_pair} trading pair")
+                    
                     # Get current price
-                    ticker = await exchange_manager.fetch_ticker('coinbase', 'API3/USD')
+                    ticker = await exchange_manager.fetch_ticker('coinbase', trading_pair)
                     current_price = ticker.get('last', 0)
                     if current_price <= 0:
-                        logger.error("❌ Could not get API3 price")
+                        logger.error(f"❌ Could not get API3 price from {trading_pair}")
                         return
                     
-                    buy_amount_usd = 5.0  # Buy $5 worth
-                    buy_amount_api3 = buy_amount_usd / current_price
+                    # Use available balance (prefer USDC if available, otherwise USD)
+                    available_quote = coinbase_usdc if use_usdc else coinbase_usd
+                    buy_amount_quote = min(available_quote * 0.9, 5.0)  # Use 90% of available, max $5
+                    buy_amount_api3 = buy_amount_quote / current_price
                     
-                    logger.info(f"   Current API3 price: ${current_price:.4f}")
-                    logger.info(f"   Buying {buy_amount_api3:.6f} API3 (~${buy_amount_usd:.2f})")
+                    logger.info(f"   Current API3 price: ${current_price:.4f} ({quote_currency})")
+                    logger.info(f"   Available {quote_currency}: ${available_quote:.2f}")
+                    logger.info(f"   Buying {buy_amount_api3:.6f} API3 (~${buy_amount_quote:.2f} {quote_currency})")
                     
                     # Create limit buy order (slightly above market to ensure fill)
                     buy_price = current_price * 1.001
                     order = await exchange_manager.create_order(
                         'coinbase',
-                        'API3/USD',
+                        trading_pair,
                         'limit',
                         'buy',
                         buy_amount_api3,
