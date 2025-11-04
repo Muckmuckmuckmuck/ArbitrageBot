@@ -1,0 +1,58 @@
+COINBASE SUPPORT TICKET - API3 Withdrawal Error
+================================================
+
+Correlation ID:
+[NOT PROVIDED IN ERROR RESPONSE - Coinbase may need to check logs using timestamp below]
+
+Timestamp of the error:
+2025-11-04T20:53:28.301391
+
+Request Details:
+----------------
+API Endpoint: POST /withdrawals/crypto (via CCXT library)
+Currency: API3 (ERC-20 token on Ethereum network)
+Amount: 0.1 API3
+Network Parameter: ETH (Ethereum mainnet)
+Destination Address: 0xf417Dfe4f978d8DbcBD511B8a6F90e2140B65E40
+API Key Permissions: wallet:transactions:send (enabled)
+Address Book Status: Destination address is allowlisted in Coinbase Address Book
+
+Error Response:
+--------------
+{"errors":[{"id":"internal_server_error","message":"An internal error has occurred."}]}
+
+Error Type: ExchangeError
+
+Additional Information:
+----------------------
+- Account Type: Exchange API
+- API Key Type: Exchange API Key with withdrawal permissions
+- Network: Ethereum (ERC-20) - confirmed correct network parameter
+- Address Format: Valid Ethereum address format
+- Address Book: Address is confirmed allowlisted
+
+Troubleshooting Steps Already Taken:
+------------------------------------
+1. ✅ Verified API key has wallet:transactions:send permission
+2. ✅ Verified destination address is in Address Book (allowlisted)
+3. ✅ Confirmed network parameter is correctly set to 'ETH' for ERC-20 token
+4. ✅ Verified sufficient balance (13.9 API3 available)
+5. ✅ Confirmed address format is valid Ethereum address
+6. ✅ Tested with different amounts - error persists
+7. ✅ Implemented retry logic - all attempts fail with same error
+
+Expected Behavior:
+-----------------
+Withdrawal should succeed with:
+- Valid ERC-20 address (✅ provided)
+- Correct network parameter ETH (✅ provided)
+- Allowlisted address (✅ confirmed)
+- Sufficient balance (✅ 13.9 API3 available)
+- Valid API permissions (✅ wallet:transactions:send enabled)
+
+Actual Behavior:
+---------------
+Consistent `internal_server_error` on all withdrawal attempts for API3 (ERC-20 token).
+
+This appears to be a server-side issue or account-level restriction that requires Coinbase support intervention.
+
