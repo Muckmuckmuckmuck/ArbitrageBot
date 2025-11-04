@@ -1,0 +1,68 @@
+Hi @J,
+
+Thank you for your response. I have provided all the requested details below:
+
+**Correlation ID:**
+[Not provided in error response - Coinbase can locate this using the timestamp below]
+
+**Timestamp of the error:**
+2025-11-04T21:12:44.743329 (UTC)
+
+**Request details:**
+- API Endpoint: POST /withdrawals/crypto (via CCXT library)
+- Currency: API3 (ERC-20 token on Ethereum network)
+- Amount: 0.1 API3
+- Network Parameter: ETH (Ethereum mainnet) - confirmed correct
+- Destination Address: 0xf417Dfe4f978d8DbcBD511B8a6F90e2140B65E40
+- API Key Permissions: wallet:transactions:send (enabled)
+- Address Book Status: Destination address is allowlisted in Coinbase Address Book
+
+**Error Response:**
+```json
+{
+  "errors": [
+    {
+      "id": "internal_server_error",
+      "message": "An internal error has occurred."
+    }
+  ]
+}
+```
+
+**Additional Information:**
+- This error occurs consistently on every withdrawal attempt for API3 (ERC-20 token)
+- The error occurs immediately upon API call - not after validation
+- I have verified:
+  ✅ Network parameter is correctly set to 'ETH' for ERC-20 token
+  ✅ Withdrawal address is valid Ethereum address format
+  ✅ Address is allowlisted in Coinbase Address Book
+  ✅ API key has wallet:transactions:send permission enabled
+  ✅ Sufficient balance available (13.9 API3 on account)
+  ✅ Address format is correct for Ethereum network
+
+**Troubleshooting Steps Already Taken:**
+1. Verified API key permissions (wallet:transactions:send enabled)
+2. Confirmed address is in Address Book (allowlisted)
+3. Ensured network parameter is correctly set to 'ETH' for ERC-20 token
+4. Verified sufficient balance for withdrawal
+5. Confirmed address format is valid Ethereum address
+6. Tested with different amounts - error persists
+7. Implemented retry logic - all attempts fail with same error
+
+**Expected Behavior:**
+Withdrawal should succeed with:
+- Valid ERC-20 address (✅ provided)
+- Correct network parameter ETH (✅ provided)
+- Allowlisted address (✅ confirmed)
+- Sufficient balance (✅ 13.9 API3 available)
+- Valid API permissions (✅ wallet:transactions:send enabled)
+
+**Actual Behavior:**
+Consistent `internal_server_error` on all withdrawal attempts for API3 (ERC-20 token).
+
+This appears to be a server-side issue or account-level restriction that requires Coinbase support intervention. The error occurs immediately upon API call, suggesting it may be an account-level restriction rather than a parameter validation issue.
+
+Please let me know if you need any additional information or if there are any account-level settings that need to be adjusted.
+
+Thank you for your assistance.
+
