@@ -365,10 +365,17 @@ class CoinbaseGeminiExchangeManager:
                         if 'correlation' in arg.lower():
                             error_details['raw_error_string'] = arg
             
+            # Log ALL exception attributes for debugging
+            logger.error("   Exception attributes:")
+            if hasattr(e, '__dict__'):
+                for key, value in e.__dict__.items():
+                    logger.error(f"     {key}: {type(value).__name__} = {str(value)[:200]}")
+            
             # Check if CCXT exception has response attribute
             if hasattr(e, 'response'):
                 try:
                     response = e.response
+                    logger.error(f"   Response object type: {type(response).__name__}")
                     if hasattr(response, 'headers'):
                         # Check headers for correlation ID (case-insensitive)
                         headers = response.headers
@@ -378,7 +385,7 @@ class CoinbaseGeminiExchangeManager:
                         for header_name in ['x-correlation-id', 'X-Correlation-ID', 'correlation-id', 'Correlation-ID', 'x-request-id', 'X-Request-ID', 'request-id']:
                             if header_name in header_dict:
                                 error_details['correlation_id'] = header_dict[header_name]
-                                logger.error(f"   Correlation ID found in headers: {header_dict[header_name]}")
+                                logger.error(f"   ✅ Correlation ID found in headers: {header_dict[header_name]}")
                                 break
                         
                         error_details['response_headers'] = header_dict
@@ -386,27 +393,67 @@ class CoinbaseGeminiExchangeManager:
                     if hasattr(response, 'status_code'):
                         error_details['http_status_code'] = response.status_code
                         logger.error(f"   HTTP Status Code: {response.status_code}")
+                    if hasattr(response, 'status'):
+                        error_details['http_status_code'] = response.status
+                        logger.error(f"   HTTP Status: {response.status}")
                     if hasattr(response, 'text'):
                         error_details['response_body'] = response.text
                         logger.error(f"   Response Body: {response.text}")
                 except Exception as header_error:
                     logger.warning(f"   Could not extract response details: {header_error}")
+                    import traceback
+                    logger.warning(f"   Traceback: {traceback.format_exc()}")
             
-            # Also check CCXT exception attributes directly
+            # Check CCXT-specific attributes
+            for attr_name in ['status', 'statusCode', 'code', 'httpStatus', 'httpStatusCode']:
+                if hasattr(e, attr_name):
+                    value = getattr(e, attr_name)
+                    error_details[f'http_status_{attr_name}'] = value
+                    logger.error(f"   HTTP Status ({attr_name}): {value}")
+            
+            # Check for headers in various locations
+            for attr_name in ['headers', 'responseHeaders', 'httpHeaders']:
+                if hasattr(e, attr_name):
+                    headers = getattr(e, attr_name)
+                    if headers:
+                        header_dict = dict(headers) if not isinstance(headers, dict) else headers
+                        error_details['response_headers'] = header_dict
+                        logger.error(f"   Headers found in {attr_name}: {header_dict}")
+                        
+                        # Check for correlation ID
+                        for header_name in ['x-correlation-id', 'X-Correlation-ID', 'correlation-id', 'Correlation-ID', 'x-request-id', 'X-Request-ID', 'request-id']:
+                            if header_name in header_dict:
+                                error_details['correlation_id'] = header_dict[header_name]
+                                logger.error(f"   ✅ Correlation ID found: {header_dict[header_name]}")
+                                break
+            
+            # Check exception attributes for correlation-related fields
             if hasattr(e, '__dict__'):
                 for key, value in e.__dict__.items():
-                    if 'correlation' in key.lower() or 'request_id' in key.lower():
+                    if 'correlation' in key.lower() or 'request_id' in key.lower() or 'requestId' in key:
                         error_details[key] = value
-                        logger.error(f"   Found in exception: {key} = {value}")
+                        logger.error(f"   ✅ Found in exception: {key} = {value}")
             
             # Check if CCXT wraps the error in a specific format
-            if hasattr(e, 'message') or hasattr(e, 'msg'):
-                error_msg = getattr(e, 'message', getattr(e, 'msg', ''))
-                if isinstance(error_msg, dict):
-                    if 'correlation_id' in error_msg:
-                        error_details['correlation_id'] = error_msg['correlation_id']
-                    if 'request_id' in error_msg:
-                        error_details['request_id'] = error_msg['request_id']
+            for attr_name in ['message', 'msg', 'body', 'responseBody']:
+                if hasattr(e, attr_name):
+                    error_msg = getattr(e, attr_name)
+                    if isinstance(error_msg, dict):
+                        if 'correlation_id' in error_msg:
+                            error_details['correlation_id'] = error_msg['correlation_id']
+                            logger.error(f"   ✅ Correlation ID in {attr_name}: {error_msg['correlation_id']}")
+                        if 'request_id' in error_msg:
+                            error_details['request_id'] = error_msg['request_id']
+                            logger.error(f"   ✅ Request ID in {attr_name}: {error_msg['request_id']}")
+                        if 'errors' in error_msg:
+                            # Check if correlation ID is in errors array
+                            errors = error_msg.get('errors', [])
+                            if isinstance(errors, list):
+                                for error_item in errors:
+                                    if isinstance(error_item, dict):
+                                        if 'correlation_id' in error_item:
+                                            error_details['correlation_id'] = error_item['correlation_id']
+                                            logger.error(f"   ✅ Correlation ID in errors: {error_item['correlation_id']}")
             
             # Log detailed error information
             logger.error("=" * 80)
