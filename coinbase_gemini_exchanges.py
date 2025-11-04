@@ -340,11 +340,15 @@ class CoinbaseGeminiExchangeManager:
             timestamp, 'POST', endpoint, body_json
         )
         
+        # Coinbase Exchange API requires passphrase to be base64 encoded
+        # The passphrase is typically stored as plain text, so we encode it here
+        passphrase_encoded = base64.b64encode(Config.COINBASE_PASSPHRASE.encode('utf-8')).decode('utf-8') if Config.COINBASE_PASSPHRASE else ''
+        
         headers = {
             'CB-ACCESS-KEY': Config.COINBASE_API_KEY,
             'CB-ACCESS-SIGN': signature,
             'CB-ACCESS-TIMESTAMP': timestamp,
-            'CB-ACCESS-PASSPHRASE': Config.COINBASE_PASSPHRASE,
+            'CB-ACCESS-PASSPHRASE': passphrase_encoded,
             'Content-Type': 'application/json'
         }
         
