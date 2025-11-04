@@ -62,7 +62,16 @@ Withdrawal should succeed with:
 **Actual Behavior:**
 Consistent `internal_server_error` on all withdrawal attempts for API3 (ERC-20 token).
 
-This appears to be a server-side issue or account-level restriction that requires Coinbase support intervention. The error occurs immediately upon API call, suggesting it may be an account-level restriction rather than a parameter validation issue.
+**Questions for Support:**
+1. **API Permission Clarification:** The `/withdrawals/crypto` documentation states it requires "transfer" permission, but my API key has "wallet:transactions:send" enabled. Are these equivalent, or do I need to specifically enable "transfer" permission?
+
+2. **API Key Profile:** The documentation states the API key must belong to the default profile. How can I verify this is the case?
+
+3. **Account-Level Restrictions:** Could there be account-level restrictions preventing withdrawals even with correct permissions?
+
+4. **Error Details:** The `internal_server_error` is generic. Can you provide more specific information about what's causing this error using the timestamp above?
+
+This appears to be a server-side issue or account-level restriction that requires Coinbase support intervention. The error occurs immediately upon API call, suggesting it may be an account-level restriction or permission mismatch rather than a parameter validation issue.
 
 Please let me know if you need any additional information or if there are any account-level settings that need to be adjusted.
 
