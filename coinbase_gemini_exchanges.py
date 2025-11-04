@@ -307,12 +307,22 @@ class CoinbaseGeminiExchangeManager:
         Returns:
             Withdrawal response dict
         """
-        # Use Exchange API endpoint (api.exchange.coinbase.com)
-        # But we'll use CCXT's authentication method since it works for trading
-        # Check if CCXT has access to Exchange API base URL
-        exchange = self.get_exchange('coinbase')
+        # CRITICAL: Since trading works on api.coinbase.com, let's check if withdrawal
+        # works on the same API instead of Exchange API
+        # CCXT uses api.coinbase.com for trading - maybe withdrawals work there too?
         
-        # Try Exchange API first (correct endpoint for withdrawals)
+        # Try main Coinbase API first (same base URL as trading)
+        # If this doesn't work, we'll try Exchange API
+        base_url = 'https://api.coinbase.com'
+        
+        # Get account ID first (required for v2 API)
+        exchange = self.get_exchange('coinbase')
+        balance = await self.fetch_balance('coinbase')
+        
+        # Find account ID for the currency
+        # CCXT might store this, or we need to get it from accounts endpoint
+        # For now, try using Exchange API which doesn't require account_id
+        logger.warning("⚠️  Main API requires account_id, trying Exchange API instead")
         base_url = 'https://api.exchange.coinbase.com'
         endpoint = '/withdrawals/crypto'
         url = base_url + endpoint
