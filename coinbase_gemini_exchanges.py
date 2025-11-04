@@ -293,8 +293,9 @@ class CoinbaseGeminiExchangeManager:
                                          network: Optional[str] = None) -> Dict:
         """Withdraw crypto using Coinbase Exchange API directly
         
-        This uses the Exchange API (/withdrawals/crypto) instead of CCXT's
-        Send Money API which doesn't support external crypto withdrawals.
+        Since CCXT uses api.coinbase.com for trading (which works), we should
+        check if the same authentication works for Exchange API endpoints.
+        If not, we may need to use CCXT's authentication method.
         
         Args:
             currency: Currency code (e.g., 'API3', 'ZEC', 'XRP')
@@ -306,7 +307,8 @@ class CoinbaseGeminiExchangeManager:
         Returns:
             Withdrawal response dict
         """
-        # Coinbase Exchange API endpoint
+        # Use Exchange API endpoint (api.exchange.coinbase.com)
+        # This is the correct endpoint for crypto withdrawals to external addresses
         base_url = 'https://api.exchange.coinbase.com'
         endpoint = '/withdrawals/crypto'
         url = base_url + endpoint
