@@ -57,9 +57,14 @@ async def test_coinbase_withdrawal():
         total_usd_equivalent = coinbase_usd + coinbase_usdc
         logger.info(f"   Total USD equivalent: ${total_usd_equivalent:.2f}")
         
-        # Check if we have API3 on Coinbase, if not buy some
+        # Check if we have API3 on Coinbase
         test_amount = 0.1  # Small amount for testing
-        if coinbase_api3 < test_amount:
+        
+        if coinbase_api3 >= test_amount:
+            logger.info(f"✅ API3 already available on Coinbase: {coinbase_api3:.6f}")
+            logger.info("   Skipping purchase - will use existing API3")
+            test_amount = min(coinbase_api3 * 0.9, 0.1)  # Use 90% of available, max 0.1
+        else:
             logger.warning(f"⚠️ Insufficient API3 on Coinbase: {coinbase_api3:.6f} < {test_amount}")
             if total_usd_equivalent < 5.0:
                 logger.error(f"❌ Insufficient USD/USDC on Coinbase: ${total_usd_equivalent:.2f} < $5.0")
@@ -103,20 +108,51 @@ async def test_coinbase_withdrawal():
                         buy_price
                     )
                     
-                    logger.info(f"✅ Buy order placed: {order.get('id', 'unknown')}")
-                    logger.info(f"   Waiting 10 seconds for order to fill...")
-                    await asyncio.sleep(10)
+                    order_id = order.get('id', 'unknown')
+                    logger.info(f"✅ Buy order placed: {order_id}")
                     
-                    # Check new balance
+                    # Wait for order to fill - check multiple times
+                    logger.info(f"   Waiting for order to fill...")
+                    max_wait_time = 60  # Wait up to 60 seconds
+                    check_interval = 5  # Check every 5 seconds
+                    waited = 0
+                    
+                    while waited < max_wait_time:
+                        await asyncio.sleep(check_interval)
+                        waited += check_interval
+                        
+                        # Check order status
+                        try:
+                            order_status = await exchange_manager.fetch_order('coinbase', order_id, trading_pair)
+                            status = order_status.get('status', 'unknown')
+                            filled = order_status.get('filled', 0)
+                            
+                            logger.info(f"   Order status: {status}, Filled: {filled:.6f} API3")
+                            
+                            if status == 'closed' or status == 'filled':
+                                logger.info(f"✅ Order filled!")
+                                break
+                        except Exception as e:
+                            logger.warning(f"   Could not check order status: {e}")
+                            # Continue waiting
+                        
+                        # Also check balance
+                        coinbase_balance = await exchange_manager.fetch_balance('coinbase')
+                        coinbase_api3 = coinbase_balance.get('free', {}).get('API3', 0)
+                        if coinbase_api3 >= test_amount:
+                            logger.info(f"✅ API3 balance updated: {coinbase_api3:.6f}")
+                            break
+                    
+                    # Final balance check
                     coinbase_balance = await exchange_manager.fetch_balance('coinbase')
                     coinbase_api3 = coinbase_balance.get('free', {}).get('API3', 0)
-                    logger.info(f"   New API3 balance: {coinbase_api3:.6f}")
+                    logger.info(f"   Final API3 balance: {coinbase_api3:.6f}")
                     
                     if coinbase_api3 < test_amount:
                         logger.warning(f"⚠️ Order may not have filled yet, using available: {coinbase_api3:.6f}")
                         test_amount = min(coinbase_api3 * 0.9, 0.05) if coinbase_api3 > 0 else 0
                     else:
-                        test_amount = 0.1  # Use the test amount
+                        test_amount = min(coinbase_api3 * 0.9, 0.1)  # Use 90% of available, max 0.1
                         
                 except Exception as e:
                     logger.error(f"❌ Failed to buy API3: {e}")
