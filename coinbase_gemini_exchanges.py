@@ -5,6 +5,12 @@ Handles all API interactions with both exchanges
 
 import ccxt
 import logging
+import hmac
+import hashlib
+import base64
+import time
+import json
+import aiohttp
 from typing import Dict, Optional, List
 from coinbase_gemini_config import Config
 
@@ -264,6 +270,124 @@ class CoinbaseGeminiExchangeManager:
             logger.error(f"Error fetching deposit address for {currency} on {exchange_id}: {e}")
             raise
     
+    def _generate_coinbase_exchange_signature(self, timestamp: str, method: str, 
+                                             request_path: str, body: str = '') -> str:
+        """Generate Coinbase Exchange API signature
+        
+        Args:
+            timestamp: Unix timestamp as string
+            method: HTTP method (GET, POST, etc.)
+            request_path: API endpoint path (e.g., '/withdrawals/crypto')
+            body: Request body as string (empty for GET requests)
+        
+        Returns:
+            Base64-encoded HMAC-SHA256 signature
+        """
+        message = timestamp + method + request_path + body
+        secret = base64.b64decode(Config.COINBASE_SECRET_KEY)
+        signature = hmac.new(secret, message.encode('utf-8'), hashlib.sha256)
+        return base64.b64encode(signature.digest()).decode('utf-8')
+    
+    async def _coinbase_exchange_withdraw(self, currency: str, amount: float,
+                                         address: str, tag: Optional[str] = None,
+                                         network: Optional[str] = None) -> Dict:
+        """Withdraw crypto using Coinbase Exchange API directly
+        
+        This uses the Exchange API (/withdrawals/crypto) instead of CCXT's
+        Send Money API which doesn't support external crypto withdrawals.
+        
+        Args:
+            currency: Currency code (e.g., 'API3', 'ZEC', 'XRP')
+            amount: Amount to withdraw
+            address: Destination address
+            tag: Tag/memo (optional, for XRP and similar)
+            network: Network parameter (e.g., 'ETH', 'ZEC', 'XRP')
+        
+        Returns:
+            Withdrawal response dict
+        """
+        # Coinbase Exchange API endpoint
+        base_url = 'https://api.exchange.coinbase.com'
+        endpoint = '/withdrawals/crypto'
+        url = base_url + endpoint
+        
+        # Build request body
+        body = {
+            'amount': str(amount),
+            'currency': currency,
+            'crypto_address': address
+        }
+        
+        # Add network if provided (required for ERC-20 tokens)
+        if network:
+            body['network'] = network
+            logger.info(f"   Using network: {network}")
+        
+        # Add destination_tag for XRP, tag for others
+        if tag:
+            if currency == 'XRP':
+                body['destination_tag'] = tag
+                logger.info(f"   Destination Tag: {tag}")
+            else:
+                body['tag'] = tag
+                logger.info(f"   Tag/Memo: {tag}")
+        
+        body_json = json.dumps(body)
+        
+        # Generate authentication headers
+        timestamp = str(int(time.time()))
+        signature = self._generate_coinbase_exchange_signature(
+            timestamp, 'POST', endpoint, body_json
+        )
+        
+        headers = {
+            'CB-ACCESS-KEY': Config.COINBASE_API_KEY,
+            'CB-ACCESS-SIGN': signature,
+            'CB-ACCESS-TIMESTAMP': timestamp,
+            'CB-ACCESS-PASSPHRASE': Config.COINBASE_PASSPHRASE,
+            'Content-Type': 'application/json'
+        }
+        
+        # Make request
+        logger.info(f"   API: Exchange API (api.exchange.coinbase.com)")
+        logger.info(f"   Endpoint: POST {endpoint}")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, data=body_json) as response:
+                response_text = await response.text()
+                
+                if response.status == 200:
+                    result = await response.json()
+                    logger.info(f"✅ Withdrawal initiated successfully")
+                    logger.info(f"   Withdrawal ID: {result.get('id', 'unknown')}")
+                    return result
+                else:
+                    # Try to parse error response
+                    try:
+                        error_data = await response.json()
+                        error_msg = json.dumps(error_data, indent=2)
+                    except:
+                        error_msg = response_text
+                    
+                    error_details = {
+                        'status': response.status,
+                        'response': error_msg,
+                        'headers': dict(response.headers)
+                    }
+                    
+                    # Extract correlation ID if available
+                    correlation_id = response.headers.get('x-correlation-id') or response.headers.get('X-Correlation-ID')
+                    if correlation_id:
+                        error_details['correlation_id'] = correlation_id
+                    
+                    logger.error(f"❌ Exchange API withdrawal failed")
+                    logger.error(f"   Status: {response.status}")
+                    logger.error(f"   Response: {error_msg}")
+                    if correlation_id:
+                        logger.error(f"   Correlation ID: {correlation_id}")
+                    
+                    raise Exception(f"Coinbase Exchange API withdrawal failed: Status {response.status}, Response: {error_msg}")
+    
     async def withdraw(self, exchange_id: str, currency: str, amount: float, 
                       address: str, tag: Optional[str] = None, 
                       network: Optional[str] = None, params: Optional[Dict] = None) -> Dict:
@@ -278,7 +402,6 @@ class CoinbaseGeminiExchangeManager:
             network: Network parameter (e.g., 'ETH', 'ZEC', 'XRP')
             params: Additional parameters dict (will be merged with network/tag)
         """
-        exchange = self.get_exchange(exchange_id)
         try:
             # Log withdrawal attempt
             logger.info(f"🔄 Initiating withdrawal from {exchange_id}:")
@@ -286,29 +409,36 @@ class CoinbaseGeminiExchangeManager:
             logger.info(f"   Amount: {amount}")
             logger.info(f"   Address: {address[:10]}...{address[-6:]}")
             
-            # Build params dict (following successful pattern from mini_transfer_test.py)
+            # For Coinbase, use Exchange API directly (bypasses CCXT's Send Money API)
+            if exchange_id == 'coinbase':
+                # Use Exchange API for withdrawals
+                return await self._coinbase_exchange_withdraw(
+                    currency=currency,
+                    amount=amount,
+                    address=address,
+                    tag=tag,
+                    network=network
+                )
+            
+            # For Gemini, use CCXT (it uses the correct endpoint)
+            exchange = self.get_exchange(exchange_id)
+            
+            # Build params dict
             withdraw_params = {}
             if params:
                 withdraw_params.update(params)
             
-            # Add network if provided (required for Coinbase ERC-20 tokens)
+            # Add network if provided
             if network:
                 withdraw_params['network'] = network
                 logger.info(f"   Network: {network}")
             
-            # Add tag to params (some exchanges require tag in params, not as separate arg)
-            # For Coinbase XRP, use 'destination_tag'; for others use 'tag'
+            # Add tag to params
             if tag:
-                if exchange_id == 'coinbase' and currency == 'XRP':
-                    withdraw_params['destination_tag'] = tag
-                    logger.info(f"   Destination Tag: {tag}")
-                else:
-                    withdraw_params['tag'] = tag
-                    logger.info(f"   Tag/Memo: {tag}")
+                withdraw_params['tag'] = tag
+                logger.info(f"   Tag/Memo: {tag}")
             
             # Execute withdrawal (CCXT withdraw can be sync or async)
-            # Note: For some exchanges, tag should be in params, not as separate parameter
-            # Following successful pattern: pass tag inside params
             result = exchange.withdraw(
                 code=currency,
                 amount=amount,
