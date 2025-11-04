@@ -370,19 +370,43 @@ class CoinbaseGeminiExchangeManager:
                 try:
                     response = e.response
                     if hasattr(response, 'headers'):
-                        # Check headers for correlation ID
+                        # Check headers for correlation ID (case-insensitive)
                         headers = response.headers
-                        if 'x-correlation-id' in headers:
-                            error_details['correlation_id'] = headers['x-correlation-id']
-                        if 'x-request-id' in headers:
-                            error_details['request_id'] = headers['x-request-id']
-                        error_details['response_headers'] = dict(headers)
+                        header_dict = dict(headers) if not isinstance(headers, dict) else headers
+                        
+                        # Check various header name variations
+                        for header_name in ['x-correlation-id', 'X-Correlation-ID', 'correlation-id', 'Correlation-ID', 'x-request-id', 'X-Request-ID', 'request-id']:
+                            if header_name in header_dict:
+                                error_details['correlation_id'] = header_dict[header_name]
+                                logger.error(f"   Correlation ID found in headers: {header_dict[header_name]}")
+                                break
+                        
+                        error_details['response_headers'] = header_dict
+                        logger.error(f"   All response headers: {header_dict}")
                     if hasattr(response, 'status_code'):
                         error_details['http_status_code'] = response.status_code
+                        logger.error(f"   HTTP Status Code: {response.status_code}")
                     if hasattr(response, 'text'):
                         error_details['response_body'] = response.text
-                except:
-                    pass
+                        logger.error(f"   Response Body: {response.text}")
+                except Exception as header_error:
+                    logger.warning(f"   Could not extract response details: {header_error}")
+            
+            # Also check CCXT exception attributes directly
+            if hasattr(e, '__dict__'):
+                for key, value in e.__dict__.items():
+                    if 'correlation' in key.lower() or 'request_id' in key.lower():
+                        error_details[key] = value
+                        logger.error(f"   Found in exception: {key} = {value}")
+            
+            # Check if CCXT wraps the error in a specific format
+            if hasattr(e, 'message') or hasattr(e, 'msg'):
+                error_msg = getattr(e, 'message', getattr(e, 'msg', ''))
+                if isinstance(error_msg, dict):
+                    if 'correlation_id' in error_msg:
+                        error_details['correlation_id'] = error_msg['correlation_id']
+                    if 'request_id' in error_msg:
+                        error_details['request_id'] = error_msg['request_id']
             
             # Log detailed error information
             logger.error("=" * 80)
@@ -410,10 +434,18 @@ class CoinbaseGeminiExchangeManager:
             if tag:
                 logger.error(f"  Tag: {tag}")
             logger.error("")
+            if 'response_headers' in error_details:
+                logger.error(f"Response Headers: {error_details['response_headers']}")
             if 'response_body' in error_details:
                 logger.error(f"Response Body: {error_details['response_body']}")
+            if 'http_status_code' in error_details:
+                logger.error(f"HTTP Status Code: {error_details['http_status_code']}")
             if 'full_error_dict' in error_details:
                 logger.error(f"Full Error Dict: {error_details['full_error_dict']}")
+            logger.error("")
+            logger.error("NOTE: Correlation ID is a unique request identifier, NOT the error code.")
+            logger.error("      It helps Coinbase track the request in their logs.")
+            logger.error("      If not shown above, Coinbase can find it using the timestamp.")
             logger.error("=" * 80)
             
             raise
