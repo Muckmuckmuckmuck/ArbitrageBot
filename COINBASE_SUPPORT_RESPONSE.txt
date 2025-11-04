@@ -14,8 +14,9 @@ Thank you for your response. I have provided all the requested details below:
 - Amount: 0.1 API3
 - Network Parameter: ETH (Ethereum mainnet) - confirmed correct
 - Destination Address: 0xf417Dfe4f978d8DbcBD511B8a6F90e2140B65E40
-- API Key Permissions: wallet:transactions:send (enabled)
+- API Key Permissions: wallet:transactions:send (enabled) - **Note: Documentation states `/withdrawals/crypto` requires "transfer" permission. Please verify if this is the issue.**
 - Address Book Status: Destination address is allowlisted in Coinbase Address Book
+- API Key Profile: [Please confirm if API key belongs to default profile as required by documentation]
 
 **Error Response:**
 ```json
@@ -41,13 +42,14 @@ Thank you for your response. I have provided all the requested details below:
   ✅ Address format is correct for Ethereum network
 
 **Troubleshooting Steps Already Taken:**
-1. Verified API key permissions (wallet:transactions:send enabled)
+1. Verified API key permissions (wallet:transactions:send enabled) - **However, documentation states `/withdrawals/crypto` requires "transfer" permission. Please clarify if we need to update permissions.**
 2. Confirmed address is in Address Book (allowlisted)
 3. Ensured network parameter is correctly set to 'ETH' for ERC-20 token
 4. Verified sufficient balance for withdrawal
 5. Confirmed address format is valid Ethereum address
 6. Tested with different amounts - error persists
 7. Implemented retry logic - all attempts fail with same error
+8. Verified API endpoint is `/withdrawals/crypto` (correct endpoint per documentation)
 
 **Expected Behavior:**
 Withdrawal should succeed with:
