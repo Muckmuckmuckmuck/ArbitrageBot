@@ -395,13 +395,45 @@ class CoinbaseGeminiExchangeManager:
                 logger.error("     No __dict__ attribute")
             
             # Try to get common CCXT attributes directly
-            for attr in ['status', 'code', 'message', 'response', 'headers', 'statusCode', 'httpStatus']:
+            for attr in ['status', 'code', 'message', 'response', 'headers', 'statusCode', 'httpStatus', 'request', 'responseText', 'responseBody']:
                 if hasattr(e, attr):
                     try:
                         value = getattr(e, attr)
-                        logger.error(f"     {attr}: {type(value).__name__} = {str(value)[:200]}")
-                    except:
-                        pass
+                        value_str = str(value)[:200] if value else "None"
+                        logger.error(f"     ✅ {attr}: {type(value).__name__} = {value_str}")
+                        
+                        # If it's a response object, try to get headers from it
+                        if attr == 'response' and value:
+                            try:
+                                if hasattr(value, 'headers'):
+                                    headers = value.headers
+                                    logger.error(f"       Response headers: {headers}")
+                                    if isinstance(headers, dict):
+                                        for h_name in ['x-correlation-id', 'X-Correlation-ID', 'correlation-id', 'x-request-id']:
+                                            if h_name in headers:
+                                                error_details['correlation_id'] = headers[h_name]
+                                                logger.error(f"       ✅✅ Correlation ID found: {headers[h_name]}")
+                            except:
+                                pass
+                    except Exception as attr_error:
+                        logger.error(f"     ⚠️ Could not access {attr}: {attr_error}")
+            
+            # Try to access CCXT's internal structures
+            # CCXT might store response in exception.args or other locations
+            try:
+                import inspect
+                # Get all attributes including private ones
+                all_members = inspect.getmembers(e)
+                for name, value in all_members:
+                    if not name.startswith('__') and ('response' in name.lower() or 'header' in name.lower() or 'http' in name.lower()):
+                        try:
+                            logger.error(f"     🔍 {name}: {type(value).__name__} = {str(value)[:150]}")
+                            if isinstance(value, dict) and 'correlation' in str(value).lower():
+                                logger.error(f"       ⚠️ Potential correlation ID in {name}")
+                        except:
+                            pass
+            except Exception as inspect_error:
+                logger.warning(f"     Could not inspect exception members: {inspect_error}")
             
             # Check if CCXT exception has response attribute
             if hasattr(e, 'response'):
