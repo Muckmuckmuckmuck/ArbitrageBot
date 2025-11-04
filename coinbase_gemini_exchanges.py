@@ -307,65 +307,114 @@ class CoinbaseGeminiExchangeManager:
         Returns:
             Withdrawal response dict
         """
-        # CRITICAL: Since trading works on api.coinbase.com, let's check if withdrawal
-        # works on the same API instead of Exchange API
-        # CCXT uses api.coinbase.com for trading - maybe withdrawals work there too?
+        # CRITICAL INSIGHT: Since trading works on api.coinbase.com, the keys work there!
+        # Exchange API (api.exchange.coinbase.com) might require different keys or not work with these keys
+        # Let's try using the MAIN Coinbase API (api.coinbase.com) for withdrawals too
         
-        # Try main Coinbase API first (same base URL as trading)
-        # If this doesn't work, we'll try Exchange API
-        base_url = 'https://api.coinbase.com'
-        
-        # Get account ID first (required for v2 API)
+        # Get account ID from balance (required for v2 API)
         exchange = self.get_exchange('coinbase')
         balance = await self.fetch_balance('coinbase')
         
-        # Find account ID for the currency
-        # CCXT might store this, or we need to get it from accounts endpoint
-        # For now, try using Exchange API which doesn't require account_id
-        logger.warning("⚠️  Main API requires account_id, trying Exchange API instead")
-        base_url = 'https://api.exchange.coinbase.com'
-        endpoint = '/withdrawals/crypto'
-        url = base_url + endpoint
+        # Extract account ID from balance structure
+        # CCXT balance structure: {'free': {'API3': 13.9}, 'info': {...}}
+        # We need to get account ID from accounts endpoint
+        account_id = None
         
-        # Build request body
-        body = {
-            'amount': str(amount),
-            'currency': currency,
-            'crypto_address': address
-        }
+        # Try to get account ID using v2 API
+        try:
+            # Use CCXT's internal API call to get accounts
+            # CCXT might have this, or we make direct call with CCXT's auth
+            timestamp = str(int(time.time()))
+            method = 'GET'
+            path = '/v2/accounts'
+            message = timestamp + method + path
+            
+            secret = base64.b64decode(Config.COINBASE_SECRET_KEY)
+            signature = hmac.new(secret, message.encode('utf-8'), hashlib.sha256)
+            signature_b64 = base64.b64encode(signature.digest()).decode('utf-8')
+            
+            headers = {
+                'CB-ACCESS-KEY': Config.COINBASE_API_KEY,
+                'CB-ACCESS-SIGN': signature_b64,
+                'CB-ACCESS-TIMESTAMP': timestamp,
+                'CB-ACCESS-PASSPHRASE': Config.COINBASE_PASSPHRASE,
+                'Content-Type': 'application/json'
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get('https://api.coinbase.com/v2/accounts', headers=headers) as response:
+                    if response.status == 200:
+                        accounts_data = await response.json()
+                        accounts = accounts_data.get('data', [])
+                        # Find account for the currency
+                        for account in accounts:
+                            if account.get('currency', {}).get('code') == currency:
+                                account_id = account.get('id')
+                                logger.info(f"   Found account ID for {currency}: {account_id}")
+                                break
+        except Exception as e:
+            logger.warning(f"   Could not get account ID: {e}")
         
-        # Add network if provided (required for ERC-20 tokens)
-        if network:
-            body['network'] = network
-            logger.info(f"   Using network: {network}")
+        # If we got account_id, use main Coinbase API v2
+        if account_id:
+            base_url = 'https://api.coinbase.com'
+            endpoint = f'/v2/accounts/{account_id}/transactions'
+            url = base_url + endpoint
+            logger.info(f"   Using Main Coinbase API (same as trading)")
+            logger.info(f"   Endpoint: POST {endpoint}")
+        else:
+            # Fallback to Exchange API (might not work, but try)
+            base_url = 'https://api.exchange.coinbase.com'
+            endpoint = '/withdrawals/crypto'
+            url = base_url + endpoint
+            logger.warning("⚠️  Could not get account_id, using Exchange API (may fail)")
+            logger.info(f"   API: Exchange API (api.exchange.coinbase.com)")
+            logger.info(f"   Endpoint: POST {endpoint}")
         
-        # Add destination_tag for XRP, tag for others
-        if tag:
-            if currency == 'XRP':
+        # Build request body - format depends on which API we're using
+        if account_id:
+            # Main Coinbase API v2 format (Send Money API)
+            body = {
+                'type': 'send',
+                'to': address,
+                'amount': str(amount),
+                'currency': currency
+            }
+            # Add network for ERC-20 tokens
+            if network:
+                body['network'] = network
+                logger.info(f"   Using network: {network}")
+            # Add destination_tag for XRP
+            if tag and currency == 'XRP':
                 body['destination_tag'] = tag
                 logger.info(f"   Destination Tag: {tag}")
-            else:
-                body['tag'] = tag
-                logger.info(f"   Tag/Memo: {tag}")
+        else:
+            # Exchange API format
+            body = {
+                'amount': str(amount),
+                'currency': currency,
+                'crypto_address': address
+            }
+            if network:
+                body['network'] = network
+                logger.info(f"   Using network: {network}")
+            if tag:
+                if currency == 'XRP':
+                    body['destination_tag'] = tag
+                else:
+                    body['tag'] = tag
         
         body_json = json.dumps(body)
         
-        # Generate authentication headers using Exchange API format
-        # CCXT's sign method doesn't work for Exchange API endpoints
-        # So we use our custom implementation but ensure it matches Exchange API requirements
+        # Generate authentication headers
+        # Both APIs use same format: HMAC-SHA256(timestamp + method + requestPath + body)
         timestamp = str(int(time.time()))
-        
-        # Exchange API signature format: HMAC-SHA256(timestamp + method + requestPath + body)
-        # requestPath is just the path, not the full URL
         message = timestamp + 'POST' + endpoint + body_json
         
-        # Secret key is base64 encoded, so decode it
         secret = base64.b64decode(Config.COINBASE_SECRET_KEY)
         signature = hmac.new(secret, message.encode('utf-8'), hashlib.sha256)
         signature_b64 = base64.b64encode(signature.digest()).decode('utf-8')
         
-        # Exchange API headers
-        # Passphrase is sent as plain text (not base64 encoded)
         headers = {
             'CB-ACCESS-KEY': Config.COINBASE_API_KEY,
             'CB-ACCESS-SIGN': signature_b64,
@@ -374,9 +423,6 @@ class CoinbaseGeminiExchangeManager:
             'Content-Type': 'application/json'
         }
         
-        # Make request
-        logger.info(f"   API: Exchange API (api.exchange.coinbase.com)")
-        logger.info(f"   Endpoint: POST {endpoint}")
         logger.info(f"   Timestamp: {timestamp}")
         
         async with aiohttp.ClientSession() as session:
