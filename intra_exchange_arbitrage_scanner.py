@@ -546,7 +546,11 @@ class IntraExchangeArbitrageScanner:
         
         valid_cryptos = []
         for crypto, quotes in crypto_quotes.items():
+            # Need at least 2 different quote currencies
             if len(quotes) >= 2:
+                # DEBUG: Log if we have valid quotes
+                if len(quotes) >= 2:
+                    logger.debug(f"   {crypto}: {quotes}")  # Will show in logs if debug enabled
                 # Separate fiat and crypto quotes
                 fiat_quotes = [q for q in quotes if q in fiat_currencies]
                 crypto_quotes_list = [q for q in quotes if q not in fiat_currencies]
@@ -558,8 +562,16 @@ class IntraExchangeArbitrageScanner:
                         quote2 = fiat_quotes[j]
                         valid_cryptos.append((crypto, quote1, quote2))
                 
+                # ALSO compare fiat vs crypto quotes (if we have USD conversion)
+                # e.g., BTC/USD vs BTC/ETH - we can convert ETH to USD
+                for fiat_q in fiat_quotes:
+                    for crypto_q in crypto_quotes_list:
+                        # Only if we have a way to convert crypto quote to USD
+                        # (e.g., BTC/ETH works if ETH/USD exists)
+                        valid_cryptos.append((crypto, fiat_q, crypto_q))
+                
                 # Compare crypto vs crypto ONLY if we can get USD conversion
-                # (e.g., BTC/ETH vs BTC/USD - we need ETH/USD to convert)
+                # (e.g., BTC/ETH vs BTC/SOL - we need both ETH/USD and SOL/USD)
                 # For now, skip crypto-to-crypto pairs to avoid conversion complexity
                 # They would require getting the quote currency price in USD first
         
@@ -570,9 +582,23 @@ class IntraExchangeArbitrageScanner:
                 quote_currency_count[q] = quote_currency_count.get(q, 0) + 1
         
         top_quotes = sorted(quote_currency_count.items(), key=lambda x: x[1], reverse=True)[:10]
-        logger.info(f"   Top quote currencies: {', '.join(f'{q}({c})' for q, c in top_quotes)}")
+        if top_quotes:
+            logger.info(f"   Top quote currencies: {', '.join(f'{q}({c})' for q, c in top_quotes)}")
+        else:
+            logger.warning(f"   ⚠️  No quote currencies found - exchange may have no active markets")
         logger.info(f"   Found {len(crypto_quotes)} unique cryptos")
         logger.info(f"   Found {len(valid_cryptos)} possible arbitrage pairs (crypto with 2+ quote currencies)")
+        
+        # DEBUG: Show sample of cryptos with multiple quotes
+        if len(valid_cryptos) == 0 and len(crypto_quotes) > 0:
+            logger.warning(f"   ⚠️  No valid arbitrage pairs found despite {len(crypto_quotes)} cryptos")
+            logger.warning(f"   Sample cryptos and their quotes:")
+            sample_count = 0
+            for crypto, quotes in list(crypto_quotes.items())[:10]:
+                logger.warning(f"      {crypto}: {quotes}")
+                sample_count += 1
+                if sample_count >= 5:
+                    break
         
         # Limit to max_cryptos
         valid_cryptos = valid_cryptos[:max_cryptos]
@@ -707,8 +733,13 @@ class IntraExchangeArbitrageScanner:
         logger.info(f"   📊 {exchange_id.upper()} SCAN SUMMARY")
         logger.info(f"   {'='*70}")
         logger.info(f"   Total cryptos scanned: {scanned}")
-        logger.info(f"   ✅ Profitable: {profitable_count} ({profitable_count/scanned*100:.1f}%)")
-        logger.info(f"   ❌ Not Profitable: {unprofitable_count} ({unprofitable_count/scanned*100:.1f}%)")
+        if scanned > 0:
+            logger.info(f"   ✅ Profitable: {profitable_count} ({profitable_count/scanned*100:.1f}%)")
+            logger.info(f"   ❌ Not Profitable: {unprofitable_count} ({unprofitable_count/scanned*100:.1f}%)")
+        else:
+            logger.info(f"   ✅ Profitable: {profitable_count} (0%)")
+            logger.info(f"   ❌ Not Profitable: {unprofitable_count} (0%)")
+            logger.warning(f"   ⚠️  No cryptos scanned - check if exchange has markets with multiple quote pairs")
         logger.info("")
         
         if profitable_list:
