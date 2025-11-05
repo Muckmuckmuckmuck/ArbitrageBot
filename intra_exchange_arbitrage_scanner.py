@@ -256,8 +256,21 @@ class IntraExchangeArbitrageScanner:
         if not ticker1 or not ticker2:
             return None
         
-        price1 = ticker1.get('last', ticker1.get('close', 0))
-        price2 = ticker2.get('last', ticker2.get('close', 0))
+        price1 = ticker1.get('last') or ticker1.get('close') or ticker1.get('bid') or 0
+        price2 = ticker2.get('last') or ticker2.get('close') or ticker2.get('bid') or 0
+        
+        # Handle None values explicitly
+        if price1 is None:
+            price1 = 0
+        if price2 is None:
+            price2 = 0
+        
+        # Convert to float and validate
+        try:
+            price1 = float(price1)
+            price2 = float(price2)
+        except (ValueError, TypeError):
+            return None
         
         if price1 == 0 or price2 == 0:
             return None
@@ -483,8 +496,21 @@ class IntraExchangeArbitrageScanner:
                         ticker1 = await self.get_ticker(exchange_id, f'{crypto}/{quote1}')
                         ticker2 = await self.get_ticker(exchange_id, f'{crypto}/{quote2}')
                         if ticker1 and ticker2:
-                            price1 = ticker1.get('last', ticker1.get('close', 0))
-                            price2 = ticker2.get('last', ticker2.get('close', 0))
+                            price1 = ticker1.get('last') or ticker1.get('close') or ticker1.get('bid') or 0
+                            price2 = ticker2.get('last') or ticker2.get('close') or ticker2.get('bid') or 0
+                            
+                            # Handle None values
+                            if price1 is None:
+                                price1 = 0
+                            if price2 is None:
+                                price2 = 0
+                            
+                            try:
+                                price1 = float(price1)
+                                price2 = float(price2)
+                            except (ValueError, TypeError):
+                                continue
+                            
                             if price1 > 0 and price2 > 0:
                                 spread = abs(price2 - price1) / min(price1, price2) * 100
                                 total_spreads.append(spread)
