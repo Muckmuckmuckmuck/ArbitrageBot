@@ -1,4 +1,4 @@
-# BTC PURCHASE TEST SCRIPT
-# Simple script to buy $2 of BTC with USDC on Coinbase
-# Only shows BTC purchase logging - nothing else
+# INTRA-EXCHANGE ARBITRAGE TRADING ENGINE
+# Scans ALL trading pairs on Coinbase and Gemini for arbitrage opportunities
+# Executes trades automatically when profitable opportunities are found
 worker: python main.py
