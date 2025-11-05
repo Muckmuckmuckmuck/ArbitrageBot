@@ -198,16 +198,18 @@ class CoinbaseGeminiExchangeManager:
             if 'account is not available' in error_msg.lower():
                 logger.error(f"   ⚠️ Coinbase 'account is not available' error:")
                 logger.error(f"      This usually means:")
-                logger.error(f"      1. API key doesn't have 'wallet:orders:create' permission")
-                logger.error(f"      2. Account trading is disabled or needs verification")
-                logger.error(f"      3. Account has restrictions/holds preventing trading")
-                logger.error(f"      4. Wrong API key type (CDP vs Advanced Trade)")
+                logger.error(f"      1. Account trading is disabled in account settings")
+                logger.error(f"      2. Account has restrictions/holds preventing trading")
+                logger.error(f"      3. Account needs verification/KYC completion")
+                logger.error(f"      4. API key missing 'Trade' permission (check: View, Trade, Transfer)")
+                logger.error(f"      5. Wrong API key type (Coinbase Pro vs Advanced Trade)")
                 logger.error(f"   💡 Solutions:")
-                logger.error(f"      - Check Coinbase Developer Platform: https://portal.cdp.coinbase.com/")
-                logger.error(f"      - Verify API key has 'wallet:orders:create' permission")
-                logger.error(f"      - Check Coinbase account status in web UI")
-                logger.error(f"      - Ensure account has completed KYC and trading is enabled")
-                logger.error(f"      - Try creating a new API key with full permissions")
+                logger.error(f"      - Log into Coinbase web UI and verify trading is enabled")
+                logger.error(f"      - Check for any account holds or restrictions")
+                logger.error(f"      - Verify API key has 'Trade' permission at: https://portal.cdp.coinbase.com/")
+                logger.error(f"      - Ensure account has completed KYC verification")
+                logger.error(f"      - If using Coinbase Pro keys, create new Advanced Trade API keys")
+                logger.error(f"      - Note: 'View', 'Trade', 'Transfer' permissions should be sufficient")
             
             raise
     
