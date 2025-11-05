@@ -419,7 +419,15 @@ class IntraExchangeArbitrageScanner:
         # Scan each crypto
         scanned = 0
         profitable_count = 0
+        unprofitable_count = 0
+        profitable_list = []
+        unprofitable_list = []
         total_spreads = []
+        profitable_spreads = []
+        unprofitable_spreads = []
+        
+        logger.info(f"   📊 Scanning {len(valid_cryptos)} cryptos...")
+        logger.info("")
         
         for crypto_info in valid_cryptos:
             crypto, quote1, quote2 = crypto_info
@@ -431,12 +439,19 @@ class IntraExchangeArbitrageScanner:
                 if opp:
                     opportunities.append(opp)
                     profitable_count += 1
+                    profitable_list.append(crypto)
                     total_spreads.append(opp.raw_spread_percent)
-                    logger.info(f"   ✅ {crypto} ({quote1}/{quote2}): {opp.net_profit_percent:.3f}% profit (spread: {opp.raw_spread_percent:.3f}%, fees: {opp.maker_fee + opp.taker_fee:.3f}%, slippage: {opp.estimated_slippage:.3f}%)")
+                    profitable_spreads.append(opp.raw_spread_percent)
+                    logger.info(f"   ✅ [{scanned:3d}/{len(valid_cryptos)}] {crypto:8s} ({quote1}/{quote2:4s}): "
+                               f"PROFITABLE | Spread: {opp.raw_spread_percent:6.3f}% | "
+                               f"Net Profit: {opp.net_profit_percent:6.3f}% | "
+                               f"Fees: {opp.maker_fee + opp.taker_fee:5.3f}% | "
+                               f"Slippage: {opp.estimated_slippage:5.3f}%")
                 else:
-                    # For unprofitable, we still need to calculate spread for statistics
-                    # The scan_crypto already calculated this, but we need to get it
-                    # Let's just track it from the scan
+                    unprofitable_count += 1
+                    unprofitable_list.append(crypto)
+                    
+                    # Get spread data for unprofitable ones
                     try:
                         ticker1 = await self.get_ticker(exchange_id, f'{crypto}/{quote1}')
                         ticker2 = await self.get_ticker(exchange_id, f'{crypto}/{quote2}')
@@ -446,8 +461,31 @@ class IntraExchangeArbitrageScanner:
                             if price1 > 0 and price2 > 0:
                                 spread = abs(price2 - price1) / min(price1, price2) * 100
                                 total_spreads.append(spread)
+                                unprofitable_spreads.append(spread)
+                                
+                                # Calculate why it's not profitable
+                                if exchange_id == 'coinbase':
+                                    total_fees_pct = (EXCHANGE_FEES['coinbase']['maker'] + EXCHANGE_FEES['coinbase']['taker']) * 100
+                                else:
+                                    total_fees_pct = (EXCHANGE_FEES['gemini']['maker'] + EXCHANGE_FEES['gemini']['taker']) * 100
+                                
+                                required_spread = total_fees_pct + 0.2  # 0.2% slippage
+                                deficit = required_spread - spread
+                                
+                                # Log every 20th unprofitable to avoid spam, but show all profitable
+                                if scanned % 20 == 0 or scanned <= 10:
+                                    logger.info(f"   ❌ [{scanned:3d}/{len(valid_cryptos)}] {crypto:8s} ({quote1}/{quote2:4s}): "
+                                               f"NOT PROFITABLE | Spread: {spread:6.3f}% | "
+                                               f"Required: {required_spread:5.3f}% | "
+                                               f"Deficit: {deficit:5.3f}%")
                     except:
                         pass
+                
+                # Progress update every 50 cryptos
+                if scanned % 50 == 0:
+                    logger.info(f"   📈 Progress: {scanned}/{len(valid_cryptos)} | "
+                               f"Profitable: {profitable_count} | "
+                               f"Not Profitable: {unprofitable_count}")
                 
                 # Rate limiting
                 if scanned % 10 == 0:
@@ -457,19 +495,61 @@ class IntraExchangeArbitrageScanner:
                 logger.debug(f"   ⚠️  Error scanning {crypto}: {e}")
                 continue
         
-        logger.info(f"   Found {len(opportunities)} profitable opportunities on {exchange_id}")
+        # Detailed summary
+        logger.info("")
+        logger.info(f"   {'='*70}")
+        logger.info(f"   📊 {exchange_id.upper()} SCAN SUMMARY")
+        logger.info(f"   {'='*70}")
+        logger.info(f"   Total cryptos scanned: {scanned}")
+        logger.info(f"   ✅ Profitable: {profitable_count} ({profitable_count/scanned*100:.1f}%)")
+        logger.info(f"   ❌ Not Profitable: {unprofitable_count} ({unprofitable_count/scanned*100:.1f}%)")
+        logger.info("")
+        
+        if profitable_list:
+            logger.info(f"   🏆 PROFITABLE CRYPTOS ({len(profitable_list)}):")
+            # Show in columns for better readability
+            for i in range(0, len(profitable_list), 5):
+                chunk = profitable_list[i:i+5]
+                logger.info(f"      {', '.join(f'{c:8s}' for c in chunk)}")
+            logger.info("")
+        
+        if unprofitable_list and len(unprofitable_list) <= 50:  # Only show if reasonable size
+            logger.info(f"   ⚠️  NOT PROFITABLE CRYPTOS (showing first 50):")
+            for i in range(0, min(50, len(unprofitable_list)), 5):
+                chunk = unprofitable_list[i:i+5]
+                logger.info(f"      {', '.join(f'{c:8s}' for c in chunk)}")
+            logger.info("")
         
         if total_spreads:
             avg_spread = sum(total_spreads) / len(total_spreads)
             max_spread = max(total_spreads)
             min_spread = min(total_spreads)
-            profitable_spreads = [s for s in total_spreads if s > (maker_fee + taker_fee) * 100 + 0.2]  # 0.2% slippage
-            logger.info(f"   Spread stats: avg={avg_spread:.3f}%, max={max_spread:.3f}%, min={min_spread:.3f}%")
-            logger.info(f"   Required spread for profit: >{(maker_fee + taker_fee) * 100 + 0.2:.3f}% (fees + slippage)")
+            required_spread = (maker_fee + taker_fee) * 100 + 0.2  # fees + slippage
+            
+            logger.info(f"   📈 SPREAD STATISTICS:")
+            logger.info(f"      Average spread: {avg_spread:.3f}%")
+            logger.info(f"      Maximum spread: {max_spread:.3f}%")
+            logger.info(f"      Minimum spread: {min_spread:.3f}%")
+            logger.info(f"      Required for profit: >{required_spread:.3f}% (fees + slippage)")
+            logger.info("")
+            
             if profitable_spreads:
-                logger.info(f"   Spreads that COULD be profitable: {len(profitable_spreads)} (if we can get maker fees)")
-            else:
-                logger.warning(f"   ⚠️  No spreads large enough to overcome fees ({(maker_fee + taker_fee) * 100:.3f}%)")
+                avg_profitable = sum(profitable_spreads) / len(profitable_spreads)
+                logger.info(f"   ✅ PROFITABLE SPREADS:")
+                logger.info(f"      Average: {avg_profitable:.3f}%")
+                logger.info(f"      Count: {len(profitable_spreads)}")
+            logger.info("")
+            
+            if unprofitable_spreads:
+                avg_unprofitable = sum(unprofitable_spreads) / len(unprofitable_spreads)
+                logger.info(f"   ❌ UNPROFITABLE SPREADS:")
+                logger.info(f"      Average: {avg_unprofitable:.3f}%")
+                logger.info(f"      Count: {len(unprofitable_spreads)}")
+                logger.info(f"      Average deficit: {required_spread - avg_unprofitable:.3f}%")
+            logger.info("")
+        
+        logger.info(f"   {'='*70}")
+        logger.info("")
         
         return opportunities
     
@@ -523,39 +603,79 @@ class IntraExchangeArbitrageScanner:
         """Print scan results"""
         logger.info("")
         logger.info("=" * 80)
-        logger.info("📊 SCAN RESULTS")
+        logger.info("📊 FINAL SCAN RESULTS")
         logger.info("=" * 80)
         logger.info(f"Total pairs scanned: {self.scan_stats['total_pairs_scanned']}")
-        logger.info(f"Opportunities found: {self.scan_stats['opportunities_found']}")
-        logger.info(f"  - Coinbase: {self.scan_stats['coinbase_opportunities']}")
-        logger.info(f"  - Gemini: {self.scan_stats['gemini_opportunities']}")
-        logger.info(f"Scan duration: {self.scan_stats['scan_duration_seconds']:.2f} seconds")
+        logger.info(f"Total profitable opportunities: {self.scan_stats['opportunities_found']}")
         logger.info("")
+        logger.info(f"📈 BY EXCHANGE:")
+        logger.info(f"  ✅ Coinbase: {self.scan_stats['coinbase_opportunities']} profitable")
+        logger.info(f"  ✅ Gemini: {self.scan_stats['gemini_opportunities']} profitable")
+        logger.info("")
+        logger.info(f"⏱️  Scan duration: {self.scan_stats['scan_duration_seconds']:.2f} seconds")
+        logger.info("")
+        
+        # Calculate percentages
+        total_scanned = self.scan_stats['total_pairs_scanned']
+        if total_scanned > 0:
+            profit_rate = (self.scan_stats['opportunities_found'] / total_scanned) * 100
+            logger.info(f"📊 PROFITABILITY RATE: {profit_rate:.1f}% ({self.scan_stats['opportunities_found']}/{total_scanned})")
+            logger.info("")
         
         if not self.opportunities:
             logger.warning("⚠️  No profitable opportunities found")
+            logger.warning("")
+            logger.warning("💡 RECOMMENDATIONS:")
+            logger.warning("   1. Consider market making strategy (maker fees on both sides)")
+            logger.warning("   2. Look for higher volatility periods")
+            logger.warning("   3. Check if spreads widen during news events")
+            logger.warning("   4. Consider smaller position sizes to reduce slippage")
+            logger.warning("")
             return
         
         logger.info("=" * 80)
-        logger.info("🏆 TOP 50 ARBITRAGE OPPORTUNITIES (Ranked by Profitability)")
+        logger.info(f"🏆 TOP {min(50, len(self.opportunities))} ARBITRAGE OPPORTUNITIES")
+        logger.info("   (Ranked by Profitability Score)")
         logger.info("=" * 80)
         logger.info("")
         
-        # Print top 50
-        for opp in self.opportunities[:50]:
-            logger.info(f"#{opp.rank:3d} | {opp.exchange.upper():8s} | {opp.crypto:8s} | "
-                       f"Profit: {opp.net_profit_percent:6.3f}% | "
-                       f"Spread: {opp.raw_spread_percent:6.3f}% | "
-                       f"Fees: {opp.maker_fee + opp.taker_fee:5.3f}% | "
-                       f"Slippage: {opp.estimated_slippage:5.3f}% | "
-                       f"Score: {opp.arb_score:8.2f}")
-            logger.info(f"     {opp.usd_pair} = ${opp.usd_price:.6f} | "
-                       f"{opp.usdc_pair} = ${opp.usdc_price:.6f}")
-            logger.info(f"     Volume: ${opp.volume_usd:,.0f} | "
-                       f"Depth USD: ${opp.order_book_depth_usd:,.0f} | "
-                       f"Depth USDC: ${opp.order_book_depth_usdc:,.0f} | "
-                       f"Volatility: {opp.volatility_24h:.2f}%")
+        # Group by exchange
+        coinbase_opps = [o for o in self.opportunities if o.exchange == 'coinbase']
+        gemini_opps = [o for o in self.opportunities if o.exchange == 'gemini']
+        
+        if coinbase_opps:
+            logger.info(f"📊 COINBASE ({len(coinbase_opps)} opportunities):")
             logger.info("")
+            for opp in coinbase_opps[:25]:  # Top 25 per exchange
+                logger.info(f"#{opp.rank:3d} | {opp.crypto:8s} | "
+                           f"Profit: {opp.net_profit_percent:6.3f}% | "
+                           f"Spread: {opp.raw_spread_percent:6.3f}% | "
+                           f"Fees: {opp.maker_fee + opp.taker_fee:5.3f}% | "
+                           f"Slippage: {opp.estimated_slippage:5.3f}% | "
+                           f"Score: {opp.arb_score:8.2f}")
+                logger.info(f"     {opp.usd_pair} = ${opp.usd_price:.6f} | "
+                           f"{opp.usdc_pair} = ${opp.usdc_price:.6f}")
+                logger.info(f"     Volume: ${opp.volume_usd:,.0f} | "
+                           f"Depth: ${opp.order_book_depth_usd:,.0f} / ${opp.order_book_depth_usdc:,.0f} | "
+                           f"Volatility: {opp.volatility_24h:.2f}%")
+                logger.info("")
+        
+        if gemini_opps:
+            logger.info(f"📊 GEMINI ({len(gemini_opps)} opportunities):")
+            logger.info("")
+            for opp in gemini_opps[:25]:  # Top 25 per exchange
+                logger.info(f"#{opp.rank:3d} | {opp.crypto:8s} | "
+                           f"Profit: {opp.net_profit_percent:6.3f}% | "
+                           f"Spread: {opp.raw_spread_percent:6.3f}% | "
+                           f"Fees: {opp.maker_fee + opp.taker_fee:5.3f}% | "
+                           f"Slippage: {opp.estimated_slippage:5.3f}% | "
+                           f"Score: {opp.arb_score:8.2f}")
+                logger.info(f"     {opp.usd_pair} = ${opp.usd_price:.6f} | "
+                           f"{opp.usdc_pair} = ${opp.usdc_price:.6f}")
+                logger.info(f"     Volume: ${opp.volume_usd:,.0f} | "
+                           f"Depth: ${opp.order_book_depth_usd:,.0f} / ${opp.order_book_depth_usdc:,.0f} | "
+                           f"Volatility: {opp.volatility_24h:.2f}%")
+                logger.info("")
     
     def save_results(self, filename: str = 'arbitrage_opportunities.json'):
         """Save results to JSON file"""
