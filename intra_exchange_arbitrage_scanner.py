@@ -104,6 +104,7 @@ class IntraExchangeArbitrageScanner:
             
             return ticker
         except Exception as e:
+            # Don't log every error to avoid spam
             return None
     
     async def get_order_book(self, exchange_id: str, symbol: str, limit: int = 20) -> Optional[Dict]:
@@ -431,10 +432,21 @@ class IntraExchangeArbitrageScanner:
         
         for crypto_info in valid_cryptos:
             crypto, quote1, quote2 = crypto_info
+            scanned += 1
+            self.scan_stats['total_pairs_scanned'] += 1
+            
+            # Log progress every 10 cryptos
+            if scanned % 10 == 0:
+                logger.info(f"   🔄 Progress: {scanned}/{len(valid_cryptos)} | "
+                           f"✅ Profitable: {profitable_count} | "
+                           f"❌ Not Profitable: {unprofitable_count}")
+            
             try:
+                # Log what we're scanning (every 25th to avoid spam)
+                if scanned % 25 == 0 or scanned <= 5:
+                    logger.info(f"   🔍 Scanning [{scanned:3d}/{len(valid_cryptos)}] {crypto:8s} ({quote1}/{quote2:4s})...")
+                
                 opp = await self.scan_crypto(exchange_id, crypto, quote1, quote2)
-                scanned += 1
-                self.scan_stats['total_pairs_scanned'] += 1
                 
                 if opp:
                     opportunities.append(opp)
@@ -472,27 +484,25 @@ class IntraExchangeArbitrageScanner:
                                 required_spread = total_fees_pct + 0.2  # 0.2% slippage
                                 deficit = required_spread - spread
                                 
-                                # Log every 20th unprofitable to avoid spam, but show all profitable
-                                if scanned % 20 == 0 or scanned <= 10:
+                                # Log every 25th unprofitable to avoid spam, but show first 10
+                                if scanned % 25 == 0 or scanned <= 10:
                                     logger.info(f"   ❌ [{scanned:3d}/{len(valid_cryptos)}] {crypto:8s} ({quote1}/{quote2:4s}): "
                                                f"NOT PROFITABLE | Spread: {spread:6.3f}% | "
                                                f"Required: {required_spread:5.3f}% | "
                                                f"Deficit: {deficit:5.3f}%")
-                    except:
-                        pass
+                    except Exception as ticker_error:
+                        # Log ticker errors occasionally
+                        if scanned % 50 == 0:
+                            logger.debug(f"   ⚠️  Could not get tickers for {crypto}: {ticker_error}")
                 
-                # Progress update every 50 cryptos
-                if scanned % 50 == 0:
-                    logger.info(f"   📈 Progress: {scanned}/{len(valid_cryptos)} | "
-                               f"Profitable: {profitable_count} | "
-                               f"Not Profitable: {unprofitable_count}")
-                
-                # Rate limiting
-                if scanned % 10 == 0:
-                    await asyncio.sleep(0.1)
+                # Rate limiting - smaller delay
+                if scanned % 5 == 0:
+                    await asyncio.sleep(0.05)
                     
             except Exception as e:
-                logger.debug(f"   ⚠️  Error scanning {crypto}: {e}")
+                logger.warning(f"   ⚠️  [{scanned:3d}/{len(valid_cryptos)}] Error scanning {crypto}: {str(e)[:100]}")
+                unprofitable_count += 1
+                unprofitable_list.append(crypto)
                 continue
         
         # Detailed summary
@@ -563,23 +573,16 @@ class IntraExchangeArbitrageScanner:
         logger.info(f"Scanning Coinbase and Gemini for USD/USDC arbitrage opportunities...")
         logger.info("")
         
-        # Scan both exchanges in parallel
-        coinbase_task = self.scan_exchange('coinbase', max_cryptos=1000)
-        gemini_task = self.scan_exchange('gemini', max_cryptos=1000)
+        # Scan both exchanges sequentially (parallel causes too many API calls)
+        # Start with Coinbase
+        logger.info("Starting Coinbase scan...")
+        coinbase_opps = await self.scan_exchange('coinbase', max_cryptos=1000)
         
-        coinbase_opps, gemini_opps = await asyncio.gather(
-            coinbase_task,
-            gemini_task,
-            return_exceptions=True
-        )
+        logger.info("")
+        logger.info("Starting Gemini scan...")
+        gemini_opps = await self.scan_exchange('gemini', max_cryptos=1000)
         
-        # Handle exceptions
-        if isinstance(coinbase_opps, Exception):
-            logger.error(f"❌ Error scanning Coinbase: {coinbase_opps}")
-            coinbase_opps = []
-        if isinstance(gemini_opps, Exception):
-            logger.error(f"❌ Error scanning Gemini: {gemini_opps}")
-            gemini_opps = []
+        # Note: We already handle exceptions in scan_exchange, so these should be lists
         
         all_opportunities = coinbase_opps + gemini_opps
         
