@@ -313,17 +313,17 @@ class IntraExchangeArbitrageScanner:
         # Calculate raw spread
         try:
             if price2 > price1:
-            # Buy pair1, sell pair2
-            raw_spread = (price2 - price1) / price1
-            direction = f'{quote1}→{quote2}'
-            buy_pair = pair1
-            sell_pair = pair2
-        else:
-            # Buy pair2, sell pair1
-            raw_spread = (price1 - price2) / price2
-            direction = f'{quote2}→{quote1}'
-            buy_pair = pair2
-            sell_pair = pair1
+                # Buy pair1, sell pair2
+                raw_spread = (price2 - price1) / price1
+                direction = f'{quote1}→{quote2}'
+                buy_pair = pair1
+                sell_pair = pair2
+            else:
+                # Buy pair2, sell pair1
+                raw_spread = (price1 - price2) / price2
+                direction = f'{quote2}→{quote1}'
+                buy_pair = pair2
+                sell_pair = pair1
         except (TypeError, ValueError, ZeroDivisionError) as e:
             # If any error in comparison/calculation, skip this pair
             return None
