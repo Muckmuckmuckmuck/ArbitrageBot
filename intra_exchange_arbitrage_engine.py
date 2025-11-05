@@ -947,6 +947,158 @@ class IntraExchangeArbitrageEngine:
         logger.warning(f"   ⏱️ Order timeout after {max_wait}s")
         return None, current_price
     
+    async def _convert_currency(
+        self,
+        exchange_id: str,
+        from_currency: str,
+        to_currency: str,
+        amount: float
+    ) -> bool:
+        """
+        Convert one currency to another on the exchange
+        Returns True if conversion successful
+        """
+        try:
+            exchange = self.exchange_manager.get_exchange(exchange_id)
+            
+            # If same currency, no conversion needed
+            if from_currency == to_currency:
+                return True
+            
+            # Find conversion pair (try both directions)
+            conversion_pair = f"{from_currency}/{to_currency}"
+            reverse_pair = f"{to_currency}/{from_currency}"
+            
+            # Check if conversion pair exists
+            if conversion_pair not in exchange.markets and reverse_pair not in exchange.markets:
+                logger.warning(f"   ⚠️ No conversion pair available: {from_currency} → {to_currency}")
+                return False
+            
+            # Determine direction and pair to use
+            if conversion_pair in exchange.markets:
+                pair_to_use = conversion_pair
+                side = 'buy'  # We're buying to_currency with from_currency
+                order_amount = amount  # Amount of from_currency to spend
+            else:  # reverse_pair exists
+                pair_to_use = reverse_pair
+                side = 'sell'  # We're selling from_currency to get to_currency
+                # Get current price to calculate amount
+                ticker = await self.exchange_manager.fetch_ticker(exchange_id, reverse_pair)
+                price = ticker.get('last') or ticker.get('bid', 0)
+                if price <= 0:
+                    logger.warning(f"   ⚠️ Invalid price for {reverse_pair}: {price}")
+                    return False
+                order_amount = amount / price  # Amount of from_currency needed
+            
+            # Get current price for the conversion
+            ticker = await self.exchange_manager.fetch_ticker(exchange_id, pair_to_use)
+            current_price = ticker.get('last') or ticker.get('bid' if side == 'buy' else 'ask', 0)
+            
+            if current_price <= 0:
+                logger.warning(f"   ⚠️ Invalid price for {pair_to_use}: {current_price}")
+                return False
+            
+            # Calculate exact amount needed
+            if side == 'buy':
+                # Buying to_currency with from_currency
+                # For market buy: amount is quote currency (from_currency) to spend
+                # We want 'amount' of to_currency, so we need amount * current_price of from_currency
+                quote_amount = amount * current_price * 1.01  # Add 1% for slippage
+            else:
+                # Selling from_currency to get to_currency
+                # For market sell: amount is base currency (from_currency) to sell
+                quote_amount = order_amount * current_price * 0.99  # Estimate after fees
+            
+            logger.info(f"   🔄 Converting {from_currency} → {to_currency}")
+            logger.info(f"      Target: {amount:.6f} {to_currency}")
+            logger.info(f"      Using pair: {pair_to_use} @ {current_price:.6f}")
+            
+            # Place market order for conversion (fast execution)
+            # For Coinbase market buy orders, we need to provide price
+            if exchange_id == 'coinbase' and side == 'buy':
+                # Coinbase requires price for market buy orders
+                conversion_order = await self.exchange_manager.create_order(
+                    exchange_id=exchange_id,
+                    symbol=pair_to_use,
+                    order_type='market',
+                    side=side,
+                    amount=amount,  # Amount of to_currency we want
+                    price=current_price * 1.01  # Price with small buffer
+                )
+            else:
+                # For sell orders or other exchanges, use standard market order
+                conversion_order = await self.exchange_manager.create_order(
+                    exchange_id=exchange_id,
+                    symbol=pair_to_use,
+                    order_type='market',
+                    side=side,
+                    amount=order_amount if side == 'sell' else amount
+                )
+            
+            # Wait a moment for fill
+            await asyncio.sleep(1)
+            
+            # Verify conversion
+            order_status = await self.exchange_manager.fetch_order(
+                exchange_id, conversion_order.get('id'), pair_to_use
+            )
+            
+            if order_status.get('status') in ['closed', 'filled']:
+                logger.info(f"   ✅ Currency conversion successful!")
+                return True
+            else:
+                logger.warning(f"   ⚠️ Conversion order not filled: {order_status.get('status')}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"   ❌ Currency conversion failed: {e}")
+            return False
+    
+    async def _ensure_currency_available(
+        self,
+        exchange_id: str,
+        required_currency: str,
+        required_amount: float
+    ) -> bool:
+        """
+        Ensure we have the required currency, converting if necessary
+        Returns True if currency is available (either already had it or converted successfully)
+        """
+        try:
+            balance = await self.exchange_manager.fetch_balance(exchange_id)
+            free_balance = balance.get('free', {})
+            
+            # Check if we already have enough
+            available = free_balance.get(required_currency, 0)
+            if available >= required_amount * 1.1:  # 10% buffer
+                logger.debug(f"   ✅ Already have {required_currency}: {available:.2f}")
+                return True
+            
+            logger.info(f"   💱 Need {required_amount:.2f} {required_currency}, have {available:.2f}")
+            
+            # Find currencies we can convert from (USD, USDC, USDT)
+            convertible_currencies = ['USD', 'USDC', 'USDT']
+            for from_currency in convertible_currencies:
+                from_balance = free_balance.get(from_currency, 0)
+                if from_balance >= required_amount * 1.2:  # Need extra for fees
+                    logger.info(f"   💱 Converting {required_amount * 1.1:.2f} {from_currency} → {required_currency}")
+                    success = await self._convert_currency(
+                        exchange_id=exchange_id,
+                        from_currency=from_currency,
+                        to_currency=required_currency,
+                        amount=required_amount * 1.1  # Convert a bit extra for fees
+                    )
+                    if success:
+                        logger.info(f"   ✅ Currency conversion completed!")
+                        return True
+            
+            logger.warning(f"   ⚠️ No convertible currency available for {required_currency}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"   ❌ Error ensuring currency availability: {e}")
+            return False
+    
     async def _check_balance_sufficient(
         self,
         exchange_id: str,
@@ -956,21 +1108,45 @@ class IntraExchangeArbitrageEngine:
     ) -> bool:
         """
         Check if we have sufficient balance for both sides of the trade
+        If not, try to convert available currencies to the required quote currency
         CRITICAL: Need quote currency for buy, base currency for sell
         """
         try:
             balance = await self.exchange_manager.fetch_balance(exchange_id)
             
             # Extract currencies
-            buy_quote = buy_pair.split('/')[1]  # e.g., 'USD' from 'BTC/USD'
+            buy_quote = buy_pair.split('/')[1]  # e.g., 'EUR' from 'BTC/EUR'
             sell_quote = sell_pair.split('/')[1]  # e.g., 'USDC' from 'BTC/USDC'
             base_crypto = buy_pair.split('/')[0]  # e.g., 'BTC'
             
             # Check buy side: need quote currency
             buy_balance = balance.get('free', {}).get(buy_quote, 0)
-            if buy_balance < trade_size_usd * 1.1:  # 10% buffer
-                logger.warning(f"   ⚠️ Insufficient {buy_quote} balance: {buy_balance:.2f} < {trade_size_usd * 1.1:.2f}")
-                return False
+            required_buy_amount = trade_size_usd * 1.1  # 10% buffer
+            
+            if buy_balance < required_buy_amount:
+                logger.info(f"   💱 Insufficient {buy_quote} balance: {buy_balance:.2f} < {required_buy_amount:.2f}")
+                logger.info(f"   🔄 Attempting currency conversion...")
+                
+                # Try to convert available currencies to the required quote currency
+                conversion_success = await self._ensure_currency_available(
+                    exchange_id=exchange_id,
+                    required_currency=buy_quote,
+                    required_amount=required_buy_amount
+                )
+                
+                if not conversion_success:
+                    logger.warning(f"   ⚠️ Could not obtain {buy_quote} through conversion")
+                    return False
+                
+                # Re-check balance after conversion
+                balance = await self.exchange_manager.fetch_balance(exchange_id)
+                buy_balance = balance.get('free', {}).get(buy_quote, 0)
+                
+                if buy_balance < required_buy_amount:
+                    logger.warning(f"   ⚠️ Still insufficient {buy_quote} after conversion: {buy_balance:.2f} < {required_buy_amount:.2f}")
+                    return False
+                
+                logger.info(f"   ✅ Sufficient {buy_quote} after conversion: {buy_balance:.2f}")
             
             # Check sell side: need base currency (we'll have it after buy)
             # But also check if we already have some
