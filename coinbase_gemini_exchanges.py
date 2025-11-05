@@ -348,21 +348,16 @@ class CoinbaseGeminiExchangeManager:
         # Generate timestamp
         timestamp = str(int(time.time()))
         
-        # Use CCXT's sign() method to generate Exchange API signature
+        # Generate Exchange API signature manually
         # Exchange API format: HMAC-SHA256(timestamp + method + requestPath + body)
         message = timestamp + 'POST' + endpoint + body_json
         
-        # Get signature using CCXT's method (it knows how to handle the secret)
-        try:
-            # CCXT's sign method should handle the Exchange API format
-            # But we need to pass the right parameters
-            signature = exchange.sign(message, exchange.secret, exchange.hash, 'base64')
-        except Exception as e:
-            logger.warning(f"   CCXT sign() failed, using manual signature: {e}")
-            # Fallback to manual signature
-            secret = base64.b64decode(Config.COINBASE_SECRET_KEY)
-            signature_obj = hmac.new(secret, message.encode('utf-8'), hashlib.sha256)
-            signature = base64.b64encode(signature_obj.digest()).decode('utf-8')
+        # Manual signature generation (same keys that work for trading)
+        secret = base64.b64decode(Config.COINBASE_SECRET_KEY)
+        signature_obj = hmac.new(secret, message.encode('utf-8'), hashlib.sha256)
+        signature = base64.b64encode(signature_obj.digest()).decode('utf-8')
+        
+        logger.info(f"   Using manual signature generation (same as before)")
         
         # Exchange API headers
         headers = {
