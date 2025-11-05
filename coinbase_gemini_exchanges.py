@@ -307,172 +307,53 @@ class CoinbaseGeminiExchangeManager:
         Returns:
             Withdrawal response dict
         """
-        # CRITICAL INSIGHT: Since trading works on api.coinbase.com, the keys work there!
-        # Exchange API (api.exchange.coinbase.com) might require different keys or not work with these keys
-        # Let's try using the MAIN Coinbase API (api.coinbase.com) for withdrawals too
+        # CRITICAL FIX: Use CCXT's built-in withdraw method!
+        # CCXT handles authentication automatically and trading works, so withdraw should work too
+        # Our direct HTTP calls fail because CCXT uses a different authentication method
         
-        # Get account ID from balance (required for v2 API)
         exchange = self.get_exchange('coinbase')
-        balance = await self.fetch_balance('coinbase')
+        logger.info(f"   Using CCXT's built-in withdraw method (same auth as trading)")
+        logger.info(f"   Currency: {currency}, Amount: {amount}, Address: {address[:10]}...")
         
-        # Extract account ID from balance structure
-        # CCXT balance structure: {'free': {'API3': 13.9}, 'info': {...}}
-        # We need to get account ID from accounts endpoint
-        account_id = None
+        # Build params dict for CCXT
+        withdraw_params = {}
+        if network:
+            withdraw_params['network'] = network
+            logger.info(f"   Network: {network}")
+        if tag:
+            if currency == 'XRP':
+                withdraw_params['destination_tag'] = tag
+                logger.info(f"   Destination Tag: {tag}")
+            else:
+                withdraw_params['tag'] = tag
+                logger.info(f"   Tag/Memo: {tag}")
         
-        # Try to get account ID using v2 API (same API that works for trading!)
+        # Use CCXT's withdraw method - it handles authentication automatically
         try:
-            timestamp = str(int(time.time()))
-            method = 'GET'
-            path = '/v2/accounts'
-            message = timestamp + method + path
+            logger.info(f"   Calling CCXT withdraw()...")
+            result = exchange.withdraw(
+                code=currency,
+                amount=amount,
+                address=address,
+                tag=None,  # Tag is in params
+                params=withdraw_params if withdraw_params else None
+            )
             
-            secret = base64.b64decode(Config.COINBASE_SECRET_KEY)
-            signature = hmac.new(secret, message.encode('utf-8'), hashlib.sha256)
-            signature_b64 = base64.b64encode(signature.digest()).decode('utf-8')
+            # Handle async/sync response
+            if hasattr(result, '__await__'):
+                withdrawal_result = await result
+            else:
+                withdrawal_result = result
             
-            headers = {
-                'CB-ACCESS-KEY': Config.COINBASE_API_KEY,
-                'CB-ACCESS-SIGN': signature_b64,
-                'CB-ACCESS-TIMESTAMP': timestamp,
-                'CB-ACCESS-PASSPHRASE': Config.COINBASE_PASSPHRASE,
-                'Content-Type': 'application/json'
-            }
+            logger.info(f"   ✅ CCXT withdraw successful!")
+            logger.info(f"   Withdrawal ID: {withdrawal_result.get('id', 'unknown')}")
+            return withdrawal_result
             
-            logger.info(f"   Fetching account ID from api.coinbase.com/v2/accounts...")
-            async with aiohttp.ClientSession() as session:
-                async with session.get('https://api.coinbase.com/v2/accounts', headers=headers) as response:
-                    response_text = await response.text()
-                    if response.status == 200:
-                        accounts_data = await response.json()
-                        accounts = accounts_data.get('data', [])
-                        logger.info(f"   Found {len(accounts)} accounts")
-                        # Find account for the currency
-                        for account in accounts:
-                            account_currency = account.get('currency', {}).get('code', '')
-                            if account_currency == currency:
-                                account_id = account.get('id')
-                                logger.info(f"   ✅ Found account ID for {currency}: {account_id}")
-                                break
-                        if not account_id:
-                            logger.warning(f"   ⚠️  No account found for {currency} in {len(accounts)} accounts")
-                            # Log first few accounts for debugging
-                            for i, acc in enumerate(accounts[:3]):
-                                logger.info(f"      Account {i+1}: {acc.get('currency', {}).get('code', 'unknown')} - {acc.get('id', 'no id')}")
-                    else:
-                        logger.error(f"   ❌ Failed to get accounts: Status {response.status}")
-                        logger.error(f"   Response: {response_text[:200]}")
-                        raise Exception(f"Failed to get accounts: {response.status}")
         except Exception as e:
-            logger.error(f"   ❌ Could not get account ID: {e}")
+            logger.error(f"   ❌ CCXT withdraw failed: {e}")
             import traceback
             logger.error(f"   Traceback: {traceback.format_exc()}")
-        
-        # If we got account_id, use main Coinbase API v2
-        if account_id:
-            base_url = 'https://api.coinbase.com'
-            endpoint = f'/v2/accounts/{account_id}/transactions'
-            url = base_url + endpoint
-            logger.info(f"   Using Main Coinbase API (same as trading)")
-            logger.info(f"   Endpoint: POST {endpoint}")
-        else:
-            # Fallback to Exchange API (might not work, but try)
-            base_url = 'https://api.exchange.coinbase.com'
-            endpoint = '/withdrawals/crypto'
-            url = base_url + endpoint
-            logger.warning("⚠️  Could not get account_id, using Exchange API (may fail)")
-            logger.info(f"   API: Exchange API (api.exchange.coinbase.com)")
-            logger.info(f"   Endpoint: POST {endpoint}")
-        
-        # Build request body - format depends on which API we're using
-        if account_id:
-            # Main Coinbase API v2 format (Send Money API)
-            body = {
-                'type': 'send',
-                'to': address,
-                'amount': str(amount),
-                'currency': currency
-            }
-            # Add network for ERC-20 tokens
-            if network:
-                body['network'] = network
-                logger.info(f"   Using network: {network}")
-            # Add destination_tag for XRP
-            if tag and currency == 'XRP':
-                body['destination_tag'] = tag
-                logger.info(f"   Destination Tag: {tag}")
-        else:
-            # Exchange API format
-            body = {
-                'amount': str(amount),
-                'currency': currency,
-                'crypto_address': address
-            }
-            if network:
-                body['network'] = network
-                logger.info(f"   Using network: {network}")
-            if tag:
-                if currency == 'XRP':
-                    body['destination_tag'] = tag
-                else:
-                    body['tag'] = tag
-        
-        body_json = json.dumps(body)
-        
-        # Generate authentication headers
-        # Both APIs use same format: HMAC-SHA256(timestamp + method + requestPath + body)
-        timestamp = str(int(time.time()))
-        message = timestamp + 'POST' + endpoint + body_json
-        
-        secret = base64.b64decode(Config.COINBASE_SECRET_KEY)
-        signature = hmac.new(secret, message.encode('utf-8'), hashlib.sha256)
-        signature_b64 = base64.b64encode(signature.digest()).decode('utf-8')
-        
-        headers = {
-            'CB-ACCESS-KEY': Config.COINBASE_API_KEY,
-            'CB-ACCESS-SIGN': signature_b64,
-            'CB-ACCESS-TIMESTAMP': timestamp,
-            'CB-ACCESS-PASSPHRASE': Config.COINBASE_PASSPHRASE,
-            'Content-Type': 'application/json'
-        }
-        
-        logger.info(f"   Timestamp: {timestamp}")
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, data=body_json) as response:
-                response_text = await response.text()
-                
-                if response.status == 200:
-                    result = await response.json()
-                    logger.info(f"✅ Withdrawal initiated successfully")
-                    logger.info(f"   Withdrawal ID: {result.get('id', 'unknown')}")
-                    return result
-                else:
-                    # Try to parse error response
-                    try:
-                        error_data = await response.json()
-                        error_msg = json.dumps(error_data, indent=2)
-                    except:
-                        error_msg = response_text
-                    
-                    error_details = {
-                        'status': response.status,
-                        'response': error_msg,
-                        'headers': dict(response.headers)
-                    }
-                    
-                    # Extract correlation ID if available
-                    correlation_id = response.headers.get('x-correlation-id') or response.headers.get('X-Correlation-ID')
-                    if correlation_id:
-                        error_details['correlation_id'] = correlation_id
-                    
-                    logger.error(f"❌ Exchange API withdrawal failed")
-                    logger.error(f"   Status: {response.status}")
-                    logger.error(f"   Response: {error_msg}")
-                    if correlation_id:
-                        logger.error(f"   Correlation ID: {correlation_id}")
-                    
-                    raise Exception(f"Coinbase Exchange API withdrawal failed: Status {response.status}, Response: {error_msg}")
+            raise
     
     async def withdraw(self, exchange_id: str, currency: str, amount: float, 
                       address: str, tag: Optional[str] = None, 
