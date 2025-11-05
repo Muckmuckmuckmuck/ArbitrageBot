@@ -626,12 +626,14 @@ class IntraExchangeArbitrageEngine:
         logger.info(f"      ✅ Profitable opportunities: {len(opportunities)}")
         
         if opportunities:
-            logger.info(f"   🏆 TOP OPPORTUNITIES ON {exchange_id.upper()}:")
-            for i, opp in enumerate(opportunities[:5], 1):
+            logger.info(f"   🏆 TOP 10 OPPORTUNITIES ON {exchange_id.upper()} (by score):")
+            for i, opp in enumerate(opportunities[:10], 1):
                 logger.info(f"      {i}. {opp.base_crypto} | "
                            f"{opp.buy_pair} → {opp.sell_pair} | "
-                           f"Profit: {opp.net_profit_percent:.3f}% | "
+                           f"Net Profit: {opp.net_profit_percent:.3f}% | "
+                           f"Score: {opp.opportunity_score:.2f} | "
                            f"${opp.expected_profit_usd:.2f}")
+            logger.info(f"   📋 ALL {len(opportunities)} OPPORTUNITIES WILL BE EVALUATED FOR EXECUTION")
         else:
             logger.info(f"   ⚠️  No profitable opportunities found on {exchange_id.upper()}")
         
@@ -1235,6 +1237,12 @@ class IntraExchangeArbitrageEngine:
                 logger.info("=" * 80)
                 logger.info("")
                 
+                # LOG MINIMUM THRESHOLD FOR REFERENCE
+                logger.info(f"   🔍 SELECTION CRITERIA:")
+                logger.info(f"      Minimum profit threshold: {self.min_profit_threshold * 100:.2f}%")
+                logger.info(f"      Max concurrent trades per exchange: {self.max_concurrent_trades_per_exchange}")
+                logger.info("")
+                
                 # Execute multiple opportunities concurrently (IMPROVEMENT!)
                 # Filter opportunities that use different pairs to avoid conflicts
                 coinbase_tasks = []
@@ -1245,20 +1253,38 @@ class IntraExchangeArbitrageEngine:
                 gemini_used_pairs = set()
                 
                 # Execute top opportunities for Coinbase (up to max_concurrent)
+                logger.info("")
+                logger.info("=" * 80)
+                logger.info("🔍 EVALUATING COINBASE OPPORTUNITIES FOR EXECUTION")
+                logger.info("=" * 80)
+                logger.info(f"   📊 Evaluating top {min(len(coinbase_opps), self.max_concurrent_trades_per_exchange * 2)} opportunities")
+                logger.info("")
+                
                 coinbase_selected = 0
                 coinbase_skipped = 0
-                for opp in coinbase_opps[:self.max_concurrent_trades_per_exchange * 2]:  # Check more than we'll execute
+                for idx, opp in enumerate(coinbase_opps[:self.max_concurrent_trades_per_exchange * 2], 1):  # Check more than we'll execute
                     skip_reason = None
+                    
+                    logger.info(f"   [{idx}/{min(len(coinbase_opps), self.max_concurrent_trades_per_exchange * 2)}] Evaluating: {opp.base_crypto} | "
+                               f"{opp.buy_pair} → {opp.sell_pair} | "
+                               f"Profit: {opp.net_profit_percent:.3f}% | "
+                               f"${opp.expected_profit_usd:.2f}")
                     
                     # Check 1: Profit threshold
                     if opp.net_profit_percent < self.min_profit_threshold * 100:
                         skip_reason = f"Below threshold: {opp.net_profit_percent:.3f}% < {self.min_profit_threshold*100:.2f}%"
+                        logger.warning(f"      ❌ FAILED CHECK 1: {skip_reason}")
                     else:
+                        logger.info(f"      ✅ PASSED CHECK 1: Profit threshold ({opp.net_profit_percent:.3f}% >= {self.min_profit_threshold*100:.2f}%)")
+                        
                         # Check 2: Pair conflicts
                         pair_key = f"{opp.buy_pair}/{opp.sell_pair}"
                         if pair_key in coinbase_used_pairs:
                             skip_reason = f"Pair already in use: {pair_key}"
+                            logger.warning(f"      ❌ FAILED CHECK 2: {skip_reason}")
                         else:
+                            logger.info(f"      ✅ PASSED CHECK 2: No pair conflict")
+                            
                             # Check 3: Base crypto conflicts
                             base_crypto = opp.buy_pair.split('/')[0]
                             conflicts = False
@@ -1267,43 +1293,70 @@ class IntraExchangeArbitrageEngine:
                                 if used_base == base_crypto:
                                     conflicts = True
                                     skip_reason = f"Base crypto conflict: {base_crypto} already trading"
+                                    logger.warning(f"      ❌ FAILED CHECK 3: {skip_reason}")
                                     break
                             
                             if not conflicts:
+                                logger.info(f"      ✅ PASSED CHECK 3: No base crypto conflict")
                                 # ALL CHECKS PASSED - EXECUTE
                                 coinbase_used_pairs.add(pair_key)
                                 coinbase_tasks.append(self.execute_trade(opp))
                                 coinbase_selected += 1
-                                logger.info(f"   ✅ [COINBASE] EXECUTING opportunity #{coinbase_selected}:")
+                                logger.info(f"")
+                                logger.info(f"   ✅✅✅ [COINBASE] ALL CHECKS PASSED - QUEUING FOR EXECUTION #{coinbase_selected}")
                                 logger.info(f"      Crypto: {opp.base_crypto}")
                                 logger.info(f"      Strategy: Buy {opp.buy_pair} → Sell {opp.sell_pair}")
                                 logger.info(f"      Net Profit: {opp.net_profit_percent:.3f}% (${opp.expected_profit_usd:.2f})")
-                                logger.info(f"      ✅ Passed all checks: Profit threshold ✓, No conflicts ✓")
+                                logger.info(f"")
                                 if len(coinbase_tasks) >= self.max_concurrent_trades_per_exchange:
+                                    logger.info(f"   ⏸️  Reached max concurrent trades ({self.max_concurrent_trades_per_exchange}) - stopping evaluation")
                                     break
                     
                     if skip_reason:
                         coinbase_skipped += 1
-                        logger.debug(f"   ⏭️  [COINBASE] Skipped {opp.base_crypto} ({opp.buy_pair}→{opp.sell_pair}): {skip_reason}")
+                        logger.info(f"      ⏭️  SKIPPED: {skip_reason}")
                 
-                if coinbase_skipped > 0:
-                    logger.info(f"   ℹ️  [COINBASE] Skipped {coinbase_skipped} opportunities (threshold/conflicts)")
+                logger.info("")
+                logger.info(f"   📊 COINBASE EVALUATION SUMMARY:")
+                logger.info(f"      Opportunities evaluated: {min(len(coinbase_opps), self.max_concurrent_trades_per_exchange * 2)}")
+                logger.info(f"      ✅ Selected for execution: {coinbase_selected}")
+                logger.info(f"      ⏭️  Skipped: {coinbase_skipped}")
+                logger.info("=" * 80)
+                logger.info("")
                 
                 # Execute top opportunities for Gemini (up to max_concurrent)
+                logger.info("")
+                logger.info("=" * 80)
+                logger.info("🔍 EVALUATING GEMINI OPPORTUNITIES FOR EXECUTION")
+                logger.info("=" * 80)
+                logger.info(f"   📊 Evaluating top {min(len(gemini_opps), self.max_concurrent_trades_per_exchange * 2)} opportunities")
+                logger.info("")
+                
                 gemini_selected = 0
                 gemini_skipped = 0
-                for opp in gemini_opps[:self.max_concurrent_trades_per_exchange * 2]:
+                for idx, opp in enumerate(gemini_opps[:self.max_concurrent_trades_per_exchange * 2], 1):
                     skip_reason = None
+                    
+                    logger.info(f"   [{idx}/{min(len(gemini_opps), self.max_concurrent_trades_per_exchange * 2)}] Evaluating: {opp.base_crypto} | "
+                               f"{opp.buy_pair} → {opp.sell_pair} | "
+                               f"Profit: {opp.net_profit_percent:.3f}% | "
+                               f"${opp.expected_profit_usd:.2f}")
                     
                     # Check 1: Profit threshold
                     if opp.net_profit_percent < self.min_profit_threshold * 100:
                         skip_reason = f"Below threshold: {opp.net_profit_percent:.3f}% < {self.min_profit_threshold*100:.2f}%"
+                        logger.warning(f"      ❌ FAILED CHECK 1: {skip_reason}")
                     else:
+                        logger.info(f"      ✅ PASSED CHECK 1: Profit threshold ({opp.net_profit_percent:.3f}% >= {self.min_profit_threshold*100:.2f}%)")
+                        
                         # Check 2: Pair conflicts
                         pair_key = f"{opp.buy_pair}/{opp.sell_pair}"
                         if pair_key in gemini_used_pairs:
                             skip_reason = f"Pair already in use: {pair_key}"
+                            logger.warning(f"      ❌ FAILED CHECK 2: {skip_reason}")
                         else:
+                            logger.info(f"      ✅ PASSED CHECK 2: No pair conflict")
+                            
                             # Check 3: Base crypto conflicts
                             base_crypto = opp.buy_pair.split('/')[0]
                             conflicts = False
@@ -1312,27 +1365,36 @@ class IntraExchangeArbitrageEngine:
                                 if used_base == base_crypto:
                                     conflicts = True
                                     skip_reason = f"Base crypto conflict: {base_crypto} already trading"
+                                    logger.warning(f"      ❌ FAILED CHECK 3: {skip_reason}")
                                     break
                             
                             if not conflicts:
+                                logger.info(f"      ✅ PASSED CHECK 3: No base crypto conflict")
                                 # ALL CHECKS PASSED - EXECUTE
                                 gemini_used_pairs.add(pair_key)
                                 gemini_tasks.append(self.execute_trade(opp))
                                 gemini_selected += 1
-                                logger.info(f"   ✅ [GEMINI] EXECUTING opportunity #{gemini_selected}:")
+                                logger.info(f"")
+                                logger.info(f"   ✅✅✅ [GEMINI] ALL CHECKS PASSED - QUEUING FOR EXECUTION #{gemini_selected}")
                                 logger.info(f"      Crypto: {opp.base_crypto}")
                                 logger.info(f"      Strategy: Buy {opp.buy_pair} → Sell {opp.sell_pair}")
                                 logger.info(f"      Net Profit: {opp.net_profit_percent:.3f}% (${opp.expected_profit_usd:.2f})")
-                                logger.info(f"      ✅ Passed all checks: Profit threshold ✓, No conflicts ✓")
+                                logger.info(f"")
                                 if len(gemini_tasks) >= self.max_concurrent_trades_per_exchange:
+                                    logger.info(f"   ⏸️  Reached max concurrent trades ({self.max_concurrent_trades_per_exchange}) - stopping evaluation")
                                     break
                     
                     if skip_reason:
                         gemini_skipped += 1
-                        logger.debug(f"   ⏭️  [GEMINI] Skipped {opp.base_crypto} ({opp.buy_pair}→{opp.sell_pair}): {skip_reason}")
+                        logger.info(f"      ⏭️  SKIPPED: {skip_reason}")
                 
-                if gemini_skipped > 0:
-                    logger.info(f"   ℹ️  [GEMINI] Skipped {gemini_skipped} opportunities (threshold/conflicts)")
+                logger.info("")
+                logger.info(f"   📊 GEMINI EVALUATION SUMMARY:")
+                logger.info(f"      Opportunities evaluated: {min(len(gemini_opps), self.max_concurrent_trades_per_exchange * 2)}")
+                logger.info(f"      ✅ Selected for execution: {gemini_selected}")
+                logger.info(f"      ⏭️  Skipped: {gemini_skipped}")
+                logger.info("=" * 80)
+                logger.info("")
                 
                 # Execute all trades concurrently
                 all_tasks = coinbase_tasks + gemini_tasks
