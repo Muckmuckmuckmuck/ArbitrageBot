@@ -233,6 +233,16 @@ class IntraExchangeArbitrageEngine:
         # Execution latency tracking (for latency risk calculation)
         self.execution_latency_ms = 500  # Will be updated based on actual measurements
         
+        # Robustness settings
+        self.max_order_wait_seconds = 30  # Max time to wait for order fill
+        self.price_chase_increment = 0.001  # 0.1% price adjustment if not filling
+        self.max_price_chase_percent = 0.005  # Max 0.5% price chase
+        self.opportunity_timeout_seconds = 10  # Cancel if opportunity disappears
+        self.max_slippage_percent = 0.01  # 1% max slippage before canceling
+        self.circuit_breaker_loss_threshold = -50.0  # Stop if lose $50 in session
+        self.circuit_breaker_enabled = True
+        self.session_loss = 0.0  # Track cumulative loss
+        
     async def initialize(self):
         """Initialize exchanges"""
         logger.info("=" * 80)
@@ -278,34 +288,59 @@ class IntraExchangeArbitrageEngine:
     ) -> float:
         """
         Normalize any price to USD equivalent
-        Handles: USD, USDC, USDT, EUR, GBP, BTC, ETH, etc.
+        Handles: USD, USDC, USDT, EUR, GBP, BTC, ETH, SOL, etc.
+        CRITICAL: This must be accurate for crypto-to-crypto pairs
         """
         if quote_currency in ['USD', 'USDC', 'USDT']:
             # Stablecoins are approximately 1:1 with USD
-            if quote_currency == 'USDC' or quote_currency == 'USDT':
-                return price  # Assume 1:1 for now (could add slight adjustments)
             return price
         
-        # Fiat currencies
-        if quote_currency == 'EUR':
-            return price * 1.05  # Approximate EUR/USD rate
-        if quote_currency == 'GBP':
-            return price * 1.25  # Approximate GBP/USD rate
-        
-        # Crypto quote currencies - need to fetch USD price
-        if quote_currency in ['BTC', 'ETH', 'SOL', 'AVAX', 'LINK', 'MATIC', 'AAVE']:
+        # Fiat currencies - fetch real-time rates
+        if quote_currency in ['EUR', 'GBP']:
             try:
+                # Try to get real-time rate from exchange
                 exchange = self.exchange_manager.get_exchange(exchange_id)
-                usd_pair = f"{quote_currency}/USD"
-                if usd_pair in exchange.markets:
-                    ticker = exchange.fetch_ticker(usd_pair)
-                    usd_price = ticker.get('last') or ticker.get('close') or ticker.get('bid', 0)
-                    if usd_price and usd_price > 0:
-                        return price * usd_price
+                fiat_pair = f"{quote_currency}/USD"
+                if fiat_pair in exchange.markets:
+                    ticker = await self.exchange_manager.fetch_ticker(exchange_id, fiat_pair)
+                    rate = ticker.get('last') or ticker.get('close') or ticker.get('bid', 0)
+                    if rate and rate > 0:
+                        return price * rate
             except Exception as e:
-                logger.warning(f"Failed to normalize {quote_currency} to USD: {e}")
+                logger.debug(f"Could not fetch {quote_currency}/USD rate: {e}")
+            
+            # Fallback to approximate rates
+            if quote_currency == 'EUR':
+                return price * 1.05
+            if quote_currency == 'GBP':
+                return price * 1.25
         
-        # Fallback: return original price (will be filtered out if too different)
+        # Crypto quote currencies - MUST fetch USD price for accuracy
+        # This is critical for crypto-to-crypto pairs (e.g., BTC/ETH)
+        try:
+            exchange = self.exchange_manager.get_exchange(exchange_id)
+            usd_pair = f"{quote_currency}/USD"
+            
+            # Try USD pair first
+            if usd_pair in exchange.markets:
+                ticker = await self.exchange_manager.fetch_ticker(exchange_id, usd_pair)
+                usd_price = ticker.get('last') or ticker.get('close') or ticker.get('bid', 0)
+                if usd_price and usd_price > 0:
+                    return price * usd_price
+            
+            # Fallback: Try USDC pair
+            usdc_pair = f"{quote_currency}/USDC"
+            if usdc_pair in exchange.markets:
+                ticker = await self.exchange_manager.fetch_ticker(exchange_id, usdc_pair)
+                usdc_price = ticker.get('last') or ticker.get('close') or ticker.get('bid', 0)
+                if usdc_price and usdc_price > 0:
+                    # USDC ≈ USD, so use directly
+                    return price * usdc_price
+                    
+        except Exception as e:
+            logger.warning(f"Failed to normalize {quote_currency} to USD: {e}")
+        
+        # Last resort: return original (will be filtered by sanity check)
         return price
     
     async def _calculate_order_book_depth(
@@ -540,6 +575,180 @@ class IntraExchangeArbitrageEngine:
         
         return opportunities
     
+    async def _validate_opportunity_still_exists(
+        self,
+        opportunity: TradeOpportunity
+    ) -> Optional[TradeOpportunity]:
+        """
+        Re-check spread right before execution
+        Opportunities disappear fast - this prevents bad trades
+        """
+        try:
+            exchange_id = opportunity.exchange
+            
+            # Get fresh prices
+            ticker1 = await self.exchange_manager.fetch_ticker(exchange_id, opportunity.buy_pair)
+            ticker2 = await self.exchange_manager.fetch_ticker(exchange_id, opportunity.sell_pair)
+            
+            price1 = ticker1.get('last') or ticker1.get('close') or ticker1.get('bid', 0)
+            price2 = ticker2.get('last') or ticker2.get('close') or ticker2.get('bid', 0)
+            
+            if price1 <= 0 or price2 <= 0:
+                return None
+            
+            # Extract quote currencies
+            buy_quote = opportunity.buy_pair.split('/')[1]
+            sell_quote = opportunity.sell_pair.split('/')[1]
+            
+            # Normalize to USD
+            usd_price1 = await self._normalize_price_to_usd(exchange_id, price1, buy_quote)
+            usd_price2 = await self._normalize_price_to_usd(exchange_id, price2, sell_quote)
+            
+            # Recalculate spread
+            if usd_price1 < usd_price2:
+                raw_spread = (usd_price2 - usd_price1) / usd_price1
+            else:
+                return None  # Opportunity reversed
+            
+            # Check if still profitable
+            calculator = self.coinbase_calculator if exchange_id == 'coinbase' else self.gemini_calculator
+            fees_total = calculator.maker_fee + calculator.maker_fee
+            net_spread = raw_spread - fees_total - 0.002  # Account for slippage
+            
+            if net_spread < self.min_profit_threshold:
+                logger.warning(f"   ⚠️ Opportunity disappeared: spread now {net_spread*100:.3f}% < {self.min_profit_threshold*100:.3f}%")
+                return None
+            
+            # Update opportunity with fresh prices
+            opportunity.buy_price = usd_price1
+            opportunity.sell_price = usd_price2
+            opportunity.raw_spread_percent = raw_spread * 100
+            opportunity.net_profit_percent = net_spread * 100
+            
+            return opportunity
+            
+        except Exception as e:
+            logger.warning(f"   ⚠️ Could not validate opportunity: {e}")
+            return None  # If we can't validate, skip the trade
+    
+    async def _wait_for_order_fill_with_chase(
+        self,
+        exchange_id: str,
+        order_id: str,
+        symbol: str,
+        side: str,
+        original_price: float,
+        max_wait: int
+    ) -> Tuple[Optional[Dict], float]:
+        """
+        Wait for order fill, with price chasing if needed
+        Returns: (order_status, actual_price)
+        """
+        waited = 0
+        current_price = original_price
+        price_chased = 0.0
+        
+        while waited < max_wait:
+            await asyncio.sleep(2)
+            waited += 2
+            
+            try:
+                order_status = await self.exchange_manager.fetch_order(exchange_id, order_id, symbol)
+                status = order_status.get('status', 'unknown')
+                
+                if status in ['closed', 'filled']:
+                    filled_price = order_status.get('average') or order_status.get('price') or current_price
+                    return order_status, filled_price
+                
+                if status == 'canceled':
+                    return None, current_price
+                
+                # Check partial fill
+                filled = order_status.get('filled', 0)
+                if filled > 0:
+                    logger.info(f"   ⏳ Partially filled: {filled:.6f} {symbol}")
+                
+                # Price chasing: if not filled after 10s, adjust price slightly
+                if waited >= 10 and price_chased < self.max_price_chase_percent:
+                    # Cancel old order
+                    try:
+                        await self.exchange_manager.cancel_order(exchange_id, order_id, symbol)
+                        logger.info(f"   🔄 Canceling to chase price...")
+                    except:
+                        pass
+                    
+                    # Adjust price
+                    if side == 'buy':
+                        current_price = original_price * (1 + self.price_chase_increment * (waited // 10))
+                    else:
+                        current_price = original_price * (1 - self.price_chase_increment * (waited // 10))
+                    
+                    price_chased = abs(current_price - original_price) / original_price
+                    
+                    if price_chased < self.max_price_chase_percent:
+                        # Place new order at adjusted price
+                        try:
+                            base_amount = order_status.get('amount', 0) - filled
+                            if base_amount > 0:
+                                new_order = await self.exchange_manager.create_order(
+                                    exchange_id=exchange_id,
+                                    symbol=symbol,
+                                    order_type='limit',
+                                    side=side,
+                                    amount=base_amount,
+                                    price=current_price
+                                )
+                                order_id = new_order.get('id')
+                                logger.info(f"   🎯 Chased price: ${current_price:.6f} (chased {price_chased*100:.2f}%)")
+                        except Exception as e:
+                            logger.warning(f"   ⚠️ Failed to chase price: {e}")
+                            return order_status, current_price
+                    
+            except Exception as e:
+                logger.warning(f"   ⚠️ Error checking order: {e}")
+        
+        # Timeout
+        logger.warning(f"   ⏱️ Order timeout after {max_wait}s")
+        return None, current_price
+    
+    async def _check_balance_sufficient(
+        self,
+        exchange_id: str,
+        buy_pair: str,
+        sell_pair: str,
+        trade_size_usd: float
+    ) -> bool:
+        """
+        Check if we have sufficient balance for both sides of the trade
+        CRITICAL: Need quote currency for buy, base currency for sell
+        """
+        try:
+            balance = await self.exchange_manager.fetch_balance(exchange_id)
+            
+            # Extract currencies
+            buy_quote = buy_pair.split('/')[1]  # e.g., 'USD' from 'BTC/USD'
+            sell_quote = sell_pair.split('/')[1]  # e.g., 'USDC' from 'BTC/USDC'
+            base_crypto = buy_pair.split('/')[0]  # e.g., 'BTC'
+            
+            # Check buy side: need quote currency
+            buy_balance = balance.get('free', {}).get(buy_quote, 0)
+            if buy_balance < trade_size_usd * 1.1:  # 10% buffer
+                logger.warning(f"   ⚠️ Insufficient {buy_quote} balance: {buy_balance:.2f} < {trade_size_usd * 1.1:.2f}")
+                return False
+            
+            # Check sell side: need base currency (we'll have it after buy)
+            # But also check if we already have some
+            base_balance = balance.get('free', {}).get(base_crypto, 0)
+            if base_balance < 0.0001:  # Need at least tiny amount
+                # We'll get it from the buy, so this is OK
+                pass
+            
+            return True
+            
+        except Exception as e:
+            logger.warning(f"   ⚠️ Could not check balance: {e}")
+            return True  # Assume OK if we can't check
+    
     async def execute_trade(self, opportunity: TradeOpportunity) -> TradeExecution:
         """
         Execute an arbitrage trade atomically
@@ -553,10 +762,57 @@ class IntraExchangeArbitrageEngine:
         if exchange_id not in ['coinbase', 'gemini']:
             raise ValueError(f"Invalid exchange ID: {exchange_id}. Must be 'coinbase' or 'gemini'")
         
+        # CIRCUIT BREAKER CHECK
+        if self.circuit_breaker_enabled and self.session_loss <= self.circuit_breaker_loss_threshold:
+            logger.warning(f"   🛑 Circuit breaker: Session loss ${self.session_loss:.2f} <= ${self.circuit_breaker_loss_threshold:.2f}")
+            return TradeExecution(
+                exchange=exchange_id,
+                opportunity=opportunity,
+                buy_order_id=None,
+                sell_order_id=None,
+                actual_buy_price=0,
+                actual_sell_price=0,
+                actual_profit_usd=0,
+                execution_time_seconds=0,
+                status='failed'
+            )
+        
         logger.info(f"💰 Executing trade on {exchange_id.upper()}:")
         logger.info(f"   Buy: {opportunity.buy_pair} @ ${opportunity.buy_price:.6f}")
         logger.info(f"   Sell: {opportunity.sell_pair} @ ${opportunity.sell_price:.6f}")
         logger.info(f"   Expected profit: ${opportunity.expected_profit_usd:.2f}")
+        
+        # STEP 1: Validate opportunity still exists (CRITICAL - opportunities disappear fast)
+        validated_opp = await self._validate_opportunity_still_exists(opportunity)
+        if not validated_opp:
+            logger.warning(f"   ⚠️ Opportunity disappeared - skipping trade")
+            return TradeExecution(
+                exchange=exchange_id,
+                opportunity=opportunity,
+                buy_order_id=None,
+                sell_order_id=None,
+                actual_buy_price=0,
+                actual_sell_price=0,
+                actual_profit_usd=0,
+                execution_time_seconds=0,
+                status='failed'
+            )
+        opportunity = validated_opp
+        
+        # STEP 2: Check balance
+        if not await self._check_balance_sufficient(exchange_id, opportunity.buy_pair, opportunity.sell_pair, opportunity.trade_size_usd):
+            logger.warning(f"   ⚠️ Insufficient balance - skipping trade")
+            return TradeExecution(
+                exchange=exchange_id,
+                opportunity=opportunity,
+                buy_order_id=None,
+                sell_order_id=None,
+                actual_buy_price=0,
+                actual_sell_price=0,
+                actual_profit_usd=0,
+                execution_time_seconds=0,
+                status='failed'
+            )
         
         start_time = time.time()
         buy_order_id = None
@@ -586,29 +842,49 @@ class IntraExchangeArbitrageEngine:
             buy_order_id = buy_order.get('id')
             logger.info(f"   ✅ Buy order placed: {buy_order_id}")
             
-            # Wait for fill (with timeout)
-            max_wait_time = 30  # 30 seconds max
-            waited = 0
-            while waited < max_wait_time:
-                await asyncio.sleep(2)
-                waited += 2
-                buy_order_status = await self.exchange_manager.fetch_order(
-                    exchange_id=exchange_id,
-                    order_id=buy_order_id,
-                    symbol=opportunity.buy_pair
-                )
-                if buy_order_status.get('status') in ['closed', 'filled']:
-                    actual_buy_price = buy_order_status.get('average') or buy_order_status.get('price') or buy_order_status.get('filled', 0) / buy_order_status.get('amount', 1)
-                    logger.info(f"   ✅ Buy order filled @ ${actual_buy_price:.6f}")
-                    break
+            # Wait for fill with price chasing
+            buy_order_status, actual_buy_price = await self._wait_for_order_fill_with_chase(
+                exchange_id=exchange_id,
+                order_id=buy_order_id,
+                symbol=opportunity.buy_pair,
+                side='buy',
+                original_price=buy_price_limit,
+                max_wait=self.max_order_wait_seconds
+            )
             
-            if buy_order_status.get('status') not in ['closed', 'filled']:
-                logger.warning(f"   ⚠️ Buy order not filled after {max_wait_time}s")
-                # Cancel and continue (will mark as partial)
+            if not buy_order_status or buy_order_status.get('status') not in ['closed', 'filled']:
+                logger.warning(f"   ⚠️ Buy order not filled - canceling")
                 try:
                     await self.exchange_manager.cancel_order(exchange_id, buy_order_id, opportunity.buy_pair)
                 except:
                     pass
+                # Check if we got partial fill
+                if buy_order_status:
+                    filled = buy_order_status.get('filled', 0)
+                    if filled > 0:
+                        base_amount = filled  # Use partial fill
+                        logger.info(f"   ⚠️ Using partial fill: {filled:.6f}")
+                    else:
+                        status = 'failed'
+                        execution_time = time.time() - start_time
+                        return TradeExecution(
+                            exchange=exchange_id,
+                            opportunity=opportunity,
+                            buy_order_id=buy_order_id,
+                            sell_order_id=None,
+                            actual_buy_price=actual_buy_price,
+                            actual_sell_price=0,
+                            actual_profit_usd=0,
+                            execution_time_seconds=execution_time,
+                            status=status
+                        )
+            else:
+                # Get actual filled amount
+                filled = buy_order_status.get('filled', base_amount)
+                if filled < base_amount * 0.99:
+                    base_amount = filled  # Adjust for partial fill
+                    logger.info(f"   ⚠️ Buy partial fill: {filled:.6f} (using this amount)")
+                logger.info(f"   ✅ Buy order filled @ ${actual_buy_price:.6f}")
             
             # Place limit sell order (maker fee) - use exchange manager
             sell_price_limit = opportunity.sell_price * 0.999  # Slightly below to ensure fill
@@ -623,38 +899,53 @@ class IntraExchangeArbitrageEngine:
             sell_order_id = sell_order.get('id')
             logger.info(f"   ✅ Sell order placed: {sell_order_id}")
             
-            # Wait for fill
-            waited = 0
-            while waited < max_wait_time:
-                await asyncio.sleep(2)
-                waited += 2
-                sell_order_status = await self.exchange_manager.fetch_order(
-                    exchange_id=exchange_id,
-                    order_id=sell_order_id,
-                    symbol=opportunity.sell_pair
-                )
-                if sell_order_status.get('status') in ['closed', 'filled']:
-                    actual_sell_price = sell_order_status.get('average') or sell_order_status.get('price') or sell_order_status.get('filled', 0) / sell_order_status.get('amount', 1)
-                    logger.info(f"   ✅ Sell order filled @ ${actual_sell_price:.6f}")
-                    break
+            # Wait for fill with price chasing
+            sell_order_status, actual_sell_price = await self._wait_for_order_fill_with_chase(
+                exchange_id=exchange_id,
+                order_id=sell_order_id,
+                symbol=opportunity.sell_pair,
+                side='sell',
+                original_price=sell_price_limit,
+                max_wait=self.max_order_wait_seconds
+            )
             
-            if sell_order_status.get('status') not in ['closed', 'filled']:
-                logger.warning(f"   ⚠️ Sell order not filled after {max_wait_time}s")
-                # Cancel
+            if not sell_order_status or sell_order_status.get('status') not in ['closed', 'filled']:
+                logger.warning(f"   ⚠️ Sell order not filled - canceling")
                 try:
                     await self.exchange_manager.cancel_order(exchange_id, sell_order_id, opportunity.sell_pair)
                 except:
                     pass
+                # We have crypto from buy, but couldn't sell - mark as partial
+                status = 'partial'
+            else:
+                logger.info(f"   ✅ Sell order filled @ ${actual_sell_price:.6f}")
             
             # Calculate actual profit
-            if buy_order_status.get('status') in ['closed', 'filled'] and sell_order_status.get('status') in ['closed', 'filled']:
-                actual_profit_usd = (actual_sell_price - actual_buy_price) * base_amount - (
-                    opportunity.trade_size_usd * (calculator.maker_fee + calculator.maker_fee)
-                )
-                status = 'success' if actual_profit_usd > 0 else 'partial'
+            if buy_order_status and buy_order_status.get('status') in ['closed', 'filled'] and \
+               sell_order_status and sell_order_status.get('status') in ['closed', 'filled']:
+                
+                # Check for excessive slippage
+                buy_slippage = abs(actual_buy_price - opportunity.buy_price) / opportunity.buy_price
+                sell_slippage = abs(actual_sell_price - opportunity.sell_price) / opportunity.sell_price
+                total_slippage = buy_slippage + sell_slippage
+                
+                if total_slippage > self.max_slippage_percent:
+                    logger.warning(f"   ⚠️ Excessive slippage: {total_slippage*100:.2f}% > {self.max_slippage_percent*100:.2f}%")
+                    status = 'partial'
+                else:
+                    actual_profit_usd = (actual_sell_price - actual_buy_price) * base_amount - (
+                        opportunity.trade_size_usd * (calculator.maker_fee + calculator.maker_fee)
+                    )
+                    status = 'success' if actual_profit_usd > 0 else 'partial'
             else:
-                actual_profit_usd = 0.0
-                status = 'partial'
+                # Partial fill - calculate what we can
+                if buy_order_status and buy_order_status.get('status') in ['closed', 'filled']:
+                    # We have crypto but couldn't sell - estimate loss
+                    actual_profit_usd = -opportunity.trade_size_usd * 0.01  # Estimate 1% loss
+                    status = 'partial'
+                else:
+                    actual_profit_usd = 0.0
+                    status = 'failed'
             
             execution_time = time.time() - start_time
             self.execution_latency_ms = execution_time * 1000  # Update latency tracking
@@ -682,6 +973,9 @@ class IntraExchangeArbitrageEngine:
         # Update statistics
         self.stats[exchange_id]['trades_executed'] += 1
         pair_key = f"{opportunity.buy_pair}/{opportunity.sell_pair}"
+        
+        # Update session loss (for circuit breaker)
+        self.session_loss += actual_profit_usd if actual_profit_usd < 0 else 0
         
         if status == 'success':
             self.stats[exchange_id]['successful_trades'] += 1
