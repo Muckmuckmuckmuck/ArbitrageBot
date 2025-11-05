@@ -141,6 +141,17 @@ class CoinbaseGeminiExchangeManager:
         """Create order on exchange"""
         exchange = self.get_exchange(exchange_id)
         try:
+            # For Coinbase, first verify we can access the account
+            if exchange_id == 'coinbase':
+                try:
+                    # Try to fetch balance to verify account access
+                    balance_check = await self.fetch_balance(exchange_id)
+                    if balance_check:
+                        logger.debug(f"✅ Account access verified - balance fetch successful")
+                except Exception as balance_error:
+                    logger.warning(f"⚠️ Could not verify account access: {balance_error}")
+                    # Continue anyway - might be a different issue
+            
             # Build params dict (don't add portfolio_id - Coinbase Advanced Trade doesn't accept it)
             order_params = params.copy() if params else {}
             
@@ -185,11 +196,18 @@ class CoinbaseGeminiExchangeManager:
             
             # Provide helpful error message for account issues
             if 'account is not available' in error_msg.lower():
-                logger.error(f"   ⚠️ Coinbase account error - this may indicate:")
-                logger.error(f"      1. API key permissions issue")
-                logger.error(f"      2. Account type mismatch (CDP vs Exchange API)")
-                logger.error(f"      3. Portfolio/account configuration needed")
-                logger.error(f"   💡 Try: Check Coinbase API key permissions and account type")
+                logger.error(f"   ⚠️ Coinbase 'account is not available' error:")
+                logger.error(f"      This usually means:")
+                logger.error(f"      1. API key doesn't have 'wallet:orders:create' permission")
+                logger.error(f"      2. Account trading is disabled or needs verification")
+                logger.error(f"      3. Account has restrictions/holds preventing trading")
+                logger.error(f"      4. Wrong API key type (CDP vs Advanced Trade)")
+                logger.error(f"   💡 Solutions:")
+                logger.error(f"      - Check Coinbase Developer Platform: https://portal.cdp.coinbase.com/")
+                logger.error(f"      - Verify API key has 'wallet:orders:create' permission")
+                logger.error(f"      - Check Coinbase account status in web UI")
+                logger.error(f"      - Ensure account has completed KYC and trading is enabled")
+                logger.error(f"      - Try creating a new API key with full permissions")
             
             raise
     
