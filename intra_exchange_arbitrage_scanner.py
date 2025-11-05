@@ -42,6 +42,7 @@ class ArbitrageOpportunity:
     volatility_24h: float = 0.0
     arb_score: float = 0.0
     rank: int = 0
+    best_case_profit_percent: float = 0.0  # Profit with maker fees on both sides
     
     def to_dict(self) -> Dict:
         """Convert to dictionary for JSON serialization"""
@@ -62,7 +63,8 @@ class ArbitrageOpportunity:
             'order_book_depth_usdc': self.order_book_depth_usdc,
             'volatility_24h': self.volatility_24h,
             'arb_score': self.arb_score,
-            'rank': self.rank
+            'rank': self.rank,
+            'best_case_profit_percent': self.best_case_profit_percent
         }
 
 
@@ -295,14 +297,26 @@ class IntraExchangeArbitrageScanner:
         usd_orderbook = orderbook1 if quote1 == 'USD' else orderbook2
         usdc_orderbook = orderbook2 if quote2 in ['USDC', 'USDT'] else orderbook1
         
-        # Calculate net profit after fees and slippage
-        # We pay taker fee on one side, maker fee on the other (best case)
-        total_fees = maker_fee + taker_fee
-        net_profit = raw_spread - total_fees - total_slippage
+        # Calculate net profit with different fee scenarios
+        # Best case: Maker on both sides (market making)
+        best_case_fees = maker_fee * 2
+        best_case_profit = raw_spread - best_case_fees - total_slippage
+        
+        # Realistic case: Maker on one side, taker on other
+        realistic_fees = maker_fee + taker_fee
+        realistic_profit = raw_spread - realistic_fees - total_slippage
+        
+        # Worst case: Taker on both sides
+        worst_case_fees = taker_fee * 2
+        worst_case_profit = raw_spread - worst_case_fees - total_slippage
+        
+        # Use realistic case for primary calculation
+        net_profit = realistic_profit
+        total_fees = realistic_fees
         
         # Store all opportunities (even unprofitable) for analysis
         # But only return profitable ones for trading
-        is_profitable = net_profit > 0
+        is_profitable = realistic_profit > 0
         
         # Get additional data for ranking
         volume_usd = ticker1.get('quoteVolume', 0) or ticker1.get('volume', {}).get('USD', 0) if isinstance(ticker1.get('volume'), dict) else 0
@@ -325,18 +339,28 @@ class IntraExchangeArbitrageScanner:
             maker_fee=maker_fee * 100,
             taker_fee=taker_fee * 100,
             estimated_slippage=total_slippage * 100,
-            net_profit_percent=net_profit * 100,
+            net_profit_percent=realistic_profit * 100,  # Use realistic profit
             volume_usd=volume_usd,
             order_book_depth_usd=depth_usd,
             order_book_depth_usdc=depth_usdc,
             volatility_24h=volatility * 100
         )
         
-        # Calculate arb score
+        # Calculate arb score using best case (maker fees)
+        # This helps identify opportunities that would work with market making
         opp.arb_score = self.calculate_arb_score(opp)
         
-        # Only return profitable opportunities
+        # Store best case profit for analysis (market making strategy)
+        opp.best_case_profit_percent = best_case_profit * 100
+        
+        # Only return profitable opportunities (realistic case)
+        # But we log all for analysis
         if not is_profitable:
+            # Check if it would be profitable with maker fees (market making strategy)
+            if best_case_profit > 0:
+                logger.debug(f"   💡 {crypto} ({quote1}/{quote2}): {raw_spread*100:.3f}% spread - "
+                           f"NOT profitable with taker fees ({(realistic_fees*100):.3f}%), "
+                           f"BUT profitable with maker fees ({(best_case_fees*100):.3f}%) = {best_case_profit*100:.3f}% profit")
             return None
         
         return opp
