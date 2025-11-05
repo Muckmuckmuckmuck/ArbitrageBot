@@ -30,56 +30,27 @@ class CoinbaseGeminiExchangeManager:
         logger.info("Initializing Coinbase + Gemini exchanges...")
         
         try:
-            # Initialize Coinbase Advanced Trade API
-            # Ensure we're using Advanced Trade (not deprecated Coinbase Pro)
+            # Initialize Coinbase - simplified to match working BTC script
             coinbase_config = {
                 'apiKey': Config.COINBASE_API_KEY,
                 'secret': Config.COINBASE_SECRET_KEY,
                 'password': Config.COINBASE_PASSPHRASE,
+                'options': {
+                    'advanced': True  # Same as BTC script
+                },
+                'enableRateLimit': True,
+                'verbose': False,
                 **Config.EXCHANGE_CONFIGS['coinbase'],
             }
             
-            # Explicitly ensure Advanced Trade mode
-            # CCXT coinbase() should default to Advanced Trade, but verify
-            if 'options' not in coinbase_config:
-                coinbase_config['options'] = {}
-            
-            # Ensure Advanced Trade is enabled (should be default)
-            coinbase_config['options'].setdefault('advanced', True)
-            
             self.coinbase = ccxt.coinbase(coinbase_config)
             
-            # Verify we're using Advanced Trade API
-            if hasattr(self.coinbase, 'options') and self.coinbase.options.get('advanced'):
-                logger.info("✅ Coinbase Advanced Trade API mode confirmed")
-            
-            # Set sandbox mode if enabled
             if Config.COINBASE_SANDBOX:
                 self.coinbase.set_sandbox_mode(True)
-                logger.info("Coinbase: Sandbox mode enabled")
             
-            # Load markets (CCXT load_markets is synchronous)
+            # Load markets - same as BTC script
             self.coinbase.load_markets()
             logger.info(f"✅ Coinbase initialized: {len(self.coinbase.markets)} markets")
-            
-            # Verify we can access accounts (test connection)
-            try:
-                test_balance = self.coinbase.fetch_balance()
-                if test_balance:
-                    logger.debug("✅ Coinbase account connection verified")
-                    # Log account type info if available
-                    if hasattr(self.coinbase, 'fetch_accounts'):
-                        try:
-                            accounts = self.coinbase.fetch_accounts()
-                            if accounts:
-                                logger.debug(f"   Found {len(accounts)} account(s)")
-                        except:
-                            pass  # Not critical
-            except Exception as balance_error:
-                logger.warning(f"⚠️ Could not verify Coinbase account access: {balance_error}")
-                logger.warning("   This may indicate API key or account issues")
-                logger.warning("   ⚠️ IMPORTANT: Advanced Trade is NOT available to Coinbase Business accounts")
-                logger.warning("   💡 If you have a Business account, you'll need a Retail/Personal account")
             
         except Exception as e:
             logger.error(f"Failed to initialize Coinbase: {e}")
@@ -172,87 +143,45 @@ class CoinbaseGeminiExchangeManager:
     async def create_order(self, exchange_id: str, symbol: str, order_type: str, 
                           side: str, amount: float, price: Optional[float] = None, 
                           params: Optional[Dict] = None) -> Dict:
-        """Create order on exchange using Coinbase Advanced Trade API"""
+        """
+        Create order on exchange - simplified to match working BTC purchase script
+        Uses exact same approach that worked for BTC/USDC purchase
+        """
         exchange = self.get_exchange(exchange_id)
-        try:
-            # For Coinbase Advanced Trade, ensure proper configuration
-            if exchange_id == 'coinbase':
-                # Verify we're using Advanced Trade API
-                if not (hasattr(exchange, 'options') and exchange.options.get('advanced', False)):
-                    logger.warning("⚠️ Coinbase exchange may not be in Advanced Trade mode")
-                
-                # Ensure symbol format is correct (CCXT should handle this, but double-check)
-                # Coinbase Advanced Trade uses format like "BTC-USD" not "BTC/USD"
-                # But CCXT should normalize this automatically
-                logger.debug(f"Creating order: {symbol} {order_type} {side} {amount} @ {price}")
-            
-            # Build params dict - ensure we're not passing invalid parameters
-            order_params = params.copy() if params else {}
-            
-            # For Coinbase Advanced Trade, remove any invalid params
-            if exchange_id == 'coinbase':
-                # Remove portfolio_id if it exists - Advanced Trade API doesn't accept it in order params
-                if 'portfolio_id' in order_params:
-                    logger.debug("Removing portfolio_id from params (not supported by Coinbase Advanced Trade API)")
-                    order_params.pop('portfolio_id', None)
-                
-                # Remove retail_portfolio_id if it exists - not needed for standard orders
-                if 'retail_portfolio_id' in order_params:
-                    logger.debug("Removing retail_portfolio_id from params")
-                    order_params.pop('retail_portfolio_id', None)
-            
-            # CCXT create_order - call it directly
-            # CCXT handles the conversion to Advanced Trade API format automatically
-            if order_params:
-                order_result = exchange.create_order(
-                    symbol=symbol,
-                    type=order_type,
-                    side=side,
-                    amount=amount,
-                    price=price,
-                    params=order_params,
-                )
-            else:
-                order_result = exchange.create_order(
-                    symbol=symbol,
-                    type=order_type,
-                    side=side,
-                    amount=amount,
-                    price=price,
-                )
-            
-            # Handle both sync and async responses (CCXT can return either)
-            if hasattr(order_result, '__await__'):
-                order = await order_result
-            else:
-                order = order_result
-            
-            logger.info(f"✅ Order created on {exchange_id}: {side} {amount} {symbol} @ {price}")
-            return order
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Error creating order on {exchange_id}: {e}")
-            
-            # Provide detailed error message for account issues
-            if 'account is not available' in error_msg.lower():
-                logger.error(f"   ⚠️ Coinbase 'account is not available' error:")
-                logger.error(f"      This usually means:")
-                logger.error(f"      1. Account trading is disabled in Coinbase account settings")
-                logger.error(f"      2. Account has restrictions/holds preventing trading")
-                logger.error(f"      3. Account needs verification/KYC completion")
-                logger.error(f"      4. API key missing 'Trade' permission (check: View, Trade, Transfer)")
-                logger.error(f"      5. Wrong API key type (Coinbase Pro vs Advanced Trade)")
-                logger.error(f"      6. Account not enabled for Advanced Trade")
-                logger.error(f"   💡 Solutions:")
-                logger.error(f"      - Log into Coinbase web UI and verify trading is enabled")
-                logger.error(f"      - Check for any account holds or restrictions")
-                logger.error(f"      - Verify API key has 'Trade' permission at: https://portal.cdp.coinbase.com/")
-                logger.error(f"      - Ensure account has completed KYC verification")
-                logger.error(f"      - Ensure Advanced Trade is enabled on your account")
-                logger.error(f"      - If using Coinbase Pro keys, create new Advanced Trade API keys")
-                logger.error(f"      - Try placing a manual test order in Coinbase web UI first")
-            
-            raise
+        
+        # For Coinbase, remove invalid params (same as BTC script approach)
+        if exchange_id == 'coinbase' and params:
+            order_params = params.copy()
+            # Remove params that cause errors (same approach as BTC script)
+            order_params.pop('portfolio_id', None)
+            order_params.pop('retail_portfolio_id', None)
+        else:
+            order_params = params
+        
+        # Simple direct call - exactly like BTC script that worked
+        if order_params:
+            order = exchange.create_order(
+                symbol=symbol,
+                type=order_type,
+                side=side,
+                amount=amount,
+                price=price,
+                params=order_params
+            )
+        else:
+            order = exchange.create_order(
+                symbol=symbol,
+                type=order_type,
+                side=side,
+                amount=amount,
+                price=price
+            )
+        
+        # CCXT returns sync result, but handle async just in case
+        if hasattr(order, '__await__'):
+            order = await order
+        
+        return order
     
     async def fetch_order(self, exchange_id: str, order_id: str, symbol: str) -> Dict:
         """Fetch order status"""
