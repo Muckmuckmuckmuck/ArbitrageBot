@@ -827,9 +827,21 @@ class IntraExchangeArbitrageEngine:
         if exchange_id not in ['coinbase', 'gemini']:
             raise ValueError(f"Invalid exchange ID: {exchange_id}. Must be 'coinbase' or 'gemini'")
         
+        logger.info("")
+        logger.info(f"💰 [{exchange_id.upper()}] STARTING TRADE EXECUTION")
+        logger.info(f"   Crypto: {opportunity.base_crypto}")
+        logger.info(f"   Strategy: Buy {opportunity.buy_pair} → Sell {opportunity.sell_pair}")
+        logger.info(f"   Expected profit: {opportunity.net_profit_percent:.3f}% (${opportunity.expected_profit_usd:.2f})")
+        logger.info(f"   Raw spread: {opportunity.raw_spread_percent:.3f}%")
+        logger.info(f"   Fees: {opportunity.fees_buy:.3f}% + {opportunity.fees_sell:.3f}%")
+        logger.info(f"   Estimated slippage: {opportunity.estimated_slippage:.3f}%")
+        
         # CIRCUIT BREAKER CHECK
         if self.circuit_breaker_enabled and self.session_loss <= self.circuit_breaker_loss_threshold:
-            logger.warning(f"   🛑 Circuit breaker: Session loss ${self.session_loss:.2f} <= ${self.circuit_breaker_loss_threshold:.2f}")
+            logger.warning(f"   ❌ EXECUTION BLOCKED: Circuit breaker active")
+            logger.warning(f"      Session loss: ${self.session_loss:.2f}")
+            logger.warning(f"      Threshold: ${self.circuit_breaker_loss_threshold:.2f}")
+            logger.warning(f"      Reason: Too much loss this session - protecting capital")
             return TradeExecution(
                 exchange=exchange_id,
                 opportunity=opportunity,
@@ -841,16 +853,15 @@ class IntraExchangeArbitrageEngine:
                 execution_time_seconds=0,
                 status='failed'
             )
-        
-        logger.info(f"💰 Executing trade on {exchange_id.upper()}:")
-        logger.info(f"   Buy: {opportunity.buy_pair} @ ${opportunity.buy_price:.6f}")
-        logger.info(f"   Sell: {opportunity.sell_pair} @ ${opportunity.sell_price:.6f}")
-        logger.info(f"   Expected profit: ${opportunity.expected_profit_usd:.2f}")
+        logger.info(f"   ✅ Circuit breaker: PASSED (session loss: ${self.session_loss:.2f})")
         
         # STEP 1: Validate opportunity still exists (CRITICAL - opportunities disappear fast)
+        logger.info(f"   🔍 Validating opportunity still exists...")
         validated_opp = await self._validate_opportunity_still_exists(opportunity)
         if not validated_opp:
-            logger.warning(f"   ⚠️ Opportunity disappeared - skipping trade")
+            logger.warning(f"   ❌ EXECUTION BLOCKED: Opportunity disappeared")
+            logger.warning(f"      Reason: Spread changed or opportunity no longer profitable")
+            logger.warning(f"      This is normal - market moves fast, protecting against losses")
             return TradeExecution(
                 exchange=exchange_id,
                 opportunity=opportunity,
@@ -863,10 +874,15 @@ class IntraExchangeArbitrageEngine:
                 status='failed'
             )
         opportunity = validated_opp
+        logger.info(f"   ✅ Opportunity validation: PASSED (spread still profitable)")
         
         # STEP 2: Check balance
-        if not await self._check_balance_sufficient(exchange_id, opportunity.buy_pair, opportunity.sell_pair, opportunity.trade_size_usd):
-            logger.warning(f"   ⚠️ Insufficient balance - skipping trade")
+        logger.info(f"   💰 Checking balance sufficiency...")
+        balance_ok = await self._check_balance_sufficient(exchange_id, opportunity.buy_pair, opportunity.sell_pair, opportunity.trade_size_usd)
+        if not balance_ok:
+            logger.warning(f"   ❌ EXECUTION BLOCKED: Insufficient balance")
+            logger.warning(f"      Reason: Need ${opportunity.trade_size_usd * 1.1:.2f} in quote currency for buy")
+            logger.warning(f"      This trade requires sufficient balance to execute both sides")
             return TradeExecution(
                 exchange=exchange_id,
                 opportunity=opportunity,
@@ -878,6 +894,9 @@ class IntraExchangeArbitrageEngine:
                 execution_time_seconds=0,
                 status='failed'
             )
+        logger.info(f"   ✅ Balance check: PASSED (sufficient funds available)")
+        
+        logger.info(f"   ✅ ALL PRE-FLIGHT CHECKS PASSED - PROCEEDING WITH TRADE")
         
         start_time = time.time()
         buy_order_id = None
@@ -895,16 +914,25 @@ class IntraExchangeArbitrageEngine:
                 score_multiplier = min(2.0, opportunity.opportunity_score / 10.0)  # Max 2x
                 dynamic_size = self.min_position_size_usd * (1 + score_multiplier)
                 trade_size = min(self.max_position_size_usd, max(self.min_position_size_usd, dynamic_size))
+                logger.info(f"   📊 Dynamic sizing: Score {opportunity.opportunity_score:.2f} → ${trade_size:.2f} position")
             else:
                 trade_size = opportunity.trade_size_usd
+                logger.info(f"   📊 Fixed sizing: ${trade_size:.2f} position")
             
             base_amount = trade_size / opportunity.buy_price
+            logger.info(f"   💵 Trade size: ${trade_size:.2f} → {base_amount:.6f} {opportunity.base_crypto}")
             
             # Get calculator for fees
             calculator = self.coinbase_calculator if exchange_id == 'coinbase' else self.gemini_calculator
             
             # Place limit buy order (maker fee) - use exchange manager
             buy_price_limit = opportunity.buy_price * 1.001  # Slightly above to ensure fill
+            logger.info(f"   📝 Placing BUY limit order:")
+            logger.info(f"      Pair: {opportunity.buy_pair}")
+            logger.info(f"      Amount: {base_amount:.6f} {opportunity.base_crypto}")
+            logger.info(f"      Price: ${buy_price_limit:.6f} (target: ${opportunity.buy_price:.6f})")
+            logger.info(f"      Fee type: Maker (lower fee)")
+            
             buy_order = await self.exchange_manager.create_order(
                 exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
                 symbol=opportunity.buy_pair,
@@ -929,7 +957,10 @@ class IntraExchangeArbitrageEngine:
             if not buy_order_status or buy_order_status.get('status') not in ['closed', 'filled']:
                 # MARKET ORDER FALLBACK for time-sensitive opportunities
                 if self.market_order_fallback_enabled and opportunity.raw_spread_percent >= self.market_order_threshold * 100:
-                    logger.info(f"   ⚡ Using market order fallback (spread {opportunity.raw_spread_percent:.3f}% > {self.market_order_threshold*100:.1f}%)")
+                    logger.warning(f"   ⚠️ Limit order not filled - using market order fallback")
+                    logger.info(f"   ⚡ REASON: Spread {opportunity.raw_spread_percent:.3f}% > threshold {self.market_order_threshold*100:.1f}%")
+                    logger.info(f"   ⚡ ACTION: Switching to market order to capture opportunity")
+                    logger.info(f"   ⚠️ Note: Market orders use taker fee (higher), but ensure fill")
                     try:
                         # Cancel limit order
                         await self.exchange_manager.cancel_order(exchange_id, buy_order_id, opportunity.buy_pair)
@@ -998,6 +1029,12 @@ class IntraExchangeArbitrageEngine:
             
             # Place limit sell order (maker fee) - use exchange manager
             sell_price_limit = opportunity.sell_price * 0.999  # Slightly below to ensure fill
+            logger.info(f"   📝 Placing SELL limit order:")
+            logger.info(f"      Pair: {opportunity.sell_pair}")
+            logger.info(f"      Amount: {base_amount:.6f} {opportunity.base_crypto}")
+            logger.info(f"      Price: ${sell_price_limit:.6f} (target: ${opportunity.sell_price:.6f})")
+            logger.info(f"      Fee type: Maker (lower fee)")
+            
             sell_order = await self.exchange_manager.create_order(
                 exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
                 symbol=opportunity.sell_pair,
@@ -1059,6 +1096,38 @@ class IntraExchangeArbitrageEngine:
             
             execution_time = time.time() - start_time
             self.execution_latency_ms = execution_time * 1000  # Update latency tracking
+            
+            # LOG FINAL RESULT WITH EXPLANATION
+            logger.info("")
+            logger.info(f"   📊 TRADE EXECUTION RESULT:")
+            if status == 'success':
+                logger.info(f"   ✅ STATUS: SUCCESS")
+                logger.info(f"      ✅ REASON: Both orders filled successfully")
+                logger.info(f"      ✅ Buy: ${actual_buy_price:.6f} (expected: ${opportunity.buy_price:.6f})")
+                logger.info(f"      ✅ Sell: ${actual_sell_price:.6f} (expected: ${opportunity.sell_price:.6f})")
+                logger.info(f"      ✅ Actual profit: ${actual_profit_usd:.2f} (expected: ${opportunity.expected_profit_usd:.2f})")
+                logger.info(f"      ✅ Execution time: {execution_time:.2f}s")
+            elif status == 'partial':
+                logger.warning(f"   ⚠️ STATUS: PARTIAL")
+                if buy_order_status and buy_order_status.get('status') in ['closed', 'filled']:
+                    if not sell_order_status or sell_order_status.get('status') not in ['closed', 'filled']:
+                        logger.warning(f"      ⚠️ REASON: Buy filled but sell did not fill")
+                        logger.warning(f"      ⚠️ ACTION: Crypto acquired but couldn't sell - may need manual sell")
+                    else:
+                        logger.warning(f"      ⚠️ REASON: Excessive slippage detected")
+                        logger.warning(f"      ⚠️ ACTION: Spread changed during execution")
+                else:
+                    logger.warning(f"      ⚠️ REASON: Partial fill or order timeout")
+                logger.warning(f"      ⚠️ Actual profit: ${actual_profit_usd:.2f}")
+            else:
+                logger.error(f"   ❌ STATUS: FAILED")
+                if not buy_order_status:
+                    logger.error(f"      ❌ REASON: Buy order did not fill")
+                    logger.error(f"      ❌ ACTION: No trade executed - opportunity may have disappeared")
+                else:
+                    logger.error(f"      ❌ REASON: Order execution failed")
+                logger.error(f"      ❌ Actual profit: ${actual_profit_usd:.2f}")
+            logger.info("")
             
             logger.info(f"   ✅ Trade completed: ${actual_profit_usd:.2f} profit in {execution_time:.2f}s")
             
@@ -1177,57 +1246,93 @@ class IntraExchangeArbitrageEngine:
                 
                 # Execute top opportunities for Coinbase (up to max_concurrent)
                 coinbase_selected = 0
+                coinbase_skipped = 0
                 for opp in coinbase_opps[:self.max_concurrent_trades_per_exchange * 2]:  # Check more than we'll execute
-                    if opp.net_profit_percent >= self.min_profit_threshold * 100:
-                        # Check if pairs conflict with active trades
+                    skip_reason = None
+                    
+                    # Check 1: Profit threshold
+                    if opp.net_profit_percent < self.min_profit_threshold * 100:
+                        skip_reason = f"Below threshold: {opp.net_profit_percent:.3f}% < {self.min_profit_threshold*100:.2f}%"
+                    else:
+                        # Check 2: Pair conflicts
                         pair_key = f"{opp.buy_pair}/{opp.sell_pair}"
-                        if pair_key not in coinbase_used_pairs:
-                            # Check if base crypto or quote currencies conflict
+                        if pair_key in coinbase_used_pairs:
+                            skip_reason = f"Pair already in use: {pair_key}"
+                        else:
+                            # Check 3: Base crypto conflicts
                             base_crypto = opp.buy_pair.split('/')[0]
-                            buy_quote = opp.buy_pair.split('/')[1]
-                            sell_quote = opp.sell_pair.split('/')[1]
-                            
-                            # Allow if different base crypto or different quote currencies
                             conflicts = False
                             for used_pair in coinbase_used_pairs:
                                 used_base = used_pair.split('/')[0].split('/')[0]
                                 if used_base == base_crypto:
                                     conflicts = True
+                                    skip_reason = f"Base crypto conflict: {base_crypto} already trading"
                                     break
                             
                             if not conflicts:
+                                # ALL CHECKS PASSED - EXECUTE
                                 coinbase_used_pairs.add(pair_key)
                                 coinbase_tasks.append(self.execute_trade(opp))
                                 coinbase_selected += 1
-                                logger.info(f"   🎯 [COINBASE] Selected opportunity #{coinbase_selected}: "
-                                           f"{opp.base_crypto} | {opp.buy_pair} → {opp.sell_pair} | "
-                                           f"Profit: {opp.net_profit_percent:.3f}% | ${opp.expected_profit_usd:.2f}")
+                                logger.info(f"   ✅ [COINBASE] EXECUTING opportunity #{coinbase_selected}:")
+                                logger.info(f"      Crypto: {opp.base_crypto}")
+                                logger.info(f"      Strategy: Buy {opp.buy_pair} → Sell {opp.sell_pair}")
+                                logger.info(f"      Net Profit: {opp.net_profit_percent:.3f}% (${opp.expected_profit_usd:.2f})")
+                                logger.info(f"      ✅ Passed all checks: Profit threshold ✓, No conflicts ✓")
                                 if len(coinbase_tasks) >= self.max_concurrent_trades_per_exchange:
                                     break
+                    
+                    if skip_reason:
+                        coinbase_skipped += 1
+                        logger.debug(f"   ⏭️  [COINBASE] Skipped {opp.base_crypto} ({opp.buy_pair}→{opp.sell_pair}): {skip_reason}")
+                
+                if coinbase_skipped > 0:
+                    logger.info(f"   ℹ️  [COINBASE] Skipped {coinbase_skipped} opportunities (threshold/conflicts)")
                 
                 # Execute top opportunities for Gemini (up to max_concurrent)
                 gemini_selected = 0
+                gemini_skipped = 0
                 for opp in gemini_opps[:self.max_concurrent_trades_per_exchange * 2]:
-                    if opp.net_profit_percent >= self.min_profit_threshold * 100:
+                    skip_reason = None
+                    
+                    # Check 1: Profit threshold
+                    if opp.net_profit_percent < self.min_profit_threshold * 100:
+                        skip_reason = f"Below threshold: {opp.net_profit_percent:.3f}% < {self.min_profit_threshold*100:.2f}%"
+                    else:
+                        # Check 2: Pair conflicts
                         pair_key = f"{opp.buy_pair}/{opp.sell_pair}"
-                        if pair_key not in gemini_used_pairs:
+                        if pair_key in gemini_used_pairs:
+                            skip_reason = f"Pair already in use: {pair_key}"
+                        else:
+                            # Check 3: Base crypto conflicts
                             base_crypto = opp.buy_pair.split('/')[0]
                             conflicts = False
                             for used_pair in gemini_used_pairs:
                                 used_base = used_pair.split('/')[0].split('/')[0]
                                 if used_base == base_crypto:
                                     conflicts = True
+                                    skip_reason = f"Base crypto conflict: {base_crypto} already trading"
                                     break
                             
                             if not conflicts:
+                                # ALL CHECKS PASSED - EXECUTE
                                 gemini_used_pairs.add(pair_key)
                                 gemini_tasks.append(self.execute_trade(opp))
                                 gemini_selected += 1
-                                logger.info(f"   🎯 [GEMINI] Selected opportunity #{gemini_selected}: "
-                                           f"{opp.base_crypto} | {opp.buy_pair} → {opp.sell_pair} | "
-                                           f"Profit: {opp.net_profit_percent:.3f}% | ${opp.expected_profit_usd:.2f}")
+                                logger.info(f"   ✅ [GEMINI] EXECUTING opportunity #{gemini_selected}:")
+                                logger.info(f"      Crypto: {opp.base_crypto}")
+                                logger.info(f"      Strategy: Buy {opp.buy_pair} → Sell {opp.sell_pair}")
+                                logger.info(f"      Net Profit: {opp.net_profit_percent:.3f}% (${opp.expected_profit_usd:.2f})")
+                                logger.info(f"      ✅ Passed all checks: Profit threshold ✓, No conflicts ✓")
                                 if len(gemini_tasks) >= self.max_concurrent_trades_per_exchange:
                                     break
+                    
+                    if skip_reason:
+                        gemini_skipped += 1
+                        logger.debug(f"   ⏭️  [GEMINI] Skipped {opp.base_crypto} ({opp.buy_pair}→{opp.sell_pair}): {skip_reason}")
+                
+                if gemini_skipped > 0:
+                    logger.info(f"   ℹ️  [GEMINI] Skipped {gemini_skipped} opportunities (threshold/conflicts)")
                 
                 # Execute all trades concurrently
                 all_tasks = coinbase_tasks + gemini_tasks
@@ -1242,7 +1347,20 @@ class IntraExchangeArbitrageEngine:
                     logger.info("")
                     await asyncio.gather(*all_tasks, return_exceptions=True)
                 else:
-                    logger.info("   ⚠️  No trades selected - all opportunities below threshold or conflicts")
+                    logger.info("")
+                    logger.info("   ⚠️  NO TRADES EXECUTED THIS CYCLE")
+                    logger.info("   📋 REASONS:")
+                    if len(coinbase_opps) == 0 and len(gemini_opps) == 0:
+                        logger.info("      • No profitable opportunities found on either exchange")
+                        logger.info("      • All pairs checked were below profit threshold after fees")
+                    else:
+                        if len(coinbase_opps) > 0 and len(coinbase_tasks) == 0:
+                            logger.info(f"      • COINBASE: Found {len(coinbase_opps)} opportunities but none selected")
+                            logger.info("        - All were below threshold or had conflicts")
+                        if len(gemini_opps) > 0 and len(gemini_tasks) == 0:
+                            logger.info(f"      • GEMINI: Found {len(gemini_opps)} opportunities but none selected")
+                            logger.info("        - All were below threshold or had conflicts")
+                    logger.info("")
                 
                 # Print statistics
                 self._print_statistics()
