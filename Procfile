@@ -1,5 +1,5 @@
-# COINBASE WITHDRAWAL ERROR TEST
-# Purpose: Capture correlation ID, timestamp, and request details for Coinbase support
-# This will attempt a Coinbase withdrawal and capture all error details
+# INTRA-EXCHANGE ARBITRAGE SCANNER
+# Scans 1,000+ cryptos on Coinbase and Gemini for USD/USDC arbitrage opportunities
+# Ranks by profitability after fees and slippage
 # Original bot command backed up in Procfile.bot_backup
-worker: python coinbase_withdrawal_error_test.py
+worker: python intra_exchange_arbitrage_scanner.py
