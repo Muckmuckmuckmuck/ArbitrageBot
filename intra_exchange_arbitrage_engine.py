@@ -531,6 +531,24 @@ class IntraExchangeArbitrageEngine:
                         execution_latency_ms=self.execution_latency_ms
                     )
                     
+                    # Account for currency conversion cost if needed (EUR/GBP pairs)
+                    conversion_cost = 0.0
+                    if buy_quote in ['EUR', 'GBP'] and buy_quote not in ['USD', 'USDC', 'USDT']:
+                        # Need to convert USD/USDC/USDT to EUR/GBP (bridge conversion)
+                        conversion_cost = self.exchange_manager.get_conversion_cost_percent(exchange_id)
+                        logger.debug(f"   💱 Conversion cost for {buy_quote}: {conversion_cost*100:.2f}%")
+                    
+                    if sell_quote in ['EUR', 'GBP'] and sell_quote not in ['USD', 'USDC', 'USDT']:
+                        # Need to convert back from EUR/GBP to USD/USDC/USDT
+                        conversion_cost += self.exchange_manager.get_conversion_cost_percent(exchange_id)
+                        logger.debug(f"   💱 Conversion cost for {sell_quote}: {conversion_cost*100:.2f}%")
+                    
+                    # Deduct conversion cost from net profit
+                    if conversion_cost > 0:
+                        profit_data['net_profit'] = profit_data['net_profit'] - conversion_cost
+                        profit_data['expected_profit_usd'] = trade_size_usd * profit_data['net_profit']
+                        logger.debug(f"   ⚠️ Adjusted for conversion cost: net profit reduced by {conversion_cost*100:.2f}%")
+                    
                     # Check if profitable
                     net_profit = profit_data['net_profit']
                     pair_key = f"{buy_pair}/{sell_pair}"
