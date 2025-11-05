@@ -136,10 +136,34 @@ class CoinbaseGeminiExchangeManager:
             raise
     
     async def create_order(self, exchange_id: str, symbol: str, order_type: str, 
-                          side: str, amount: float, price: Optional[float] = None) -> Dict:
+                          side: str, amount: float, price: Optional[float] = None, 
+                          params: Optional[Dict] = None) -> Dict:
         """Create order on exchange"""
         exchange = self.get_exchange(exchange_id)
         try:
+            # Build params dict
+            order_params = params or {}
+            
+            # For Coinbase Advanced Trade, try to handle portfolio/account if needed
+            if exchange_id == 'coinbase':
+                # Try to fetch default portfolio if available
+                try:
+                    # Check if exchange has portfolio_id in options
+                    if hasattr(exchange, 'options') and 'portfolio_id' in exchange.options:
+                        if 'portfolio_id' not in order_params:
+                            order_params['portfolio_id'] = exchange.options['portfolio_id']
+                    # Alternatively, try to fetch portfolios and use the first one
+                    elif hasattr(exchange, 'fetch_portfolios'):
+                        portfolios = exchange.fetch_portfolios()
+                        if portfolios and len(portfolios) > 0:
+                            portfolio_id = portfolios[0].get('id') or portfolios[0].get('portfolio_id')
+                            if portfolio_id:
+                                order_params['portfolio_id'] = portfolio_id
+                                logger.debug(f"Using portfolio_id: {portfolio_id}")
+                except Exception as portfolio_error:
+                    logger.debug(f"Could not fetch portfolios (may not be needed): {portfolio_error}")
+                    # Continue without portfolio_id - some Coinbase accounts don't need it
+            
             # CCXT create_order is synchronous, check if it returns awaitable
             order_result = exchange.create_order(
                 symbol=symbol,
@@ -147,6 +171,7 @@ class CoinbaseGeminiExchangeManager:
                 side=side,
                 amount=amount,
                 price=price,
+                params=order_params,  # Pass params explicitly
             )
             
             # Handle both sync and async responses
@@ -158,7 +183,17 @@ class CoinbaseGeminiExchangeManager:
             logger.info(f"✅ Order created on {exchange_id}: {side} {amount} {symbol} @ {price}")
             return order
         except Exception as e:
+            error_msg = str(e)
             logger.error(f"Error creating order on {exchange_id}: {e}")
+            
+            # Provide helpful error message for account issues
+            if 'account is not available' in error_msg.lower():
+                logger.error(f"   ⚠️ Coinbase account error - this may indicate:")
+                logger.error(f"      1. API key permissions issue")
+                logger.error(f"      2. Account type mismatch (CDP vs Exchange API)")
+                logger.error(f"      3. Portfolio/account configuration needed")
+                logger.error(f"   💡 Try: Check Coinbase API key permissions and account type")
+            
             raise
     
     async def fetch_order(self, exchange_id: str, order_id: str, symbol: str) -> Dict:
