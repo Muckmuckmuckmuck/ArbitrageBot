@@ -306,21 +306,85 @@ class IntraExchangeArbitrageScanner:
         if price1 == 0 or price2 == 0:
             return None
         
-        # Final safety check - ensure no None values
-        if price1 is None or price2 is None:
+        # CRITICAL: Convert prices to USD for comparison
+        # If quote currencies are different units, we need to normalize
+        # Fiat currencies (USD, USDC, USDT) are ~1:1, but EUR/GBP need conversion
+        # Crypto currencies (BTC, ETH, etc.) need conversion to USD
+        
+        fiat_currencies = {'USD', 'USDC', 'USDT', 'DAI'}
+        
+        # Convert price1 to USD
+        price1_usd = price1
+        if quote1 not in fiat_currencies:
+            # Crypto quote currency - need to get its USD price
+            try:
+                quote1_ticker = await self.get_ticker(exchange_id, f'{quote1}/USD')
+                if quote1_ticker:
+                    quote1_usd_price = quote1_ticker.get('last') or quote1_ticker.get('close') or quote1_ticker.get('bid') or 0
+                    if quote1_usd_price and quote1_usd_price > 0:
+                        # Convert: price1 is in quote1, so price1_usd = price1 * quote1_usd_price
+                        price1_usd = price1 * float(quote1_usd_price)
+                    else:
+                        # Can't convert, skip this pair
+                        return None
+                else:
+                    return None
+            except Exception:
+                return None
+        elif quote1 == 'EUR':
+            # EUR to USD conversion (approximate, should use real rate)
+            # For now, use 1.05 as approximation (EUR is slightly stronger)
+            price1_usd = price1 * 1.05
+        elif quote1 == 'GBP':
+            # GBP to USD conversion (approximate, should use real rate)
+            # For now, use 1.25 as approximation (GBP is stronger)
+            price1_usd = price1 * 1.25
+        
+        # Convert price2 to USD
+        price2_usd = price2
+        if quote2 not in fiat_currencies:
+            # Crypto quote currency - need to get its USD price
+            try:
+                quote2_ticker = await self.get_ticker(exchange_id, f'{quote2}/USD')
+                if quote2_ticker:
+                    quote2_usd_price = quote2_ticker.get('last') or quote2_ticker.get('close') or quote2_ticker.get('bid') or 0
+                    if quote2_usd_price and quote2_usd_price > 0:
+                        # Convert: price2 is in quote2, so price2_usd = price2 * quote2_usd_price
+                        price2_usd = price2 * float(quote2_usd_price)
+                    else:
+                        # Can't convert, skip this pair
+                        return None
+                else:
+                    return None
+            except Exception:
+                return None
+        elif quote2 == 'EUR':
+            price2_usd = price2 * 1.05
+        elif quote2 == 'GBP':
+            price2_usd = price2 * 1.25
+        
+        # Validate USD prices
+        if price1_usd == 0 or price2_usd == 0:
             return None
         
-        # Calculate raw spread
+        # Sanity check: prices should be reasonable (not millions of percent different)
+        # If the ratio is > 10x or < 0.1x, something is wrong
+        price_ratio = max(price1_usd, price2_usd) / min(price1_usd, price2_usd)
+        if price_ratio > 10.0:
+            # Prices are too different - likely conversion error or invalid pair
+            return None
+        
+        # Calculate raw spread using USD-normalized prices
         try:
-            if price2 > price1:
+            if price2_usd > price1_usd:
                 # Buy pair1, sell pair2
-                raw_spread = (price2 - price1) / price1
+                raw_spread = (price2_usd - price1_usd) / price1_usd
                 direction = f'{quote1}→{quote2}'
                 buy_pair = pair1
                 sell_pair = pair2
             else:
                 # Buy pair2, sell pair1
-                raw_spread = (price1 - price2) / price2
+                raw_spread = (price1_usd - price2_usd) / price2_usd
                 direction = f'{quote2}→{quote1}'
                 buy_pair = pair2
                 sell_pair = pair1
@@ -328,9 +392,12 @@ class IntraExchangeArbitrageScanner:
             # If any error in comparison/calculation, skip this pair
             return None
         
-        # For display, use the actual prices
+        # For display, use the actual prices (in their original quote currencies)
         display_price1 = price1
         display_price2 = price2
+        # Store USD prices for accurate comparison
+        display_price1_usd = price1_usd
+        display_price2_usd = price2_usd
         
         # Get order books for slippage calculation
         orderbook1 = await self.get_order_book(exchange_id, pair1)
@@ -399,8 +466,8 @@ class IntraExchangeArbitrageScanner:
             crypto=crypto,
             usd_pair=pair1,  # Actual pair name
             usdc_pair=pair2,  # Actual pair name
-            usd_price=display_price1,  # Price in quote1
-            usdc_price=display_price2,  # Price in quote2
+            usd_price=display_price1_usd,  # Price in USD (normalized)
+            usdc_price=display_price2_usd,  # Price in USD (normalized)
             raw_spread_percent=raw_spread * 100,
             maker_fee=maker_fee * 100,
             taker_fee=taker_fee * 100,
@@ -462,17 +529,30 @@ class IntraExchangeArbitrageScanner:
                 crypto_quotes[base].append(quote)
         
         # Find all cryptos with at least 2 different quote pairs (arbitrage opportunity)
+        # BUT: Only compare compatible quote currencies
+        # Fiat currencies: USD, USDC, USDT, EUR, GBP, DAI (all ~1:1)
+        # Crypto currencies: BTC, ETH, SOL, etc. (need conversion)
+        
+        fiat_currencies = {'USD', 'USDC', 'USDT', 'EUR', 'GBP', 'DAI'}
+        
         valid_cryptos = []
         for crypto, quotes in crypto_quotes.items():
             if len(quotes) >= 2:
-                # Generate all possible pairs of quote currencies
-                # e.g., if quotes = ['USD', 'USDC', 'BTC'], we get:
-                # (USD, USDC), (USD, BTC), (USDC, BTC)
-                for i in range(len(quotes)):
-                    for j in range(i + 1, len(quotes)):
-                        quote1 = quotes[i]
-                        quote2 = quotes[j]
+                # Separate fiat and crypto quotes
+                fiat_quotes = [q for q in quotes if q in fiat_currencies]
+                crypto_quotes_list = [q for q in quotes if q not in fiat_currencies]
+                
+                # Compare fiat vs fiat (USD/USDC, EUR/GBP, etc.)
+                for i in range(len(fiat_quotes)):
+                    for j in range(i + 1, len(fiat_quotes)):
+                        quote1 = fiat_quotes[i]
+                        quote2 = fiat_quotes[j]
                         valid_cryptos.append((crypto, quote1, quote2))
+                
+                # Compare crypto vs crypto ONLY if we can get USD conversion
+                # (e.g., BTC/ETH vs BTC/USD - we need ETH/USD to convert)
+                # For now, skip crypto-to-crypto pairs to avoid conversion complexity
+                # They would require getting the quote currency price in USD first
         
         # Log statistics
         quote_currency_count = {}
@@ -556,7 +636,29 @@ class IntraExchangeArbitrageScanner:
                                 continue
                             
                             if price1 > 0 and price2 > 0:
-                                spread = abs(price2 - price1) / min(price1, price2) * 100
+                                # For unprofitable pairs, we still need to normalize to USD
+                                # But skip if conversion fails (too complex for unprofitable analysis)
+                                fiat_currencies = {'USD', 'USDC', 'USDT', 'DAI'}
+                                
+                                # Simple conversion for fiat pairs only
+                                if quote1 in fiat_currencies and quote2 in fiat_currencies:
+                                    # Both are fiat, can compare directly
+                                    spread = abs(price2 - price1) / min(price1, price2) * 100
+                                elif quote1 == 'EUR' and quote2 in fiat_currencies:
+                                    price1_usd = price1 * 1.05
+                                    spread = abs(price2 - price1_usd) / min(price1_usd, price2) * 100
+                                elif quote1 in fiat_currencies and quote2 == 'EUR':
+                                    price2_usd = price2 * 1.05
+                                    spread = abs(price2_usd - price1) / min(price1, price2_usd) * 100
+                                elif quote1 == 'GBP' and quote2 in fiat_currencies:
+                                    price1_usd = price1 * 1.25
+                                    spread = abs(price2 - price1_usd) / min(price1_usd, price2) * 100
+                                elif quote1 in fiat_currencies and quote2 == 'GBP':
+                                    price2_usd = price2 * 1.25
+                                    spread = abs(price2_usd - price1) / min(price1, price2_usd) * 100
+                                else:
+                                    # Crypto-to-crypto or complex conversion - skip for now
+                                    continue
                                 total_spreads.append(spread)
                                 unprofitable_spreads.append(spread)
                                 
