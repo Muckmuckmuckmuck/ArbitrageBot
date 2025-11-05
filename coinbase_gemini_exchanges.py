@@ -141,51 +141,35 @@ class CoinbaseGeminiExchangeManager:
         """Create order on exchange"""
         exchange = self.get_exchange(exchange_id)
         try:
-            # Build params dict
-            order_params = params or {}
+            # Build params dict (don't add portfolio_id - Coinbase Advanced Trade doesn't accept it)
+            order_params = params.copy() if params else {}
             
-            # For Coinbase Advanced Trade, try to handle portfolio/account if needed
+            # For Coinbase Advanced Trade, ensure we don't pass invalid params
             if exchange_id == 'coinbase':
-                # Try to fetch default portfolio if available
-                try:
-                    # Check if exchange has portfolio_id in options
-                    if hasattr(exchange, 'options') and exchange.options and 'portfolio_id' in exchange.options:
-                        if 'portfolio_id' not in order_params:
-                            order_params['portfolio_id'] = exchange.options['portfolio_id']
-                            logger.debug(f"Using portfolio_id from options: {order_params['portfolio_id']}")
-                    # Alternatively, try to fetch portfolios and use the first one
-                    elif hasattr(exchange, 'fetch_portfolios'):
-                        try:
-                            portfolios = exchange.fetch_portfolios()
-                            if portfolios and len(portfolios) > 0:
-                                portfolio_id = portfolios[0].get('id') or portfolios[0].get('portfolio_id')
-                                if portfolio_id:
-                                    order_params['portfolio_id'] = portfolio_id
-                                    logger.info(f"✅ Found portfolio_id: {portfolio_id}")
-                        except Exception as fetch_error:
-                            logger.debug(f"Could not fetch portfolios: {fetch_error}")
-                except Exception as portfolio_error:
-                    logger.debug(f"Portfolio handling error (may not be needed): {portfolio_error}")
-                    # Continue without portfolio_id - some Coinbase accounts don't need it
-                
-                # Try to check account status if available
-                try:
-                    if hasattr(exchange, 'fetch_balance'):
-                        balance = exchange.fetch_balance()
-                        if balance:
-                            logger.debug(f"Account balance accessible, proceeding with order")
-                except Exception as balance_error:
-                    logger.warning(f"⚠️ Could not fetch balance (may indicate account issue): {balance_error}")
+                # Remove portfolio_id if it exists - Coinbase API doesn't accept it
+                if 'portfolio_id' in order_params:
+                    logger.debug("Removing portfolio_id from params (not supported by Coinbase Advanced Trade API)")
+                    order_params.pop('portfolio_id', None)
             
             # CCXT create_order is synchronous, check if it returns awaitable
-            order_result = exchange.create_order(
-                symbol=symbol,
-                type=order_type,
-                side=side,
-                amount=amount,
-                price=price,
-                params=order_params,  # Pass params explicitly
-            )
+            # Pass params only if it's not empty, otherwise let CCXT handle defaults
+            if order_params:
+                order_result = exchange.create_order(
+                    symbol=symbol,
+                    type=order_type,
+                    side=side,
+                    amount=amount,
+                    price=price,
+                    params=order_params,
+                )
+            else:
+                order_result = exchange.create_order(
+                    symbol=symbol,
+                    type=order_type,
+                    side=side,
+                    amount=amount,
+                    price=price,
+                )
             
             # Handle both sync and async responses
             if hasattr(order_result, '__await__'):
