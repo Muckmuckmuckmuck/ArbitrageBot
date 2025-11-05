@@ -410,9 +410,10 @@ class IntraExchangeArbitrageScanner:
                     total_spreads.append(opp.raw_spread_percent)
                     logger.info(f"   ✅ {crypto} ({quote1}/{quote2}): {opp.net_profit_percent:.3f}% profit (spread: {opp.raw_spread_percent:.3f}%, fees: {opp.maker_fee + opp.taker_fee:.3f}%, slippage: {opp.estimated_slippage:.3f}%)")
                 else:
-                    # Log unprofitable but show spread for analysis
+                    # For unprofitable, we still need to calculate spread for statistics
+                    # The scan_crypto already calculated this, but we need to get it
+                    # Let's just track it from the scan
                     try:
-                        # Quick price check to show spread
                         ticker1 = await self.get_ticker(exchange_id, f'{crypto}/{quote1}')
                         ticker2 = await self.get_ticker(exchange_id, f'{crypto}/{quote2}')
                         if ticker1 and ticker2:
@@ -421,8 +422,6 @@ class IntraExchangeArbitrageScanner:
                             if price1 > 0 and price2 > 0:
                                 spread = abs(price2 - price1) / min(price1, price2) * 100
                                 total_spreads.append(spread)
-                                if scanned % 50 == 0:  # Log every 50th to avoid spam
-                                    logger.debug(f"   ⚠️  {crypto} ({quote1}/{quote2}): {spread:.3f}% spread (not profitable)")
                     except:
                         pass
                 
@@ -440,7 +439,13 @@ class IntraExchangeArbitrageScanner:
             avg_spread = sum(total_spreads) / len(total_spreads)
             max_spread = max(total_spreads)
             min_spread = min(total_spreads)
+            profitable_spreads = [s for s in total_spreads if s > (maker_fee + taker_fee) * 100 + 0.2]  # 0.2% slippage
             logger.info(f"   Spread stats: avg={avg_spread:.3f}%, max={max_spread:.3f}%, min={min_spread:.3f}%")
+            logger.info(f"   Required spread for profit: >{(maker_fee + taker_fee) * 100 + 0.2:.3f}% (fees + slippage)")
+            if profitable_spreads:
+                logger.info(f"   Spreads that COULD be profitable: {len(profitable_spreads)} (if we can get maker fees)")
+            else:
+                logger.warning(f"   ⚠️  No spreads large enough to overcome fees ({(maker_fee + taker_fee) * 100:.3f}%)")
         
         return opportunities
     
