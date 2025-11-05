@@ -1023,29 +1023,31 @@ class IntraExchangeArbitrageEngine:
             logger.info(f"      Amount: {order_amount:.6f} {from_currency if side == 'sell' else to_currency}")
             logger.info(f"      Expected result: ~{amount:.6f} {to_currency}")
             
-            # Place market order for conversion (fast execution)
+            # Place LIMIT order for conversion (Coinbase requires limit orders for some pairs)
+            # Use limit orders for better reliability and to avoid "limit only mode" errors
             try:
-                if exchange_id == 'coinbase' and side == 'buy':
-                    # Coinbase requires price for market buy orders
-                    conversion_order = await self.exchange_manager.create_order(
-                        exchange_id=exchange_id,
-                        symbol=pair_to_use,
-                        order_type='market',
-                        side=side,
-                        amount=amount,  # Amount of to_currency (base) we want
-                        price=current_price * 1.02  # Price with buffer for slippage
-                    )
+                # Calculate limit price with small buffer to ensure fill
+                if side == 'buy':
+                    # Buying to_currency: use ask price + small buffer
+                    limit_price = current_price * 1.005  # 0.5% above ask to ensure fill
                 else:
-                    # For sell orders or other exchanges, use standard market order
-                    conversion_order = await self.exchange_manager.create_order(
-                        exchange_id=exchange_id,
-                        symbol=pair_to_use,
-                        order_type='market',
-                        side=side,
-                        amount=order_amount
-                    )
+                    # Selling from_currency: use bid price - small buffer
+                    limit_price = current_price * 0.995  # 0.5% below bid to ensure fill
                 
-                logger.info(f"   ✅ Conversion order placed: {conversion_order.get('id')}")
+                logger.info(f"   📝 Placing LIMIT conversion order:")
+                logger.info(f"      Price: {limit_price:.6f} (current: {current_price:.6f})")
+                logger.info(f"      Amount: {order_amount:.6f}")
+                
+                conversion_order = await self.exchange_manager.create_order(
+                    exchange_id=exchange_id,
+                    symbol=pair_to_use,
+                    order_type='limit',
+                    side=side,
+                    amount=order_amount,
+                    price=limit_price
+                )
+                
+                logger.info(f"   ✅ Conversion limit order placed: {conversion_order.get('id')}")
                 
             except Exception as order_error:
                 logger.error(f"   ❌ Failed to place conversion order: {order_error}")
@@ -1053,26 +1055,61 @@ class IntraExchangeArbitrageEngine:
                 logger.error(f"   Traceback: {traceback.format_exc()}")
                 return False
             
-            # Wait a moment for fill
-            await asyncio.sleep(2)
+            # Wait for order to fill (with timeout)
+            max_wait_seconds = 10
+            waited = 0
+            check_interval = 1
             
-            # Verify conversion
+            while waited < max_wait_seconds:
+                await asyncio.sleep(check_interval)
+                waited += check_interval
+                
+                try:
+                    order_status = await self.exchange_manager.fetch_order(
+                        exchange_id, conversion_order.get('id'), pair_to_use
+                    )
+                    
+                    status = order_status.get('status', 'unknown')
+                    
+                    if status in ['closed', 'filled']:
+                        filled = order_status.get('filled', 0)
+                        logger.info(f"   ✅ Currency conversion successful!")
+                        logger.info(f"      Filled: {filled:.6f} in {waited}s")
+                        return True
+                    elif status == 'canceled':
+                        logger.warning(f"   ⚠️ Conversion order was canceled")
+                        return False
+                    else:
+                        # Still pending, continue waiting
+                        if waited % 3 == 0:  # Log every 3 seconds
+                            logger.info(f"   ⏳ Waiting for conversion order to fill... ({waited}s)")
+                        
+                except Exception as check_error:
+                    logger.debug(f"   Error checking order status: {check_error}")
+            
+            # Timeout - check one more time
             try:
                 order_status = await self.exchange_manager.fetch_order(
                     exchange_id, conversion_order.get('id'), pair_to_use
                 )
-                
                 status = order_status.get('status', 'unknown')
-                logger.info(f"   📊 Conversion order status: {status}")
                 
                 if status in ['closed', 'filled']:
                     filled = order_status.get('filled', 0)
-                    logger.info(f"   ✅ Currency conversion successful!")
+                    logger.info(f"   ✅ Currency conversion successful (after timeout check)!")
                     logger.info(f"      Filled: {filled:.6f}")
                     return True
                 else:
-                    logger.warning(f"   ⚠️ Conversion order not filled: {status}")
-                    logger.warning(f"      Order details: {order_status}")
+                    # Limit order didn't fill - cancel it
+                    logger.warning(f"   ⚠️ Conversion limit order not filled after {max_wait_seconds}s: {status}")
+                    logger.warning(f"   ⚠️ Canceling order and reporting failure")
+                    
+                    try:
+                        await self.exchange_manager.cancel_order(exchange_id, conversion_order.get('id'), pair_to_use)
+                        logger.info(f"   ✅ Conversion order canceled")
+                    except Exception as cancel_error:
+                        logger.warning(f"   ⚠️ Could not cancel conversion order: {cancel_error}")
+                    
                     return False
                     
             except Exception as verify_error:
