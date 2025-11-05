@@ -276,9 +276,9 @@ class IntraExchangeArbitrageScanner:
             buy_pair = pair2
             sell_pair = pair1
         
-        # For display, use standard names
-        usd_price = price1 if quote1 == 'USD' else price2
-        usdc_price = price2 if quote2 in ['USDC', 'USDT'] else price1
+        # For display, use the actual prices
+        display_price1 = price1
+        display_price2 = price2
         
         # Get order books for slippage calculation
         orderbook1 = await self.get_order_book(exchange_id, pair1)
@@ -294,9 +294,9 @@ class IntraExchangeArbitrageScanner:
         sell_slippage = self.calculate_slippage(sell_orderbook, trade_size_usd)
         total_slippage = buy_slippage + sell_slippage
         
-        # For display
-        usd_orderbook = orderbook1 if quote1 == 'USD' else orderbook2
-        usdc_orderbook = orderbook2 if quote2 in ['USDC', 'USDT'] else orderbook1
+        # For display (keep orderbooks for depth calculation)
+        display_orderbook1 = orderbook1
+        display_orderbook2 = orderbook2
         
         # Calculate net profit with different fee scenarios
         # Best case: Maker on both sides (market making)
@@ -320,30 +320,38 @@ class IntraExchangeArbitrageScanner:
         is_profitable = realistic_profit > 0
         
         # Get additional data for ranking
-        volume_usd = ticker1.get('quoteVolume', 0) or ticker1.get('volume', {}).get('USD', 0) if isinstance(ticker1.get('volume'), dict) else 0
-        if volume_usd == 0:
-            volume_usd = ticker2.get('quoteVolume', 0) or ticker2.get('volume', {}).get('USD', 0) if isinstance(ticker2.get('volume'), dict) else 0
+        # Try to get volume in any currency
+        volume_usd = ticker1.get('quoteVolume', 0) or ticker1.get('volume', 0)
+        if isinstance(ticker1.get('volume'), dict):
+            # Try USD first, then any key
+            volume_usd = ticker1.get('volume', {}).get('USD', 0) or ticker1.get('volume', {}).get(quote1, 0) or (list(ticker1.get('volume', {}).values())[0] if ticker1.get('volume', {}) else 0)
         
-        depth_usd = self.calculate_order_book_depth(orderbook1 if quote1 == 'USD' else orderbook2)
-        depth_usdc = self.calculate_order_book_depth(orderbook2 if quote2 in ['USDC', 'USDT'] else orderbook1)
+        if volume_usd == 0:
+            volume_usd = ticker2.get('quoteVolume', 0) or ticker2.get('volume', 0)
+            if isinstance(ticker2.get('volume'), dict):
+                volume_usd = ticker2.get('volume', {}).get('USD', 0) or ticker2.get('volume', {}).get(quote2, 0) or (list(ticker2.get('volume', {}).values())[0] if ticker2.get('volume', {}) else 0)
+        
+        depth1 = self.calculate_order_book_depth(orderbook1)
+        depth2 = self.calculate_order_book_depth(orderbook2)
         volatility = self.calculate_volatility(ticker1)
         
         # Create opportunity
+        # For display, use the actual pair names
         opp = ArbitrageOpportunity(
             exchange=exchange_id,
             crypto=crypto,
-            usd_pair=pair1 if quote1 == 'USD' else pair2,
-            usdc_pair=pair2 if quote2 in ['USDC', 'USDT'] else pair1,
-            usd_price=usd_price,
-            usdc_price=usdc_price,
+            usd_pair=pair1,  # Actual pair name
+            usdc_pair=pair2,  # Actual pair name
+            usd_price=display_price1,  # Price in quote1
+            usdc_price=display_price2,  # Price in quote2
             raw_spread_percent=raw_spread * 100,
             maker_fee=maker_fee * 100,
             taker_fee=taker_fee * 100,
             estimated_slippage=total_slippage * 100,
             net_profit_percent=realistic_profit * 100,  # Use realistic profit
             volume_usd=volume_usd,
-            order_book_depth_usd=depth_usd,
-            order_book_depth_usdc=depth_usdc,
+            order_book_depth_usd=depth1,  # Depth in quote1 currency
+            order_book_depth_usdc=depth2,  # Depth in quote2 currency
             volatility_24h=volatility * 100
         )
         
@@ -373,46 +381,52 @@ class IntraExchangeArbitrageScanner:
         markets = await self.get_all_markets(exchange_id)
         opportunities = []
         
-        # Find all cryptos that have both USD and USDC pairs
-        crypto_pairs = {}
+        # Find ALL possible arbitrage pairs for each crypto
+        # A crypto can have multiple quote currencies (USD, USDC, BTC, ETH, SOL, etc.)
+        # We want to find arbitrage opportunities between ANY two quote pairs for the same base crypto
+        crypto_quotes = {}  # {base_crypto: [list of quote currencies]}
         
         for symbol, market_info in markets.items():
             if not market_info.get('active', True):
                 continue
             
-            base = market_info.get('base', '')
-            quote = market_info.get('quote', '')
+            base = market_info.get('base', '').strip()
+            quote = market_info.get('quote', '').strip()
             
-            # Check for USD, USDC, USDT, or other USD-pegged stablecoins
-            if quote in ['USD', 'USDC', 'USDT']:
-                if base not in crypto_pairs:
-                    crypto_pairs[base] = {'USD': False, 'USDC': False, 'USDT': False}
-                
-                if quote == 'USD':
-                    crypto_pairs[base]['USD'] = True
-                elif quote == 'USDC':
-                    crypto_pairs[base]['USDC'] = True
-                elif quote == 'USDT':
-                    crypto_pairs[base]['USDT'] = True
+            # Skip invalid pairs
+            if not base or not quote:
+                continue
+            
+            # Track all quote currencies for each base crypto
+            if base not in crypto_quotes:
+                crypto_quotes[base] = []
+            
+            if quote not in crypto_quotes[base]:
+                crypto_quotes[base].append(quote)
         
-        # Filter to cryptos with multiple USD-pegged pairs
-        # Priority: USD/USDC, then USD/USDT, then USDC/USDT
+        # Find all cryptos with at least 2 different quote pairs (arbitrage opportunity)
         valid_cryptos = []
-        for crypto, pairs in crypto_pairs.items():
-            if pairs['USD'] and pairs['USDC']:
-                valid_cryptos.append((crypto, 'USD', 'USDC'))
-            elif pairs['USD'] and pairs['USDT']:
-                valid_cryptos.append((crypto, 'USD', 'USDT'))
-            elif pairs['USDC'] and pairs['USDT']:
-                valid_cryptos.append((crypto, 'USDC', 'USDT'))
+        for crypto, quotes in crypto_quotes.items():
+            if len(quotes) >= 2:
+                # Generate all possible pairs of quote currencies
+                # e.g., if quotes = ['USD', 'USDC', 'BTC'], we get:
+                # (USD, USDC), (USD, BTC), (USDC, BTC)
+                for i in range(len(quotes)):
+                    for j in range(i + 1, len(quotes)):
+                        quote1 = quotes[i]
+                        quote2 = quotes[j]
+                        valid_cryptos.append((crypto, quote1, quote2))
         
-        # Log what quote currencies are available
-        usd_count = sum(1 for _, pairs in crypto_pairs.items() if pairs['USD'])
-        usdc_count = sum(1 for _, pairs in crypto_pairs.items() if pairs['USDC'])
-        usdt_count = sum(1 for _, pairs in crypto_pairs.items() if pairs['USDT'])
-        logger.info(f"   Available pairs: {usd_count} USD, {usdc_count} USDC, {usdt_count} USDT")
+        # Log statistics
+        quote_currency_count = {}
+        for quotes in crypto_quotes.values():
+            for q in quotes:
+                quote_currency_count[q] = quote_currency_count.get(q, 0) + 1
         
-        logger.info(f"   Found {len(valid_cryptos)} cryptos with multiple quote pairs")
+        top_quotes = sorted(quote_currency_count.items(), key=lambda x: x[1], reverse=True)[:10]
+        logger.info(f"   Top quote currencies: {', '.join(f'{q}({c})' for q, c in top_quotes)}")
+        logger.info(f"   Found {len(crypto_quotes)} unique cryptos")
+        logger.info(f"   Found {len(valid_cryptos)} possible arbitrage pairs (crypto with 2+ quote currencies)")
         
         # Limit to max_cryptos
         valid_cryptos = valid_cryptos[:max_cryptos]
@@ -427,7 +441,8 @@ class IntraExchangeArbitrageScanner:
         profitable_spreads = []
         unprofitable_spreads = []
         
-        logger.info(f"   📊 Scanning {len(valid_cryptos)} cryptos...")
+        logger.info(f"   📊 Scanning {len(valid_cryptos)} arbitrage pair combinations...")
+        logger.info(f"   (Examples: BTC/USD vs BTC/USDC, ETH/BTC vs ETH/USD, SOL/USDC vs SOL/ETH, etc.)")
         logger.info("")
         
         for crypto_info in valid_cryptos:
@@ -442,9 +457,9 @@ class IntraExchangeArbitrageScanner:
                            f"❌ Not Profitable: {unprofitable_count}")
             
             try:
-                # Log what we're scanning (every 25th to avoid spam)
-                if scanned % 25 == 0 or scanned <= 5:
-                    logger.info(f"   🔍 Scanning [{scanned:3d}/{len(valid_cryptos)}] {crypto:8s} ({quote1}/{quote2:4s})...")
+                # Log what we're scanning (every 25th to avoid spam, but show first 10)
+                if scanned % 25 == 0 or scanned <= 10:
+                    logger.info(f"   🔍 Scanning [{scanned:3d}/{len(valid_cryptos)}] {crypto:8s} ({quote1:6s}/{quote2:6s})...")
                 
                 opp = await self.scan_crypto(exchange_id, crypto, quote1, quote2)
                 
@@ -454,7 +469,7 @@ class IntraExchangeArbitrageScanner:
                     profitable_list.append(crypto)
                     total_spreads.append(opp.raw_spread_percent)
                     profitable_spreads.append(opp.raw_spread_percent)
-                    logger.info(f"   ✅ [{scanned:3d}/{len(valid_cryptos)}] {crypto:8s} ({quote1}/{quote2:4s}): "
+                    logger.info(f"   ✅ [{scanned:3d}/{len(valid_cryptos)}] {crypto:8s} ({quote1:6s}/{quote2:6s}): "
                                f"PROFITABLE | Spread: {opp.raw_spread_percent:6.3f}% | "
                                f"Net Profit: {opp.net_profit_percent:6.3f}% | "
                                f"Fees: {opp.maker_fee + opp.taker_fee:5.3f}% | "
@@ -486,7 +501,7 @@ class IntraExchangeArbitrageScanner:
                                 
                                 # Log every 25th unprofitable to avoid spam, but show first 10
                                 if scanned % 25 == 0 or scanned <= 10:
-                                    logger.info(f"   ❌ [{scanned:3d}/{len(valid_cryptos)}] {crypto:8s} ({quote1}/{quote2:4s}): "
+                                    logger.info(f"   ❌ [{scanned:3d}/{len(valid_cryptos)}] {crypto:8s} ({quote1:6s}/{quote2:6s}): "
                                                f"NOT PROFITABLE | Spread: {spread:6.3f}% | "
                                                f"Required: {required_spread:5.3f}% | "
                                                f"Deficit: {deficit:5.3f}%")
@@ -570,7 +585,8 @@ class IntraExchangeArbitrageScanner:
         logger.info("=" * 80)
         logger.info("🚀 INTRA-EXCHANGE ARBITRAGE SCANNER")
         logger.info("=" * 80)
-        logger.info(f"Scanning Coinbase and Gemini for USD/USDC arbitrage opportunities...")
+        logger.info(f"Scanning ALL possible arbitrage pairs on Coinbase and Gemini...")
+        logger.info(f"Including: USD/USDC/USDT, BTC/ETH, SOL/AVAX, and ANY crypto-to-crypto pairs!")
         logger.info("")
         
         # Scan both exchanges sequentially (parallel causes too many API calls)
