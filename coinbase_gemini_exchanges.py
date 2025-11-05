@@ -149,20 +149,33 @@ class CoinbaseGeminiExchangeManager:
                 # Try to fetch default portfolio if available
                 try:
                     # Check if exchange has portfolio_id in options
-                    if hasattr(exchange, 'options') and 'portfolio_id' in exchange.options:
+                    if hasattr(exchange, 'options') and exchange.options and 'portfolio_id' in exchange.options:
                         if 'portfolio_id' not in order_params:
                             order_params['portfolio_id'] = exchange.options['portfolio_id']
+                            logger.debug(f"Using portfolio_id from options: {order_params['portfolio_id']}")
                     # Alternatively, try to fetch portfolios and use the first one
                     elif hasattr(exchange, 'fetch_portfolios'):
-                        portfolios = exchange.fetch_portfolios()
-                        if portfolios and len(portfolios) > 0:
-                            portfolio_id = portfolios[0].get('id') or portfolios[0].get('portfolio_id')
-                            if portfolio_id:
-                                order_params['portfolio_id'] = portfolio_id
-                                logger.debug(f"Using portfolio_id: {portfolio_id}")
+                        try:
+                            portfolios = exchange.fetch_portfolios()
+                            if portfolios and len(portfolios) > 0:
+                                portfolio_id = portfolios[0].get('id') or portfolios[0].get('portfolio_id')
+                                if portfolio_id:
+                                    order_params['portfolio_id'] = portfolio_id
+                                    logger.info(f"✅ Found portfolio_id: {portfolio_id}")
+                        except Exception as fetch_error:
+                            logger.debug(f"Could not fetch portfolios: {fetch_error}")
                 except Exception as portfolio_error:
-                    logger.debug(f"Could not fetch portfolios (may not be needed): {portfolio_error}")
+                    logger.debug(f"Portfolio handling error (may not be needed): {portfolio_error}")
                     # Continue without portfolio_id - some Coinbase accounts don't need it
+                
+                # Try to check account status if available
+                try:
+                    if hasattr(exchange, 'fetch_balance'):
+                        balance = exchange.fetch_balance()
+                        if balance:
+                            logger.debug(f"Account balance accessible, proceeding with order")
+                except Exception as balance_error:
+                    logger.warning(f"⚠️ Could not fetch balance (may indicate account issue): {balance_error}")
             
             # CCXT create_order is synchronous, check if it returns awaitable
             order_result = exchange.create_order(
