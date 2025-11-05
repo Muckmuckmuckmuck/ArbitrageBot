@@ -1316,8 +1316,9 @@ class IntraExchangeArbitrageEngine:
             
             logger.info(f"   💰 Balance check:")
             logger.info(f"      Cash ({buy_quote}): {buy_balance:.2f} = ${cash_available_usd:.2f} USD equivalent")
+            logger.info(f"      Convertible (USD/USDC/USDT): ${total_convertible:.2f}")
             logger.info(f"      Position ({base_crypto}): {base_crypto_balance:.8f} = ${crypto_value_usd:.2f} USD value")
-            logger.info(f"      Total available: ${cash_available_usd + crypto_value_usd:.2f}")
+            logger.info(f"      Total available: ${total_available_usd:.2f}")
             
             # Calculate maximum position size based on what we have
             # We can either:
@@ -1335,6 +1336,12 @@ class IntraExchangeArbitrageEngine:
             # Minimum position size check
             if actual_position_size < self.min_position_size_usd * 0.5:
                 logger.warning(f"   ⚠️ Available ${actual_position_size:.2f} < 50% of minimum ${self.min_position_size_usd:.2f}")
+                logger.warning(f"   📊 Breakdown: Cash=${cash_available_usd:.2f}, Positions=${crypto_value_usd:.2f}, Convertible=${total_convertible:.2f}")
+                
+                # If we have convertible currency but conversion failed, log it
+                if total_convertible >= self.min_position_size_usd * 0.5 and buy_quote in ['EUR', 'GBP']:
+                    logger.warning(f"   ⚠️ Have ${total_convertible:.2f} convertible but conversion to {buy_quote} failed or insufficient")
+                
                 return False, 0
             
             if actual_position_size < trade_size_usd:
