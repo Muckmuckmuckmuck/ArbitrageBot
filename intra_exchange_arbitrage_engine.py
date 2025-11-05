@@ -271,12 +271,16 @@ class IntraExchangeArbitrageEngine:
     
     async def _get_all_pairs_for_crypto(self, exchange_id: str, base_crypto: str) -> List[Tuple[str, str]]:
         """
-        Get all trading pairs for a crypto (e.g., BTC/USD, BTC/USDC, BTC/EUR, BTC/BTC)
+        Get all trading pairs for a crypto (e.g., BTC/USD, BTC/USDC, BTC/USDT)
         Returns list of (pair_symbol, quote_currency) tuples
-        Excludes futures, swaps, and other derivative markets
+        Excludes futures, swaps, EUR/GBP pairs, and other derivative markets
+        Only trades USD/USDC/USDT pairs (like the working BTC purchase)
         """
         exchange = self.exchange_manager.get_exchange(exchange_id)
         pairs = []
+        
+        # Only allow these quote currencies (same as BTC/USDC that worked)
+        allowed_quotes = ['USD', 'USDC', 'USDT']
         
         for symbol, market_info in exchange.markets.items():
             if not market_info.get('active', True):
@@ -294,7 +298,8 @@ class IntraExchangeArbitrageEngine:
             base = market_info.get('base', '').strip().upper()
             quote = market_info.get('quote', '').strip().upper()
             
-            if base == base_crypto.upper():
+            # Only include pairs with allowed quote currencies (USD/USDC/USDT)
+            if base == base_crypto.upper() and quote in allowed_quotes:
                 pairs.append((symbol, quote))
         
         return pairs
