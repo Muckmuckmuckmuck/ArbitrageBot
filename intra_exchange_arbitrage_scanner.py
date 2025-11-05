@@ -502,6 +502,15 @@ class IntraExchangeArbitrageScanner:
         """Scan an exchange for arbitrage opportunities"""
         logger.info(f"🔍 Scanning {exchange_id} for arbitrage opportunities...")
         
+        # Get fees for this exchange (needed for summary calculations)
+        from coinbase_gemini_config import EXCHANGE_FEES
+        if exchange_id == 'coinbase':
+            maker_fee = EXCHANGE_FEES['coinbase']['maker']
+            taker_fee = EXCHANGE_FEES['coinbase']['taker']
+        else:  # gemini
+            maker_fee = EXCHANGE_FEES['gemini']['maker']
+            taker_fee = EXCHANGE_FEES['gemini']['taker']
+        
         markets = await self.get_all_markets(exchange_id)
         opportunities = []
         
