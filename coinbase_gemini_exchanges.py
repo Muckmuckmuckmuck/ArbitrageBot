@@ -67,9 +67,19 @@ class CoinbaseGeminiExchangeManager:
                 test_balance = self.coinbase.fetch_balance()
                 if test_balance:
                     logger.debug("✅ Coinbase account connection verified")
+                    # Log account type info if available
+                    if hasattr(self.coinbase, 'fetch_accounts'):
+                        try:
+                            accounts = self.coinbase.fetch_accounts()
+                            if accounts:
+                                logger.debug(f"   Found {len(accounts)} account(s)")
+                        except:
+                            pass  # Not critical
             except Exception as balance_error:
                 logger.warning(f"⚠️ Could not verify Coinbase account access: {balance_error}")
                 logger.warning("   This may indicate API key or account issues")
+                logger.warning("   ⚠️ IMPORTANT: Advanced Trade is NOT available to Coinbase Business accounts")
+                logger.warning("   💡 If you have a Business account, you'll need a Retail/Personal account")
             
         except Exception as e:
             logger.error(f"Failed to initialize Coinbase: {e}")
