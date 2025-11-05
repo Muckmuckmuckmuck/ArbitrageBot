@@ -1244,30 +1244,71 @@ class IntraExchangeArbitrageEngine:
                 logger.warning(f"   ⚠️ Invalid prices for balance check")
                 return False, 0
             
-            # OPTION 1: Check if we have cash to buy (normal case)
-            buy_balance = free_balance.get(buy_quote, 0)
-            cash_available_usd = buy_balance
+            # Check for convertible currencies (USD/USDC/USDT) first
+            total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
             
-            # If buy_quote is not USD/USDC/USDT, convert to USD equivalent
-            if buy_quote not in ['USD', 'USDC', 'USDT']:
-                # Try to get USD equivalent rate
-                if buy_quote in ['EUR', 'GBP']:
-                    # For EUR/GBP, we'll need to convert, so check convertible balance
-                    total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
-                    cash_available_usd = total_convertible
-                else:
-                    # For other currencies, try to get USD pair
+            # OPTION 1: Check if we have the required quote currency directly
+            buy_balance = free_balance.get(buy_quote, 0)
+            
+            # If we need EUR/GBP and don't have it, check if we can convert
+            if buy_quote in ['EUR', 'GBP'] and buy_balance < trade_size_usd * 0.3:
+                # We have convertible currency, need to convert to EUR/GBP
+                if total_convertible > trade_size_usd * 0.3:
+                    logger.info(f"   💱 Need {buy_quote} but have ${total_convertible:.2f} in USD/USDC/USDT - converting...")
+                    
+                    # Attempt conversion
+                    conversion_success = await self._ensure_currency_available(
+                        exchange_id=exchange_id,
+                        required_currency=buy_quote,
+                        required_amount=min(trade_size_usd * 1.1, total_convertible * 0.8)
+                    )
+                    
+                    if conversion_success:
+                        # Re-check balance after conversion
+                        balance = await self.exchange_manager.fetch_balance(exchange_id)
+                        free_balance = balance.get('free', {})
+                        buy_balance = free_balance.get(buy_quote, 0)
+                        total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
+                        logger.info(f"   ✅ Conversion successful: Have {buy_balance:.2f} {buy_quote}")
+                    else:
+                        logger.warning(f"   ⚠️ Conversion failed, but have ${total_convertible:.2f} convertible")
+            
+            # Calculate cash available in USD equivalent
+            if buy_quote in ['USD', 'USDC', 'USDT']:
+                cash_available_usd = buy_balance
+            elif buy_quote in ['EUR', 'GBP']:
+                # Use converted balance or convertible balance
+                if buy_balance > 0:
+                    # Convert EUR/GBP to USD equivalent
                     try:
                         usd_pair = f"{buy_quote}/USD"
                         exchange = self.exchange_manager.get_exchange(exchange_id)
                         if usd_pair in exchange.markets:
                             usd_ticker = await self.exchange_manager.fetch_ticker(exchange_id, usd_pair)
-                            usd_rate = usd_ticker.get('last') or usd_ticker.get('bid', 1.0)
+                            usd_rate = usd_ticker.get('last') or usd_ticker.get('bid', 1.08 if buy_quote == 'EUR' else 1.25)
                             cash_available_usd = buy_balance * usd_rate
                         else:
-                            cash_available_usd = buy_balance  # Assume 1:1 if can't convert
+                            # Approximate rates
+                            cash_available_usd = buy_balance * (1.08 if buy_quote == 'EUR' else 1.25)
                     except:
+                        # Fallback to approximate rates
+                        cash_available_usd = buy_balance * (1.08 if buy_quote == 'EUR' else 1.25)
+                else:
+                    # No converted balance, use convertible if available
+                    cash_available_usd = total_convertible
+            else:
+                # For other currencies, try to get USD pair
+                try:
+                    usd_pair = f"{buy_quote}/USD"
+                    exchange = self.exchange_manager.get_exchange(exchange_id)
+                    if usd_pair in exchange.markets:
+                        usd_ticker = await self.exchange_manager.fetch_ticker(exchange_id, usd_pair)
+                        usd_rate = usd_ticker.get('last') or usd_ticker.get('bid', 1.0)
+                        cash_available_usd = buy_balance * usd_rate
+                    else:
                         cash_available_usd = buy_balance
+                except:
+                    cash_available_usd = buy_balance
             
             # OPTION 2: Check if we already have the base crypto (can sell immediately)
             base_crypto_balance = free_balance.get(base_crypto, 0)
@@ -1284,44 +1325,8 @@ class IntraExchangeArbitrageEngine:
             # 2. Sell existing position: limited by crypto_value_usd
             # 3. Combination: cash_available_usd + crypto_value_usd
             
+            # Total available = cash + existing positions
             total_available_usd = cash_available_usd + crypto_value_usd
-            
-            # If we have existing position, we can execute sell side immediately
-            # But we still need cash for buy side (unless we're doing reverse arbitrage)
-            # For now, assume we need cash for buy side
-            
-            if cash_available_usd < trade_size_usd * 0.3:  # Need at least 30% of desired
-                # Try to convert available currencies to required quote currency
-                total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
-                
-                if total_convertible > trade_size_usd * 0.3:
-                    logger.info(f"   💱 Converting ${total_convertible:.2f} to {buy_quote}...")
-                    
-                    conversion_success = await self._ensure_currency_available(
-                        exchange_id=exchange_id,
-                        required_currency=buy_quote,
-                        required_amount=min(trade_size_usd * 1.1, total_convertible * 0.8)
-                    )
-                    
-                    if conversion_success:
-                        # Re-check balance after conversion
-                        balance = await self.exchange_manager.fetch_balance(exchange_id)
-                        free_balance = balance.get('free', {})
-                        buy_balance = free_balance.get(buy_quote, 0)
-                        
-                        # Recalculate cash available
-                        if buy_quote in ['USD', 'USDC', 'USDT']:
-                            cash_available_usd = buy_balance
-                        else:
-                            # Use same logic as before for conversion
-                            total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
-                            cash_available_usd = total_convertible
-                        
-                        base_crypto_balance = free_balance.get(base_crypto, 0)
-                        crypto_value_usd = base_crypto_balance * sell_price
-                        total_available_usd = cash_available_usd + crypto_value_usd
-                    else:
-                        logger.warning(f"   ⚠️ Conversion failed")
             
             # Determine actual position size based on available resources
             # Use 90% of available to leave buffer for fees/slippage
