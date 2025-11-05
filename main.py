@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
+BTC PURCHASE TEST SCRIPT - NOT THE ARBITRAGE BOT
 Simple script to buy $2 of BTC with USDC on Coinbase
 ONLY shows BTC purchase logging - nothing else
-
-Run directly: python buy_btc_simple.py
+Exits after purchase completes
 """
 
 import ccxt
@@ -75,8 +75,12 @@ try:
     print(f"BTC Purchase: Status: {order['status']}")
     print(f"BTC Purchase: Amount: {order['amount']} BTC")
     print(f"BTC Purchase: Price: ${order['price']}")
+    print(f"BTC Purchase: COMPLETE - Exiting")
 
 except Exception as e:
     print(f"BTC Purchase: ERROR - {str(e)}")
     sys.exit(1)
+
+# Exit immediately after purchase - do not loop
+sys.exit(0)
 
