@@ -381,10 +381,16 @@ class IntraExchangeArbitrageScanner:
             elif pairs['USDC'] and pairs['USDT']:
                 valid_cryptos.append((crypto, 'USDC', 'USDT'))
         
+        # Log what quote currencies are available
+        usd_count = sum(1 for _, pairs in crypto_pairs.items() if pairs['USD'])
+        usdc_count = sum(1 for _, pairs in crypto_pairs.items() if pairs['USDC'])
+        usdt_count = sum(1 for _, pairs in crypto_pairs.items() if pairs['USDT'])
+        logger.info(f"   Available pairs: {usd_count} USD, {usdc_count} USDC, {usdt_count} USDT")
+        
         # Extract just the crypto names for scanning
         valid_crypto_names = [crypto for crypto, _, _ in valid_cryptos]
         
-        logger.info(f"   Found {len(valid_cryptos)} cryptos with both USD and USDC pairs")
+        logger.info(f"   Found {len(valid_cryptos)} cryptos with multiple quote pairs ({quote1}/{quote2} combinations)")
         
         # Limit to max_cryptos
         valid_cryptos = valid_cryptos[:max_cryptos]
