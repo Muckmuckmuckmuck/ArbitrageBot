@@ -273,12 +273,22 @@ class IntraExchangeArbitrageEngine:
         """
         Get all trading pairs for a crypto (e.g., BTC/USD, BTC/USDC, BTC/EUR, BTC/BTC)
         Returns list of (pair_symbol, quote_currency) tuples
+        Excludes futures, swaps, and other derivative markets
         """
         exchange = self.exchange_manager.get_exchange(exchange_id)
         pairs = []
         
         for symbol, market_info in exchange.markets.items():
             if not market_info.get('active', True):
+                continue
+            
+            # Skip futures/derivatives markets
+            # Futures markets are marked with 'future' or 'swap' field, or have ':' in symbol
+            if market_info.get('future', False) or market_info.get('swap', False):
+                continue
+            
+            # Skip markets with ':' in symbol (futures contracts like DOGE/USD:USD-251226)
+            if ':' in symbol:
                 continue
             
             base = market_info.get('base', '').strip().upper()
@@ -309,7 +319,7 @@ class IntraExchangeArbitrageEngine:
                 # Try to get real rate from exchange
                 exchange = self.exchange_manager.get_exchange(exchange_id)
                 stable_pair = f"{quote_currency}/USD"
-                if stable_pair in exchange.markets:
+                if stable_pair in exchange.markets and ':' not in stable_pair:
                     ticker = await self.exchange_manager.fetch_ticker(exchange_id, stable_pair)
                     rate = ticker.get('last') or ticker.get('close') or ticker.get('bid', 1.0)
                     if rate and 0.99 < rate < 1.01:  # Sanity check
@@ -325,7 +335,7 @@ class IntraExchangeArbitrageEngine:
                 # Try to get real-time rate from exchange
                 exchange = self.exchange_manager.get_exchange(exchange_id)
                 fiat_pair = f"{quote_currency}/USD"
-                if fiat_pair in exchange.markets:
+                if fiat_pair in exchange.markets and ':' not in fiat_pair:
                     ticker = await self.exchange_manager.fetch_ticker(exchange_id, fiat_pair)
                     rate = ticker.get('last') or ticker.get('close') or ticker.get('bid', 0)
                     if rate and rate > 0:
@@ -345,16 +355,16 @@ class IntraExchangeArbitrageEngine:
             exchange = self.exchange_manager.get_exchange(exchange_id)
             usd_pair = f"{quote_currency}/USD"
             
-            # Try USD pair first
-            if usd_pair in exchange.markets:
+            # Try USD pair first (skip futures markets)
+            if usd_pair in exchange.markets and ':' not in usd_pair:
                 ticker = await self.exchange_manager.fetch_ticker(exchange_id, usd_pair)
                 usd_price = ticker.get('last') or ticker.get('close') or ticker.get('bid', 0)
                 if usd_price and usd_price > 0:
                     return price * usd_price
             
-            # Fallback: Try USDC pair
+            # Fallback: Try USDC pair (skip futures markets)
             usdc_pair = f"{quote_currency}/USDC"
-            if usdc_pair in exchange.markets:
+            if usdc_pair in exchange.markets and ':' not in usdc_pair:
                 ticker = await self.exchange_manager.fetch_ticker(exchange_id, usdc_pair)
                 usdc_price = ticker.get('last') or ticker.get('close') or ticker.get('bid', 0)
                 if usdc_price and usdc_price > 0:
@@ -409,6 +419,10 @@ class IntraExchangeArbitrageEngine:
             if exchange_id not in ['coinbase', 'gemini']:
                 raise ValueError(f"Invalid exchange_id: {exchange_id}")
             
+            # Skip futures markets (they have ':' in symbol)
+            if ':' in symbol:
+                return 0.02  # Default 2% volatility
+            
             ticker = await self.exchange_manager.fetch_ticker(exchange_id, symbol)
             
             high = ticker.get('high') or 0
@@ -453,6 +467,10 @@ class IntraExchangeArbitrageEngine:
                 
                 # Skip if either pair is blacklisted
                 if pair1 in self.blacklisted_pairs or pair2 in self.blacklisted_pairs:
+                    continue
+                
+                # Safety check: Skip futures markets (they have ':' in symbol)
+                if ':' in pair1 or ':' in pair2:
                     continue
                 
                 try:
@@ -640,6 +658,157 @@ class IntraExchangeArbitrageEngine:
         logger.info("=" * 80)
         
         return opportunities
+    
+    async def scan_and_execute_immediately(self, exchange_id: str, max_cryptos: int = 200) -> Dict:
+        """
+        Scan and execute opportunities IMMEDIATELY when found (STREAMING EXECUTION)
+        This ensures we don't wait for the entire scan to complete before executing
+        Returns dict with execution statistics
+        """
+        logger.info("=" * 80)
+        logger.info(f"🚀 SCANNING & EXECUTING {exchange_id.upper()} (IMMEDIATE MODE)")
+        logger.info("=" * 80)
+        
+        start_time = time.time()
+        exchange = self.exchange_manager.get_exchange(exchange_id)
+        
+        # Get all unique base cryptos
+        base_cryptos = set()
+        for symbol, market_info in exchange.markets.items():
+            if market_info.get('active', True):
+                base = market_info.get('base', '').strip().upper()
+                if base:
+                    base_cryptos.add(base)
+        
+        logger.info(f"   📊 Found {len(base_cryptos)} unique cryptos on {exchange_id.upper()}")
+        logger.info(f"   ⚡ IMMEDIATE EXECUTION MODE: Trades execute as soon as found!")
+        logger.info("")
+        
+        scanned = 0
+        opportunities_found = 0
+        trades_executed = 0
+        trades_skipped = 0
+        
+        # Track active trades to avoid conflicts
+        active_pairs = set()
+        active_base_cryptos = set()
+        execution_tasks = []
+        
+        # Scan each crypto and execute immediately
+        for base_crypto in list(base_cryptos)[:max_cryptos]:
+            scanned += 1
+            if scanned % 50 == 0:
+                logger.info(f"   📈 Progress: {scanned}/{min(len(base_cryptos), max_cryptos)} cryptos | "
+                           f"✅ Found: {opportunities_found} | "
+                           f"🚀 Executed: {trades_executed} | "
+                           f"⏭️ Skipped: {trades_skipped}")
+            
+            # Check if we've reached max concurrent trades
+            if len(execution_tasks) >= self.max_concurrent_trades_per_exchange:
+                # Wait for at least one trade to complete before continuing
+                if execution_tasks:
+                    done, pending = await asyncio.wait(execution_tasks, return_when=asyncio.FIRST_COMPLETED)
+                    execution_tasks = list(pending)
+                    # Clean up completed tasks
+                    for task in done:
+                        try:
+                            result = await task
+                            if result and result.status == 'success':
+                                trades_executed += 1
+                            elif result:
+                                trades_skipped += 1
+                        except Exception as e:
+                            logger.debug(f"Task completed with error: {e}")
+                            trades_skipped += 1
+            
+            # Check for conflicts
+            if base_crypto in active_base_cryptos:
+                continue  # Skip if already trading this crypto
+            
+            opportunity = await self._find_opportunity_for_crypto(
+                exchange_id=exchange_id,
+                base_crypto=base_crypto,
+                trade_size_usd=self.max_position_size_usd
+            )
+            
+            if opportunity:
+                opportunities_found += 1
+                self.stats[exchange_id]['opportunities_found'] += 1
+                
+                # Check if profitable enough
+                if opportunity.net_profit_percent < self.min_profit_threshold * 100:
+                    trades_skipped += 1
+                    logger.debug(f"   ⏭️ Skipped {opportunity.base_crypto}: profit {opportunity.net_profit_percent:.3f}% < threshold {self.min_profit_threshold*100:.2f}%")
+                    continue
+                
+                # Check for pair conflicts
+                pair_key = f"{opportunity.buy_pair}/{opportunity.sell_pair}"
+                if pair_key in active_pairs:
+                    trades_skipped += 1
+                    logger.debug(f"   ⏭️ Skipped {opportunity.base_crypto}: pair conflict {pair_key}")
+                    continue
+                
+                # ALL CHECKS PASSED - EXECUTE IMMEDIATELY!
+                active_pairs.add(pair_key)
+                active_base_cryptos.add(base_crypto)
+                
+                logger.info("")
+                logger.info(f"   🚀🚀🚀 IMMEDIATE EXECUTION: {opportunity.base_crypto}")
+                logger.info(f"      Buy: {opportunity.buy_pair} @ ${opportunity.buy_price:.6f}")
+                logger.info(f"      Sell: {opportunity.sell_pair} @ ${opportunity.sell_price:.6f}")
+                logger.info(f"      Net Profit: {opportunity.net_profit_percent:.3f}% (${opportunity.expected_profit_usd:.2f})")
+                logger.info("")
+                
+                # Execute immediately (non-blocking)
+                execution_task = asyncio.create_task(self.execute_trade(opportunity))
+                
+                # Cleanup function to remove from active sets after execution
+                async def cleanup_after_execution(task, pair_key, base_crypto):
+                    try:
+                        result = await task
+                        # Remove from active sets after execution completes
+                        active_pairs.discard(pair_key)
+                        active_base_cryptos.discard(base_crypto)
+                        return result
+                    except Exception as e:
+                        logger.debug(f"Execution error: {e}")
+                        active_pairs.discard(pair_key)
+                        active_base_cryptos.discard(base_crypto)
+                        return None
+                
+                # Wrap task with cleanup
+                wrapped_task = asyncio.create_task(cleanup_after_execution(execution_task, pair_key, base_crypto))
+                execution_tasks.append(wrapped_task)
+        
+        # Wait for remaining executions to complete
+        if execution_tasks:
+            logger.info(f"   ⏳ Waiting for {len(execution_tasks)} remaining trades to complete...")
+            results = await asyncio.gather(*execution_tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    trades_skipped += 1
+                elif result and result.status == 'success':
+                    trades_executed += 1
+                elif result:
+                    trades_skipped += 1
+        
+        scan_time = time.time() - start_time
+        logger.info("")
+        logger.info(f"   ✅ [{exchange_id.upper()}] SCAN & EXECUTE COMPLETE:")
+        logger.info(f"      Time: {scan_time:.2f}s")
+        logger.info(f"      Cryptos scanned: {scanned}")
+        logger.info(f"      ✅ Opportunities found: {opportunities_found}")
+        logger.info(f"      🚀 Trades executed: {trades_executed}")
+        logger.info(f"      ⏭️ Trades skipped: {trades_skipped}")
+        logger.info("=" * 80)
+        
+        return {
+            'scanned': scanned,
+            'opportunities_found': opportunities_found,
+            'trades_executed': trades_executed,
+            'trades_skipped': trades_skipped,
+            'scan_time': scan_time
+        }
     
     async def _validate_opportunity_still_exists(
         self,
@@ -1218,211 +1387,58 @@ class IntraExchangeArbitrageEngine:
         
         while True:
             try:
-                # Scan both exchanges separately
+                # IMMEDIATE EXECUTION MODE: Scan and execute simultaneously
                 logger.info("")
-                logger.info("🔍 STARTING NEW SCAN CYCLE")
+                logger.info("🔍 STARTING NEW SCAN CYCLE (IMMEDIATE EXECUTION MODE)")
+                logger.info("")
+                logger.info("⚡ MODE: Trades execute IMMEDIATELY when found (no waiting for full scan)")
+                logger.info(f"   Minimum profit threshold: {self.min_profit_threshold * 100:.2f}%")
+                logger.info(f"   Max concurrent trades per exchange: {self.max_concurrent_trades_per_exchange}")
                 logger.info("")
                 
-                coinbase_opps = await self.scan_exchange('coinbase', max_cryptos=200)
-                gemini_opps = await self.scan_exchange('gemini', max_cryptos=200)
+                # Run both exchanges concurrently with immediate execution
+                coinbase_task = asyncio.create_task(
+                    self.scan_and_execute_immediately('coinbase', max_cryptos=200)
+                )
+                gemini_task = asyncio.create_task(
+                    self.scan_and_execute_immediately('gemini', max_cryptos=200)
+                )
                 
-                # SUMMARY OF ALL OPPORTUNITIES FOUND
+                # Wait for both to complete
+                coinbase_results, gemini_results = await asyncio.gather(
+                    coinbase_task, gemini_task, return_exceptions=True
+                )
+                
+                # Handle results
+                if isinstance(coinbase_results, Exception):
+                    logger.error(f"❌ Coinbase scan/execute error: {coinbase_results}")
+                    coinbase_results = {}
+                if isinstance(gemini_results, Exception):
+                    logger.error(f"❌ Gemini scan/execute error: {gemini_results}")
+                    gemini_results = {}
+                
+                # SUMMARY
                 logger.info("")
                 logger.info("=" * 80)
-                logger.info("📊 OPPORTUNITY SUMMARY")
+                logger.info("📊 CYCLE SUMMARY")
                 logger.info("=" * 80)
-                logger.info(f"   ✅ COINBASE: {len(coinbase_opps)} profitable opportunities")
-                logger.info(f"   ✅ GEMINI: {len(gemini_opps)} profitable opportunities")
-                logger.info(f"   📈 TOTAL: {len(coinbase_opps) + len(gemini_opps)} opportunities found")
-                logger.info("=" * 80)
-                logger.info("")
-                
-                # LOG MINIMUM THRESHOLD FOR REFERENCE
-                logger.info(f"   🔍 SELECTION CRITERIA:")
-                logger.info(f"      Minimum profit threshold: {self.min_profit_threshold * 100:.2f}%")
-                logger.info(f"      Max concurrent trades per exchange: {self.max_concurrent_trades_per_exchange}")
-                logger.info("")
-                
-                # Execute multiple opportunities concurrently (IMPROVEMENT!)
-                # Filter opportunities that use different pairs to avoid conflicts
-                coinbase_tasks = []
-                gemini_tasks = []
-                
-                # Track used pairs to avoid conflicts
-                coinbase_used_pairs = set()
-                gemini_used_pairs = set()
-                
-                # Execute top opportunities for Coinbase (up to max_concurrent)
-                logger.info("")
-                logger.info("=" * 80)
-                logger.info("🔍 EVALUATING COINBASE OPPORTUNITIES FOR EXECUTION")
-                logger.info("=" * 80)
-                logger.info(f"   📊 Evaluating top {min(len(coinbase_opps), self.max_concurrent_trades_per_exchange * 2)} opportunities")
-                logger.info("")
-                
-                coinbase_selected = 0
-                coinbase_skipped = 0
-                for idx, opp in enumerate(coinbase_opps[:self.max_concurrent_trades_per_exchange * 2], 1):  # Check more than we'll execute
-                    skip_reason = None
-                    
-                    logger.info(f"   [{idx}/{min(len(coinbase_opps), self.max_concurrent_trades_per_exchange * 2)}] Evaluating: {opp.base_crypto} | "
-                               f"{opp.buy_pair} → {opp.sell_pair} | "
-                               f"Profit: {opp.net_profit_percent:.3f}% | "
-                               f"${opp.expected_profit_usd:.2f}")
-                    
-                    # Check 1: Profit threshold
-                    if opp.net_profit_percent < self.min_profit_threshold * 100:
-                        skip_reason = f"Below threshold: {opp.net_profit_percent:.3f}% < {self.min_profit_threshold*100:.2f}%"
-                        logger.warning(f"      ❌ FAILED CHECK 1: {skip_reason}")
-                    else:
-                        logger.info(f"      ✅ PASSED CHECK 1: Profit threshold ({opp.net_profit_percent:.3f}% >= {self.min_profit_threshold*100:.2f}%)")
-                        
-                        # Check 2: Pair conflicts
-                        pair_key = f"{opp.buy_pair}/{opp.sell_pair}"
-                        if pair_key in coinbase_used_pairs:
-                            skip_reason = f"Pair already in use: {pair_key}"
-                            logger.warning(f"      ❌ FAILED CHECK 2: {skip_reason}")
-                        else:
-                            logger.info(f"      ✅ PASSED CHECK 2: No pair conflict")
-                            
-                            # Check 3: Base crypto conflicts
-                            base_crypto = opp.buy_pair.split('/')[0]
-                            conflicts = False
-                            for used_pair in coinbase_used_pairs:
-                                used_base = used_pair.split('/')[0].split('/')[0]
-                                if used_base == base_crypto:
-                                    conflicts = True
-                                    skip_reason = f"Base crypto conflict: {base_crypto} already trading"
-                                    logger.warning(f"      ❌ FAILED CHECK 3: {skip_reason}")
-                                    break
-                            
-                            if not conflicts:
-                                logger.info(f"      ✅ PASSED CHECK 3: No base crypto conflict")
-                                # ALL CHECKS PASSED - EXECUTE
-                                coinbase_used_pairs.add(pair_key)
-                                coinbase_tasks.append(self.execute_trade(opp))
-                                coinbase_selected += 1
-                                logger.info(f"")
-                                logger.info(f"   ✅✅✅ [COINBASE] ALL CHECKS PASSED - QUEUING FOR EXECUTION #{coinbase_selected}")
-                                logger.info(f"      Crypto: {opp.base_crypto}")
-                                logger.info(f"      Strategy: Buy {opp.buy_pair} → Sell {opp.sell_pair}")
-                                logger.info(f"      Net Profit: {opp.net_profit_percent:.3f}% (${opp.expected_profit_usd:.2f})")
-                                logger.info(f"")
-                                if len(coinbase_tasks) >= self.max_concurrent_trades_per_exchange:
-                                    logger.info(f"   ⏸️  Reached max concurrent trades ({self.max_concurrent_trades_per_exchange}) - stopping evaluation")
-                                    break
-                    
-                    if skip_reason:
-                        coinbase_skipped += 1
-                        logger.info(f"      ⏭️  SKIPPED: {skip_reason}")
-                
-                logger.info("")
-                logger.info(f"   📊 COINBASE EVALUATION SUMMARY:")
-                logger.info(f"      Opportunities evaluated: {min(len(coinbase_opps), self.max_concurrent_trades_per_exchange * 2)}")
-                logger.info(f"      ✅ Selected for execution: {coinbase_selected}")
-                logger.info(f"      ⏭️  Skipped: {coinbase_skipped}")
+                logger.info(f"   ✅ COINBASE:")
+                logger.info(f"      Opportunities found: {coinbase_results.get('opportunities_found', 0)}")
+                logger.info(f"      Trades executed: {coinbase_results.get('trades_executed', 0)}")
+                logger.info(f"      Trades skipped: {coinbase_results.get('trades_skipped', 0)}")
+                logger.info(f"")
+                logger.info(f"   ✅ GEMINI:")
+                logger.info(f"      Opportunities found: {gemini_results.get('opportunities_found', 0)}")
+                logger.info(f"      Trades executed: {gemini_results.get('trades_executed', 0)}")
+                logger.info(f"      Trades skipped: {gemini_results.get('trades_skipped', 0)}")
+                logger.info(f"")
+                logger.info(f"   📈 TOTAL:")
+                total_found = coinbase_results.get('opportunities_found', 0) + gemini_results.get('opportunities_found', 0)
+                total_executed = coinbase_results.get('trades_executed', 0) + gemini_results.get('trades_executed', 0)
+                logger.info(f"      Opportunities found: {total_found}")
+                logger.info(f"      Trades executed: {total_executed}")
                 logger.info("=" * 80)
                 logger.info("")
-                
-                # Execute top opportunities for Gemini (up to max_concurrent)
-                logger.info("")
-                logger.info("=" * 80)
-                logger.info("🔍 EVALUATING GEMINI OPPORTUNITIES FOR EXECUTION")
-                logger.info("=" * 80)
-                logger.info(f"   📊 Evaluating top {min(len(gemini_opps), self.max_concurrent_trades_per_exchange * 2)} opportunities")
-                logger.info("")
-                
-                gemini_selected = 0
-                gemini_skipped = 0
-                for idx, opp in enumerate(gemini_opps[:self.max_concurrent_trades_per_exchange * 2], 1):
-                    skip_reason = None
-                    
-                    logger.info(f"   [{idx}/{min(len(gemini_opps), self.max_concurrent_trades_per_exchange * 2)}] Evaluating: {opp.base_crypto} | "
-                               f"{opp.buy_pair} → {opp.sell_pair} | "
-                               f"Profit: {opp.net_profit_percent:.3f}% | "
-                               f"${opp.expected_profit_usd:.2f}")
-                    
-                    # Check 1: Profit threshold
-                    if opp.net_profit_percent < self.min_profit_threshold * 100:
-                        skip_reason = f"Below threshold: {opp.net_profit_percent:.3f}% < {self.min_profit_threshold*100:.2f}%"
-                        logger.warning(f"      ❌ FAILED CHECK 1: {skip_reason}")
-                    else:
-                        logger.info(f"      ✅ PASSED CHECK 1: Profit threshold ({opp.net_profit_percent:.3f}% >= {self.min_profit_threshold*100:.2f}%)")
-                        
-                        # Check 2: Pair conflicts
-                        pair_key = f"{opp.buy_pair}/{opp.sell_pair}"
-                        if pair_key in gemini_used_pairs:
-                            skip_reason = f"Pair already in use: {pair_key}"
-                            logger.warning(f"      ❌ FAILED CHECK 2: {skip_reason}")
-                        else:
-                            logger.info(f"      ✅ PASSED CHECK 2: No pair conflict")
-                            
-                            # Check 3: Base crypto conflicts
-                            base_crypto = opp.buy_pair.split('/')[0]
-                            conflicts = False
-                            for used_pair in gemini_used_pairs:
-                                used_base = used_pair.split('/')[0].split('/')[0]
-                                if used_base == base_crypto:
-                                    conflicts = True
-                                    skip_reason = f"Base crypto conflict: {base_crypto} already trading"
-                                    logger.warning(f"      ❌ FAILED CHECK 3: {skip_reason}")
-                                    break
-                            
-                            if not conflicts:
-                                logger.info(f"      ✅ PASSED CHECK 3: No base crypto conflict")
-                                # ALL CHECKS PASSED - EXECUTE
-                                gemini_used_pairs.add(pair_key)
-                                gemini_tasks.append(self.execute_trade(opp))
-                                gemini_selected += 1
-                                logger.info(f"")
-                                logger.info(f"   ✅✅✅ [GEMINI] ALL CHECKS PASSED - QUEUING FOR EXECUTION #{gemini_selected}")
-                                logger.info(f"      Crypto: {opp.base_crypto}")
-                                logger.info(f"      Strategy: Buy {opp.buy_pair} → Sell {opp.sell_pair}")
-                                logger.info(f"      Net Profit: {opp.net_profit_percent:.3f}% (${opp.expected_profit_usd:.2f})")
-                                logger.info(f"")
-                                if len(gemini_tasks) >= self.max_concurrent_trades_per_exchange:
-                                    logger.info(f"   ⏸️  Reached max concurrent trades ({self.max_concurrent_trades_per_exchange}) - stopping evaluation")
-                                    break
-                    
-                    if skip_reason:
-                        gemini_skipped += 1
-                        logger.info(f"      ⏭️  SKIPPED: {skip_reason}")
-                
-                logger.info("")
-                logger.info(f"   📊 GEMINI EVALUATION SUMMARY:")
-                logger.info(f"      Opportunities evaluated: {min(len(gemini_opps), self.max_concurrent_trades_per_exchange * 2)}")
-                logger.info(f"      ✅ Selected for execution: {gemini_selected}")
-                logger.info(f"      ⏭️  Skipped: {gemini_skipped}")
-                logger.info("=" * 80)
-                logger.info("")
-                
-                # Execute all trades concurrently
-                all_tasks = coinbase_tasks + gemini_tasks
-                if all_tasks:
-                    logger.info("")
-                    logger.info("=" * 80)
-                    logger.info(f"🚀 EXECUTING {len(all_tasks)} TRADES")
-                    logger.info("=" * 80)
-                    logger.info(f"   COINBASE: {len(coinbase_tasks)} trades")
-                    logger.info(f"   GEMINI: {len(gemini_tasks)} trades")
-                    logger.info("=" * 80)
-                    logger.info("")
-                    await asyncio.gather(*all_tasks, return_exceptions=True)
-                else:
-                    logger.info("")
-                    logger.info("   ⚠️  NO TRADES EXECUTED THIS CYCLE")
-                    logger.info("   📋 REASONS:")
-                    if len(coinbase_opps) == 0 and len(gemini_opps) == 0:
-                        logger.info("      • No profitable opportunities found on either exchange")
-                        logger.info("      • All pairs checked were below profit threshold after fees")
-                    else:
-                        if len(coinbase_opps) > 0 and len(coinbase_tasks) == 0:
-                            logger.info(f"      • COINBASE: Found {len(coinbase_opps)} opportunities but none selected")
-                            logger.info("        - All were below threshold or had conflicts")
-                        if len(gemini_opps) > 0 and len(gemini_tasks) == 0:
-                            logger.info(f"      • GEMINI: Found {len(gemini_opps)} opportunities but none selected")
-                            logger.info("        - All were below threshold or had conflicts")
-                    logger.info("")
                 
                 # Print statistics
                 self._print_statistics()
