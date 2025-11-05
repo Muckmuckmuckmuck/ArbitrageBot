@@ -2,6 +2,8 @@
 """
 Simple script to buy $2 of BTC with USDC on Coinbase
 ONLY shows BTC purchase logging - nothing else
+
+Run directly: python buy_btc_simple.py
 """
 
 import ccxt
@@ -12,14 +14,9 @@ from dotenv import load_dotenv
 
 # Completely suppress ALL logging
 logging.disable(logging.CRITICAL)
-for logger_name in ['ccxt', 'urllib3', 'requests']:
+for logger_name in ['ccxt', 'urllib3', 'requests', 'root']:
     logging.getLogger(logger_name).setLevel(logging.CRITICAL)
     logging.getLogger(logger_name).disabled = True
-
-# Suppress stdout/stderr from ccxt
-class NullWriter:
-    def write(self, s): pass
-    def flush(self): pass
 
 # Load credentials
 load_dotenv()
@@ -30,47 +27,56 @@ api_key = os.getenv('COINBASE_API_KEY')
 secret_key = os.getenv('COINBASE_SECRET_KEY')
 passphrase = os.getenv('COINBASE_PASSPHRASE', '')
 
-# Initialize Coinbase - suppress verbose output
-coinbase = ccxt.coinbase({
-    'apiKey': api_key,
-    'secret': secret_key,
-    'password': passphrase,
-    'options': {
-        'advanced': True
-    },
-    'enableRateLimit': True,
-    'verbose': False,
-})
+if not api_key or not secret_key:
+    print("BTC Purchase: ERROR - Missing API credentials")
+    sys.exit(1)
 
-# Load markets silently
-coinbase.load_markets()
+try:
+    # Initialize Coinbase - suppress verbose output
+    coinbase = ccxt.coinbase({
+        'apiKey': api_key,
+        'secret': secret_key,
+        'password': passphrase,
+        'options': {
+            'advanced': True
+        },
+        'enableRateLimit': True,
+        'verbose': False,
+    })
 
-# Get BTC/USDC price
-symbol = 'BTC/USDC'
-ticker = coinbase.fetch_ticker(symbol)
-btc_price = ticker['ask']
+    # Load markets silently
+    coinbase.load_markets()
 
-# Calculate amount for $2
-usd_amount = 2.0
-btc_amount = usd_amount / btc_price
-buy_price = btc_price * 1.01
+    # Get BTC/USDC price
+    symbol = 'BTC/USDC'
+    ticker = coinbase.fetch_ticker(symbol)
+    btc_price = ticker['ask']
 
-# BTC PURCHASE LOGGING ONLY
-print(f"BTC Purchase: Buying {btc_amount:.8f} BTC for ${usd_amount:.2f} USDC")
-print(f"BTC Purchase: Price ${buy_price:.2f} per BTC")
+    # Calculate amount for $2
+    usd_amount = 2.0
+    btc_amount = usd_amount / btc_price
+    buy_price = btc_price * 1.01
 
-# Place order
-order = coinbase.create_order(
-    symbol=symbol,
-    type='limit',
-    side='buy',
-    amount=btc_amount,
-    price=buy_price
-)
+    # BTC PURCHASE LOGGING ONLY
+    print(f"BTC Purchase: Buying {btc_amount:.8f} BTC for ${usd_amount:.2f} USDC")
+    print(f"BTC Purchase: Price ${buy_price:.2f} per BTC")
 
-# BTC PURCHASE RESULT ONLY
-print(f"BTC Purchase: Order placed - ID: {order['id']}")
-print(f"BTC Purchase: Status: {order['status']}")
-print(f"BTC Purchase: Amount: {order['amount']} BTC")
-print(f"BTC Purchase: Price: ${order['price']}")
+    # Place order
+    order = coinbase.create_order(
+        symbol=symbol,
+        type='limit',
+        side='buy',
+        amount=btc_amount,
+        price=buy_price
+    )
+
+    # BTC PURCHASE RESULT ONLY
+    print(f"BTC Purchase: Order placed - ID: {order['id']}")
+    print(f"BTC Purchase: Status: {order['status']}")
+    print(f"BTC Purchase: Amount: {order['amount']} BTC")
+    print(f"BTC Purchase: Price: ${order['price']}")
+
+except Exception as e:
+    print(f"BTC Purchase: ERROR - {str(e)}")
+    sys.exit(1)
 
