@@ -222,15 +222,19 @@ class IntraExchangeArbitrageScanner:
         
         return arb_score
     
-    async def scan_crypto(self, exchange_id: str, crypto: str) -> Optional[ArbitrageOpportunity]:
+    async def scan_crypto(self, exchange_id: str, crypto: str, quote1: str = 'USD', quote2: str = 'USDC') -> Optional[ArbitrageOpportunity]:
         """Scan a single crypto for arbitrage opportunities"""
-        usd_pair = f'{crypto}/USD'
-        usdc_pair = f'{crypto}/USDC'
+        pair1 = f'{crypto}/{quote1}'
+        pair2 = f'{crypto}/{quote2}'
+        
+        # For logging, use standard names
+        usd_pair = pair1 if quote1 == 'USD' else pair2
+        usdc_pair = pair2 if quote2 in ['USDC', 'USDT'] else pair1
         
         # Check if both pairs exist
         markets = await self.get_all_markets(exchange_id)
         
-        if usd_pair not in markets or usdc_pair not in markets:
+        if pair1 not in markets or pair2 not in markets:
             return None
         
         # Get fees for this exchange
@@ -243,59 +247,78 @@ class IntraExchangeArbitrageScanner:
             taker_fee = EXCHANGE_FEES['gemini']['taker']
         
         # Get tickers
-        usd_ticker = await self.get_ticker(exchange_id, usd_pair)
-        usdc_ticker = await self.get_ticker(exchange_id, usdc_pair)
+        ticker1 = await self.get_ticker(exchange_id, pair1)
+        ticker2 = await self.get_ticker(exchange_id, pair2)
         
-        if not usd_ticker or not usdc_ticker:
+        if not ticker1 or not ticker2:
             return None
         
-        usd_price = usd_ticker.get('last', usd_ticker.get('close', 0))
-        usdc_price = usdc_ticker.get('last', usdc_ticker.get('close', 0))
+        price1 = ticker1.get('last', ticker1.get('close', 0))
+        price2 = ticker2.get('last', ticker2.get('close', 0))
         
-        if usd_price == 0 or usdc_price == 0:
+        if price1 == 0 or price2 == 0:
             return None
         
         # Calculate raw spread
-        if usdc_price > usd_price:
-            # Buy USD, sell USDC
-            raw_spread = (usdc_price - usd_price) / usd_price
-            direction = 'USD→USDC'
+        if price2 > price1:
+            # Buy pair1, sell pair2
+            raw_spread = (price2 - price1) / price1
+            direction = f'{quote1}→{quote2}'
+            buy_pair = pair1
+            sell_pair = pair2
         else:
-            # Buy USDC, sell USD
-            raw_spread = (usd_price - usdc_price) / usdc_price
-            direction = 'USDC→USD'
+            # Buy pair2, sell pair1
+            raw_spread = (price1 - price2) / price2
+            direction = f'{quote2}→{quote1}'
+            buy_pair = pair2
+            sell_pair = pair1
+        
+        # For display, use standard names
+        usd_price = price1 if quote1 == 'USD' else price2
+        usdc_price = price2 if quote2 in ['USDC', 'USDT'] else price1
         
         # Get order books for slippage calculation
-        usd_orderbook = await self.get_order_book(exchange_id, usd_pair)
-        usdc_orderbook = await self.get_order_book(exchange_id, usdc_pair)
+        orderbook1 = await self.get_order_book(exchange_id, pair1)
+        orderbook2 = await self.get_order_book(exchange_id, pair2)
+        
+        # Use buy and sell orderbooks
+        buy_orderbook = orderbook1 if buy_pair == pair1 else orderbook2
+        sell_orderbook = orderbook2 if sell_pair == pair2 else orderbook1
         
         # Calculate slippage (assume $100 trade size)
         trade_size_usd = 100.0
-        usd_slippage = self.calculate_slippage(usd_orderbook, trade_size_usd)
-        usdc_slippage = self.calculate_slippage(usdc_orderbook, trade_size_usd)
-        total_slippage = usd_slippage + usdc_slippage
+        buy_slippage = self.calculate_slippage(buy_orderbook, trade_size_usd)
+        sell_slippage = self.calculate_slippage(sell_orderbook, trade_size_usd)
+        total_slippage = buy_slippage + sell_slippage
+        
+        # For display
+        usd_orderbook = orderbook1 if quote1 == 'USD' else orderbook2
+        usdc_orderbook = orderbook2 if quote2 in ['USDC', 'USDT'] else orderbook1
         
         # Calculate net profit after fees and slippage
         # We pay taker fee on one side, maker fee on the other (best case)
         total_fees = maker_fee + taker_fee
         net_profit = raw_spread - total_fees - total_slippage
         
-        # Only consider profitable opportunities
-        if net_profit <= 0:
-            return None
+        # Store all opportunities (even unprofitable) for analysis
+        # But only return profitable ones for trading
+        is_profitable = net_profit > 0
         
         # Get additional data for ranking
-        volume_usd = usd_ticker.get('quoteVolume', 0) or usd_ticker.get('volume', {}).get('USD', 0) if isinstance(usd_ticker.get('volume'), dict) else 0
-        depth_usd = self.calculate_order_book_depth(usd_orderbook)
-        depth_usdc = self.calculate_order_book_depth(usdc_orderbook)
-        volatility = self.calculate_volatility(usd_ticker)
+        volume_usd = ticker1.get('quoteVolume', 0) or ticker1.get('volume', {}).get('USD', 0) if isinstance(ticker1.get('volume'), dict) else 0
+        if volume_usd == 0:
+            volume_usd = ticker2.get('quoteVolume', 0) or ticker2.get('volume', {}).get('USD', 0) if isinstance(ticker2.get('volume'), dict) else 0
+        
+        depth_usd = self.calculate_order_book_depth(orderbook1 if quote1 == 'USD' else orderbook2)
+        depth_usdc = self.calculate_order_book_depth(orderbook2 if quote2 in ['USDC', 'USDT'] else orderbook1)
+        volatility = self.calculate_volatility(ticker1)
         
         # Create opportunity
         opp = ArbitrageOpportunity(
             exchange=exchange_id,
             crypto=crypto,
-            usd_pair=usd_pair,
-            usdc_pair=usdc_pair,
+            usd_pair=pair1 if quote1 == 'USD' else pair2,
+            usdc_pair=pair2 if quote2 in ['USDC', 'USDT'] else pair1,
             usd_price=usd_price,
             usdc_price=usdc_price,
             raw_spread_percent=raw_spread * 100,
@@ -311,6 +334,10 @@ class IntraExchangeArbitrageScanner:
         
         # Calculate arb score
         opp.arb_score = self.calculate_arb_score(opp)
+        
+        # Only return profitable opportunities
+        if not is_profitable:
+            return None
         
         return opp
     
@@ -331,15 +358,31 @@ class IntraExchangeArbitrageScanner:
             base = market_info.get('base', '')
             quote = market_info.get('quote', '')
             
-            if quote in ['USD', 'USDC']:
+            # Check for USD, USDC, USDT, or other USD-pegged stablecoins
+            if quote in ['USD', 'USDC', 'USDT']:
                 if base not in crypto_pairs:
-                    crypto_pairs[base] = {'USD': False, 'USDC': False}
+                    crypto_pairs[base] = {'USD': False, 'USDC': False, 'USDT': False}
                 
-                crypto_pairs[base][quote] = True
+                if quote == 'USD':
+                    crypto_pairs[base]['USD'] = True
+                elif quote == 'USDC':
+                    crypto_pairs[base]['USDC'] = True
+                elif quote == 'USDT':
+                    crypto_pairs[base]['USDT'] = True
         
-        # Filter to cryptos with both USD and USDC
-        valid_cryptos = [crypto for crypto, pairs in crypto_pairs.items() 
-                        if pairs['USD'] and pairs['USDC']]
+        # Filter to cryptos with multiple USD-pegged pairs
+        # Priority: USD/USDC, then USD/USDT, then USDC/USDT
+        valid_cryptos = []
+        for crypto, pairs in crypto_pairs.items():
+            if pairs['USD'] and pairs['USDC']:
+                valid_cryptos.append((crypto, 'USD', 'USDC'))
+            elif pairs['USD'] and pairs['USDT']:
+                valid_cryptos.append((crypto, 'USD', 'USDT'))
+            elif pairs['USDC'] and pairs['USDT']:
+                valid_cryptos.append((crypto, 'USDC', 'USDT'))
+        
+        # Extract just the crypto names for scanning
+        valid_crypto_names = [crypto for crypto, _, _ in valid_cryptos]
         
         logger.info(f"   Found {len(valid_cryptos)} cryptos with both USD and USDC pairs")
         
@@ -348,15 +391,37 @@ class IntraExchangeArbitrageScanner:
         
         # Scan each crypto
         scanned = 0
-        for crypto in valid_cryptos:
+        profitable_count = 0
+        total_spreads = []
+        
+        for crypto_info in valid_cryptos:
+            crypto, quote1, quote2 = crypto_info
             try:
-                opp = await self.scan_crypto(exchange_id, crypto)
-                if opp:
-                    opportunities.append(opp)
-                    logger.info(f"   ✅ {crypto}: {opp.net_profit_percent:.3f}% profit (spread: {opp.raw_spread_percent:.3f}%, fees: {opp.maker_fee + opp.taker_fee:.3f}%, slippage: {opp.estimated_slippage:.3f}%)")
-                
+                opp = await self.scan_crypto(exchange_id, crypto, quote1, quote2)
                 scanned += 1
                 self.scan_stats['total_pairs_scanned'] += 1
+                
+                if opp:
+                    opportunities.append(opp)
+                    profitable_count += 1
+                    total_spreads.append(opp.raw_spread_percent)
+                    logger.info(f"   ✅ {crypto} ({quote1}/{quote2}): {opp.net_profit_percent:.3f}% profit (spread: {opp.raw_spread_percent:.3f}%, fees: {opp.maker_fee + opp.taker_fee:.3f}%, slippage: {opp.estimated_slippage:.3f}%)")
+                else:
+                    # Log unprofitable but show spread for analysis
+                    try:
+                        # Quick price check to show spread
+                        ticker1 = await self.get_ticker(exchange_id, f'{crypto}/{quote1}')
+                        ticker2 = await self.get_ticker(exchange_id, f'{crypto}/{quote2}')
+                        if ticker1 and ticker2:
+                            price1 = ticker1.get('last', ticker1.get('close', 0))
+                            price2 = ticker2.get('last', ticker2.get('close', 0))
+                            if price1 > 0 and price2 > 0:
+                                spread = abs(price2 - price1) / min(price1, price2) * 100
+                                total_spreads.append(spread)
+                                if scanned % 50 == 0:  # Log every 50th to avoid spam
+                                    logger.debug(f"   ⚠️  {crypto} ({quote1}/{quote2}): {spread:.3f}% spread (not profitable)")
+                    except:
+                        pass
                 
                 # Rate limiting
                 if scanned % 10 == 0:
@@ -367,6 +432,13 @@ class IntraExchangeArbitrageScanner:
                 continue
         
         logger.info(f"   Found {len(opportunities)} profitable opportunities on {exchange_id}")
+        
+        if total_spreads:
+            avg_spread = sum(total_spreads) / len(total_spreads)
+            max_spread = max(total_spreads)
+            min_spread = min(total_spreads)
+            logger.info(f"   Spread stats: avg={avg_spread:.3f}%, max={max_spread:.3f}%, min={min_spread:.3f}%")
+        
         return opportunities
     
     async def scan_all_exchanges(self) -> List[ArbitrageOpportunity]:
