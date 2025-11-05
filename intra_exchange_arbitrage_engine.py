@@ -273,14 +273,14 @@ class IntraExchangeArbitrageEngine:
         """
         Get all trading pairs for a crypto (e.g., BTC/USD, BTC/USDC, BTC/USDT)
         Returns list of (pair_symbol, quote_currency) tuples
-        Excludes futures, swaps, EUR/GBP pairs, and other derivative markets
-        Only trades USD/USDC/USDT pairs (like the working BTC purchase)
+        Excludes futures, swaps, and other derivative markets
+        Now includes USD/USDC/USDT/EUR/GBP pairs (EUR/GBP conversion enabled)
         """
         exchange = self.exchange_manager.get_exchange(exchange_id)
         pairs = []
         
-        # Only allow these quote currencies (same as BTC/USDC that worked)
-        allowed_quotes = ['USD', 'USDC', 'USDT']
+        # Allow these quote currencies (USD/USDC/USDT + EUR/GBP with conversion)
+        allowed_quotes = ['USD', 'USDC', 'USDT', 'EUR', 'GBP']
         
         for symbol, market_info in exchange.markets.items():
             if not market_info.get('active', True):
@@ -1134,18 +1134,18 @@ class IntraExchangeArbitrageEngine:
         required_amount: float
     ) -> bool:
         """
-        Ensure we have the required currency - simplified for USD/USDC/USDT only
-        Since we only trade USD/USDC/USDT pairs, no conversion needed
+        Ensure we have the required currency, converting if necessary
+        Uses new multi-method conversion system for EUR/GBP
         """
         balance = await self.exchange_manager.fetch_balance(exchange_id)
         free_balance = balance.get('free', {})
         
-        # Check if we have the required currency
+        # Check if we already have enough
         available = free_balance.get(required_currency, 0)
         if available >= required_amount * 1.1:  # 10% buffer
             return True
         
-        # For USD/USDC/USDT, check if we have any of them (they're interchangeable for our purposes)
+        # For USD/USDC/USDT, check if we have any of them (they're interchangeable)
         if required_currency in ['USD', 'USDC', 'USDT']:
             total_available = 0
             for currency in ['USD', 'USDC', 'USDT']:
@@ -1155,16 +1155,41 @@ class IntraExchangeArbitrageEngine:
                 logger.info(f"   ✅ Have ${total_available:.2f} in USD/USDC/USDT (need ${required_amount:.2f} {required_currency})")
                 return True
         
+        # For EUR/GBP, try to convert from USD/USDC/USDT
+        if required_currency in ['EUR', 'GBP']:
+            logger.info(f"   💱 Need {required_amount:.2f} {required_currency}, have {available:.2f}")
+            
+            # Find convertible currencies we have
+            convertible_currencies = ['USD', 'USDC', 'USDT']
+            for from_currency in convertible_currencies:
+                from_balance = free_balance.get(from_currency, 0)
+                
+                if from_balance < required_amount * 0.5:  # Need at least 50% of required
+                    continue
+                
+                # Try conversion using new multi-method system
+                amount_to_convert = min(from_balance * 0.9, required_amount * 1.1)
+                
+                logger.info(f"   🔄 Converting {from_currency} → {required_currency} ({amount_to_convert:.2f})")
+                
+                success = await self.exchange_manager.convert_currency(
+                    exchange_id=exchange_id,
+                    from_currency=from_currency,
+                    to_currency=required_currency,
+                    amount=amount_to_convert
+                )
+                
+                if success:
+                    logger.info(f"   ✅ Currency conversion successful!")
+                    return True
+                else:
+                    logger.debug(f"   ⚠️ Conversion {from_currency} → {required_currency} failed, trying next...")
+            
+            logger.warning(f"   ⚠️ Could not convert to {required_currency}")
+            return False
+        
         logger.warning(f"   ⚠️ Insufficient {required_currency}: have {available:.2f}, need {required_amount:.2f}")
         return False
-            
-            return False
-            
-        except Exception as e:
-            logger.error(f"   ❌ Error ensuring currency availability: {e}")
-            import traceback
-            logger.error(f"   Traceback: {traceback.format_exc()}")
-            return False
     
     async def _check_balance_sufficient(
         self,
