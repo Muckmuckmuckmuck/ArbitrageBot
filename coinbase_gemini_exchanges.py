@@ -11,7 +11,8 @@ import base64
 import time
 import json
 import aiohttp
-from typing import Dict, Optional, List
+import asyncio
+from typing import Dict, Optional, List, Tuple
 from coinbase_gemini_config import Config
 
 logger = logging.getLogger(__name__)
@@ -185,10 +186,11 @@ class CoinbaseGeminiExchangeManager:
     
     async def convert_currency(self, exchange_id: str, from_currency: str, to_currency: str, amount: float) -> bool:
         """
-        Convert currency using multiple workarounds:
-        1. Try direct trading pairs (USD/GBP, USD/EUR)
-        2. Try Coinbase conversion API endpoint (if available)
-        3. Try bridge currency method (USD → BTC → GBP/EUR)
+        Convert currency using bridge currency method (USD → BTC → GBP/EUR)
+        
+        Note: Advanced Trade API doesn't support direct conversion API endpoint
+        USD/GBP and USD/EUR direct pairs don't exist on Coinbase
+        So we must use BTC as bridge currency
         
         Returns True if conversion successful
         """
@@ -201,7 +203,7 @@ class CoinbaseGeminiExchangeManager:
         
         exchange = self.get_exchange(exchange_id)
         
-        # Method 1: Try direct trading pair (e.g., USD/GBP, USD/EUR)
+        # Quick check: Try direct trading pair first (rare, but check anyway)
         direct_pairs = [
             f"{from_currency}/{to_currency}",
             f"{to_currency}/{from_currency}"
@@ -209,16 +211,14 @@ class CoinbaseGeminiExchangeManager:
         
         for pair in direct_pairs:
             if pair in exchange.markets:
-                logger.info(f"   💱 Method 1: Using direct trading pair {pair}")
+                logger.info(f"   💱 Using direct trading pair {pair} (found!)")
                 try:
                     ticker = await self.fetch_ticker(exchange_id, pair)
                     if pair.startswith(from_currency):
-                        # Buying to_currency with from_currency
                         price = ticker.get('ask') or ticker.get('last', 0)
                         order_amount = amount / price if price > 0 else 0
                         side = 'buy'
                     else:
-                        # Selling from_currency to get to_currency
                         price = ticker.get('bid') or ticker.get('last', 0)
                         order_amount = amount * price if price > 0 else 0
                         side = 'sell'
@@ -226,7 +226,6 @@ class CoinbaseGeminiExchangeManager:
                     if order_amount <= 0:
                         continue
                     
-                    # Place limit order with small buffer
                     limit_price = price * (1.005 if side == 'buy' else 0.995)
                     
                     order = await self.create_order(
@@ -243,21 +242,13 @@ class CoinbaseGeminiExchangeManager:
                         return True
                 except Exception as e:
                     logger.debug(f"   Direct pair {pair} failed: {e}")
-                    continue
+                    break
         
-        # Method 2: Try Coinbase conversion API endpoint (Advanced Trade API)
-        logger.info(f"   💱 Method 2: Trying Coinbase conversion API endpoint")
-        try:
-            conversion_success = await self._try_coinbase_conversion_api(
-                exchange, from_currency, to_currency, amount
-            )
-            if conversion_success:
-                return True
-        except Exception as e:
-            logger.debug(f"   Conversion API failed: {e}")
+        # Method: Bridge currency (USD/USDC/USDT → BTC → GBP/EUR)
+        # This is the only reliable method for Advanced Trade API
+        logger.info(f"   💱 Using bridge currency method: {from_currency} → BTC → {to_currency}")
+        logger.info(f"   ⚠️ Note: Bridge conversion incurs 2x fees (~0.8%) and 2x slippage risk")
         
-        # Method 3: Bridge currency method (USD → BTC → GBP/EUR)
-        logger.info(f"   💱 Method 3: Trying bridge currency (BTC)")
         try:
             bridge_success = await self._try_bridge_currency_conversion(
                 exchange_id, from_currency, to_currency, amount
@@ -265,10 +256,35 @@ class CoinbaseGeminiExchangeManager:
             if bridge_success:
                 return True
         except Exception as e:
-            logger.debug(f"   Bridge currency method failed: {e}")
+            logger.error(f"   ❌ Bridge currency conversion failed: {e}")
         
-        logger.warning(f"   ⚠️ All conversion methods failed: {from_currency} → {to_currency}")
+        logger.warning(f"   ⚠️ Currency conversion failed: {from_currency} → {to_currency}")
         return False
+    
+    def get_conversion_cost_percent(self, exchange_id: str) -> float:
+        """
+        Get the estimated conversion cost as a percentage
+        For bridge currency conversion (USD → BTC → GBP/EUR):
+        - 2x maker fees: ~0.8% (0.4% * 2)
+        - 2x slippage: ~1.0% (0.5% * 2)
+        - Price movement risk: ~0.5%
+        Total: ~1.8% - 2.3%
+        
+        Returns conversion cost as decimal (e.g., 0.018 for 1.8%)
+        """
+        if exchange_id == 'coinbase':
+            # Coinbase maker fee: 0.4%
+            maker_fee = 0.004
+            # Bridge conversion: 2 trades = 2x fees
+            fees = maker_fee * 2  # 0.8%
+            # Slippage: 0.5% per trade * 2 = 1.0%
+            slippage = 0.005 * 2  # 1.0%
+            # Price movement risk between trades
+            price_risk = 0.005  # 0.5%
+            # Total conversion cost
+            total_cost = fees + slippage + price_risk  # ~2.3%
+            return total_cost
+        return 0.0
     
     async def _try_coinbase_conversion_api(
         self, exchange, from_currency: str, to_currency: str, amount: float
@@ -312,6 +328,11 @@ class CoinbaseGeminiExchangeManager:
         """
         Convert using bridge currency (BTC) as intermediary
         USD → BTC → GBP/EUR
+        
+        Accounts for:
+        - 2x maker fees (~0.8% total)
+        - 2x slippage risk (~1% total)
+        - Price movement between trades
         """
         bridge_currency = 'BTC'
         
@@ -320,8 +341,9 @@ class CoinbaseGeminiExchangeManager:
             bridge_pair1 = f"{bridge_currency}/{from_currency}"
             bridge_pair2 = f"{from_currency}/{bridge_currency}"
             
-            pair1_exists = bridge_pair1 in self.get_exchange(exchange_id).markets
-            pair2_exists = bridge_pair2 in self.get_exchange(exchange_id).markets
+            exchange = self.get_exchange(exchange_id)
+            pair1_exists = bridge_pair1 in exchange.markets
+            pair2_exists = bridge_pair2 in exchange.markets
             
             if not (pair1_exists or pair2_exists):
                 logger.debug(f"   No bridge pair available for {from_currency} → {bridge_currency}")
@@ -331,84 +353,92 @@ class CoinbaseGeminiExchangeManager:
             bridge_pair3 = f"{bridge_currency}/{to_currency}"
             bridge_pair4 = f"{to_currency}/{bridge_currency}"
             
-            pair3_exists = bridge_pair3 in self.get_exchange(exchange_id).markets
-            pair4_exists = bridge_pair4 in self.get_exchange(exchange_id).markets
+            pair3_exists = bridge_pair3 in exchange.markets
+            pair4_exists = bridge_pair4 in exchange.markets
             
             if not (pair3_exists or pair4_exists):
                 logger.debug(f"   No bridge pair available for {bridge_currency} → {to_currency}")
                 return False
             
             logger.info(f"   🔄 Bridge conversion: {from_currency} → {bridge_currency} → {to_currency}")
+            logger.info(f"   ⚠️ Cost: ~0.8% fees + ~1% slippage = ~1.8% total conversion cost")
             
             # Execute Step 1: from_currency → BTC
-            step1_success = await self._execute_bridge_step(
+            step1_result = await self._execute_bridge_step_with_fill(
                 exchange_id, from_currency, bridge_currency, amount, bridge_pair1, bridge_pair2
             )
             
-            if not step1_success:
+            if not step1_result or step1_result[0] is None:
                 logger.warning(f"   ⚠️ Bridge step 1 failed: {from_currency} → {bridge_currency}")
                 return False
             
-            # Get BTC amount received (approximate)
-            # In real implementation, we'd check balance to get exact amount
-            # For now, use estimated amount
-            ticker1 = await self.fetch_ticker(exchange_id, bridge_pair1 if pair1_exists else bridge_pair2)
-            if pair1_exists:
-                btc_price = ticker1.get('ask') or ticker1.get('last', 0)
-                btc_amount = amount / btc_price if btc_price > 0 else 0
-            else:
-                btc_price = ticker1.get('bid') or ticker1.get('last', 0)
-                btc_amount = amount * btc_price if btc_price > 0 else 0
+            # Get actual BTC amount received from step 1
+            btc_amount = step1_result[1]  # Actual amount received
             
             if btc_amount <= 0:
-                logger.warning(f"   ⚠️ Invalid BTC amount calculated: {btc_amount}")
+                logger.warning(f"   ⚠️ Invalid BTC amount received: {btc_amount}")
                 return False
             
+            logger.info(f"   ✅ Step 1 complete: Received {btc_amount:.8f} {bridge_currency}")
+            
             # Execute Step 2: BTC → to_currency
-            step2_success = await self._execute_bridge_step(
+            step2_result = await self._execute_bridge_step_with_fill(
                 exchange_id, bridge_currency, to_currency, btc_amount, bridge_pair3, bridge_pair4
             )
             
-            if step2_success:
-                logger.info(f"   ✅ Bridge conversion successful!")
-                return True
-            else:
+            if not step2_result or step2_result[0] is None:
                 logger.warning(f"   ⚠️ Bridge step 2 failed: {bridge_currency} → {to_currency}")
                 return False
             
+            final_amount = step2_result[1]
+            logger.info(f"   ✅ Step 2 complete: Received {final_amount:.2f} {to_currency}")
+            logger.info(f"   ✅ Bridge conversion successful! Total received: {final_amount:.2f} {to_currency}")
+            return True
+            
         except Exception as e:
             logger.error(f"   ❌ Bridge currency conversion error: {e}")
+            import traceback
+            logger.error(f"   Traceback: {traceback.format_exc()}")
             return False
     
-    async def _execute_bridge_step(
+    async def _execute_bridge_step_with_fill(
         self, exchange_id: str, from_curr: str, to_curr: str, 
         amount: float, pair1: str, pair2: str
-    ) -> bool:
-        """Execute one step of bridge conversion"""
+    ) -> Tuple[Optional[Dict], float]:
+        """
+        Execute one step of bridge conversion and wait for fill
+        Returns: (order_info, actual_amount_received)
+        """
         try:
             exchange = self.get_exchange(exchange_id)
             
             if pair1 in exchange.markets:
-                # Buying to_curr with from_curr
+                # Buying to_curr with from_curr (e.g., buying BTC with USD)
                 ticker = await self.fetch_ticker(exchange_id, pair1)
                 price = ticker.get('ask') or ticker.get('last', 0)
+                # amount is in from_curr, we want to buy to_curr
+                # So order_amount should be how much to_curr we want
+                # But we have 'amount' of from_curr to spend
+                # For BTC/USD: we want to buy BTC with USD, so amount is USD we have
                 order_amount = amount / price if price > 0 else 0
                 side = 'buy'
                 pair_to_use = pair1
             elif pair2 in exchange.markets:
-                # Selling from_curr to get to_curr
+                # Selling from_curr to get to_curr (e.g., selling USD to get BTC)
                 ticker = await self.fetch_ticker(exchange_id, pair2)
                 price = ticker.get('bid') or ticker.get('last', 0)
-                order_amount = amount * price if price > 0 else 0
+                # amount is in from_curr, we're selling it to get to_curr
+                order_amount = amount  # Sell all we have
                 side = 'sell'
                 pair_to_use = pair2
             else:
-                return False
+                return (None, 0.0)
             
             if order_amount <= 0:
-                return False
+                return (None, 0.0)
             
-            limit_price = price * (1.005 if pair1 in exchange.markets else 0.995)
+            # Use 0.5% buffer for slippage (higher than normal due to BTC volatility)
+            limit_price = price * (1.005 if side == 'buy' else 0.995)
             
             order = await self.create_order(
                 exchange_id=exchange_id,
@@ -419,11 +449,73 @@ class CoinbaseGeminiExchangeManager:
                 price=limit_price
             )
             
-            return order is not None
+            if not order:
+                return (None, 0.0)
+            
+            order_id = order.get('id')
+            if not order_id:
+                return (None, 0.0)
+            
+            # Wait for order to fill (max 30 seconds)
+            max_wait = 30
+            waited = 0
+            check_interval = 2
+            
+            while waited < max_wait:
+                await asyncio.sleep(check_interval)
+                waited += check_interval
+                
+                try:
+                    order_status = await self.fetch_order(exchange_id, order_id, pair_to_use)
+                    status = order_status.get('status', 'unknown')
+                    
+                    if status in ['closed', 'filled']:
+                        # Calculate actual amount received
+                        filled = order_status.get('filled', 0)
+                        if side == 'buy':
+                            # Bought BTC, received amount is in BTC
+                            actual_received = filled
+                        else:
+                            # Sold USD, received amount is in BTC (calculated from price)
+                            # filled is in from_curr, we need to convert to to_curr
+                            actual_price = order_status.get('price', limit_price)
+                            actual_received = filled * actual_price if actual_price > 0 else 0
+                        
+                        logger.debug(f"   ✅ Bridge step filled: {filled:.8f} in {waited}s")
+                        return (order_status, actual_received)
+                    elif status == 'canceled':
+                        logger.warning(f"   ⚠️ Bridge step order was canceled")
+                        return (None, 0.0)
+                    
+                except Exception as check_error:
+                    logger.debug(f"   Error checking order status: {check_error}")
+            
+            # Timeout - check one more time
+            try:
+                order_status = await self.fetch_order(exchange_id, order_id, pair_to_use)
+                status = order_status.get('status', 'unknown')
+                
+                if status in ['closed', 'filled']:
+                    filled = order_status.get('filled', 0)
+                    if side == 'buy':
+                        actual_received = filled
+                    else:
+                        actual_price = order_status.get('price', limit_price)
+                        actual_received = filled * actual_price if actual_price > 0 else 0
+                    return (order_status, actual_received)
+                else:
+                    # Cancel unfilled order
+                    try:
+                        await self.cancel_order(exchange_id, order_id, pair_to_use)
+                    except:
+                        pass
+                    return (None, 0.0)
+            except:
+                return (None, 0.0)
             
         except Exception as e:
             logger.debug(f"   Bridge step execution failed: {e}")
-            return False
+            return (None, 0.0)
     
     async def fetch_order(self, exchange_id: str, order_id: str, symbol: str) -> Dict:
         """Fetch order status"""

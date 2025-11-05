@@ -1200,67 +1200,130 @@ class IntraExchangeArbitrageEngine:
     ) -> Tuple[bool, float]:
         """
         Check if we have sufficient balance for both sides of the trade
-        If not, try to convert available currencies to the required quote currency
-        Returns: (success, actual_available_amount)
+        Accounts for:
+        - Cash (quote currency) for buying
+        - Existing positions (base crypto) for selling
+        
+        Returns: (success, actual_available_amount_usd)
         CRITICAL: Need quote currency for buy, base currency for sell
         """
         try:
             balance = await self.exchange_manager.fetch_balance(exchange_id)
+            free_balance = balance.get('free', {})
             
             # Extract currencies
             buy_quote = buy_pair.split('/')[1]  # e.g., 'EUR' from 'BTC/EUR'
             sell_quote = sell_pair.split('/')[1]  # e.g., 'USDC' from 'BTC/USDC'
             base_crypto = buy_pair.split('/')[0]  # e.g., 'BTC'
             
-            # Check buy side: need quote currency
-            buy_balance = balance.get('free', {}).get(buy_quote, 0)
-            required_buy_amount = trade_size_usd * 1.1  # 10% buffer
+            # Get current prices for calculations
+            buy_ticker = await self.exchange_manager.fetch_ticker(exchange_id, buy_pair)
+            sell_ticker = await self.exchange_manager.fetch_ticker(exchange_id, sell_pair)
+            buy_price = buy_ticker.get('ask') or buy_ticker.get('last', 0)
+            sell_price = sell_ticker.get('bid') or sell_ticker.get('last', 0)
             
-            # Calculate total available in convertible currencies
-            free_balance = balance.get('free', {})
-            total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
+            if buy_price <= 0 or sell_price <= 0:
+                logger.warning(f"   ⚠️ Invalid prices for balance check")
+                return False, 0
             
-            if buy_balance < required_buy_amount:
-                logger.info(f"   💱 Insufficient {buy_quote} balance: {buy_balance:.2f} < {required_buy_amount:.2f}")
-                logger.info(f"   💰 Total convertible balance: ${total_convertible:.2f}")
-                logger.info(f"   🔄 Attempting currency conversion...")
+            # OPTION 1: Check if we have cash to buy (normal case)
+            buy_balance = free_balance.get(buy_quote, 0)
+            cash_available_usd = buy_balance
+            
+            # If buy_quote is not USD/USDC/USDT, convert to USD equivalent
+            if buy_quote not in ['USD', 'USDC', 'USDT']:
+                # Try to get USD equivalent rate
+                if buy_quote in ['EUR', 'GBP']:
+                    # For EUR/GBP, we'll need to convert, so check convertible balance
+                    total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
+                    cash_available_usd = total_convertible
+                else:
+                    # For other currencies, try to get USD pair
+                    try:
+                        usd_pair = f"{buy_quote}/USD"
+                        exchange = self.exchange_manager.get_exchange(exchange_id)
+                        if usd_pair in exchange.markets:
+                            usd_ticker = await self.exchange_manager.fetch_ticker(exchange_id, usd_pair)
+                            usd_rate = usd_ticker.get('last') or usd_ticker.get('bid', 1.0)
+                            cash_available_usd = buy_balance * usd_rate
+                        else:
+                            cash_available_usd = buy_balance  # Assume 1:1 if can't convert
+                    except:
+                        cash_available_usd = buy_balance
+            
+            # OPTION 2: Check if we already have the base crypto (can sell immediately)
+            base_crypto_balance = free_balance.get(base_crypto, 0)
+            crypto_value_usd = base_crypto_balance * sell_price  # Value if we sell what we have
+            
+            logger.info(f"   💰 Balance check:")
+            logger.info(f"      Cash ({buy_quote}): {buy_balance:.2f} = ${cash_available_usd:.2f} USD equivalent")
+            logger.info(f"      Position ({base_crypto}): {base_crypto_balance:.8f} = ${crypto_value_usd:.2f} USD value")
+            logger.info(f"      Total available: ${cash_available_usd + crypto_value_usd:.2f}")
+            
+            # Calculate maximum position size based on what we have
+            # We can either:
+            # 1. Buy with cash: limited by cash_available_usd
+            # 2. Sell existing position: limited by crypto_value_usd
+            # 3. Combination: cash_available_usd + crypto_value_usd
+            
+            total_available_usd = cash_available_usd + crypto_value_usd
+            
+            # If we have existing position, we can execute sell side immediately
+            # But we still need cash for buy side (unless we're doing reverse arbitrage)
+            # For now, assume we need cash for buy side
+            
+            if cash_available_usd < trade_size_usd * 0.3:  # Need at least 30% of desired
+                # Try to convert available currencies to required quote currency
+                total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
                 
-                # Try to convert available currencies to the required quote currency
-                # Use available balance, not required amount (dynamic sizing)
-                conversion_success = await self._ensure_currency_available(
-                    exchange_id=exchange_id,
-                    required_currency=buy_quote,
-                    required_amount=min(required_buy_amount, total_convertible * 0.8)  # Use 80% of available
-                )
-                
-                if not conversion_success:
-                    # If conversion failed, check if we can still do a smaller trade
-                    if total_convertible > trade_size_usd * 0.3:  # At least 30% of desired size
-                        logger.info(f"   💡 Conversion failed, but have ${total_convertible:.2f} - will try smaller trade")
-                        # Return available amount for smaller trade
-                        return True, total_convertible * 0.7  # Use 70% of available
+                if total_convertible > trade_size_usd * 0.3:
+                    logger.info(f"   💱 Converting ${total_convertible:.2f} to {buy_quote}...")
+                    
+                    conversion_success = await self._ensure_currency_available(
+                        exchange_id=exchange_id,
+                        required_currency=buy_quote,
+                        required_amount=min(trade_size_usd * 1.1, total_convertible * 0.8)
+                    )
+                    
+                    if conversion_success:
+                        # Re-check balance after conversion
+                        balance = await self.exchange_manager.fetch_balance(exchange_id)
+                        free_balance = balance.get('free', {})
+                        buy_balance = free_balance.get(buy_quote, 0)
+                        
+                        # Recalculate cash available
+                        if buy_quote in ['USD', 'USDC', 'USDT']:
+                            cash_available_usd = buy_balance
+                        else:
+                            # Use same logic as before for conversion
+                            total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
+                            cash_available_usd = total_convertible
+                        
+                        base_crypto_balance = free_balance.get(base_crypto, 0)
+                        crypto_value_usd = base_crypto_balance * sell_price
+                        total_available_usd = cash_available_usd + crypto_value_usd
                     else:
-                        logger.warning(f"   ⚠️ Could not obtain {buy_quote} through conversion")
-                        return False, 0
-                
-                # Re-check balance after conversion
-                balance = await self.exchange_manager.fetch_balance(exchange_id)
-                buy_balance = balance.get('free', {}).get(buy_quote, 0)
-                
-                if buy_balance < required_buy_amount * 0.3:  # Need at least 30% of desired
-                    logger.warning(f"   ⚠️ Still insufficient {buy_quote} after conversion: {buy_balance:.2f}")
-                    return False, 0
-                
-                logger.info(f"   ✅ Sufficient {buy_quote} after conversion: {buy_balance:.2f}")
-                # Return actual available amount (use 90% to leave buffer)
-                return True, buy_balance * 0.9
-            else:
-                # We have enough, return available amount
-                return True, buy_balance * 0.9  # Use 90% to leave buffer
+                        logger.warning(f"   ⚠️ Conversion failed")
+            
+            # Determine actual position size based on available resources
+            # Use 90% of available to leave buffer for fees/slippage
+            actual_position_size = min(trade_size_usd, total_available_usd * 0.9)
+            
+            # Minimum position size check
+            if actual_position_size < self.min_position_size_usd * 0.5:
+                logger.warning(f"   ⚠️ Available ${actual_position_size:.2f} < 50% of minimum ${self.min_position_size_usd:.2f}")
+                return False, 0
+            
+            if actual_position_size < trade_size_usd:
+                logger.info(f"   💡 Position sizing: Using ${actual_position_size:.2f} (available) vs ${trade_size_usd:.2f} (desired)")
+            
+            return True, actual_position_size
             
         except Exception as e:
             logger.warning(f"   ⚠️ Could not check balance: {e}")
-            return True, trade_size_usd  # Assume OK if we can't check
+            import traceback
+            logger.debug(f"   Traceback: {traceback.format_exc()}")
+            return False, 0
     
     async def execute_trade(self, opportunity: TradeOpportunity) -> TradeExecution:
         """
