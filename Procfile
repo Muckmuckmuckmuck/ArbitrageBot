@@ -1,5 +1,5 @@
-# INTRA-EXCHANGE ARBITRAGE SCANNER
-# Scans 1,000+ cryptos on Coinbase and Gemini for USD/USDC arbitrage opportunities
-# Ranks by profitability after fees and slippage
-# Original bot command backed up in Procfile.bot_backup
-worker: python intra_exchange_arbitrage_scanner.py
+# INTRA-EXCHANGE ARBITRAGE TRADING ENGINE
+# Scans ALL trading pairs on Coinbase and Gemini for arbitrage opportunities
+# Executes trades automatically when profitable opportunities are found
+# Original scanner backed up in Procfile.scanner_backup
+worker: python intra_exchange_arbitrage_engine.py

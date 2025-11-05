@@ -522,6 +522,14 @@ class IntraExchangeArbitrageEngine:
                             volatility_24h=volatility
                         )
                         
+                        # LOG PROFITABLE OPPORTUNITY FOUND
+                        logger.info(f"   ✅ [{exchange_id.upper()}] PROFITABLE: {base_crypto} | "
+                                   f"Buy: {buy_pair} @ ${buy_price:.6f} | "
+                                   f"Sell: {sell_pair} @ ${sell_price:.6f} | "
+                                   f"Spread: {profit_data['raw_spread']*100:.3f}% | "
+                                   f"Net Profit: {net_profit*100:.3f}% | "
+                                   f"Expected: ${profit_data['expected_profit_usd']:.2f}")
+                        
                         if score > best_score:
                             opportunity = TradeOpportunity(
                                 exchange=exchange_id,
@@ -545,6 +553,15 @@ class IntraExchangeArbitrageEngine:
                             )
                             best_opportunity = opportunity
                             best_score = score
+                    else:
+                        # LOG WHY NOT PROFITABLE
+                        deficit = (threshold - net_profit) * 100
+                        logger.debug(f"   ❌ [{exchange_id.upper()}] NOT PROFITABLE: {base_crypto} | "
+                                   f"{buy_pair} vs {sell_pair} | "
+                                   f"Spread: {profit_data['raw_spread']*100:.3f}% | "
+                                   f"Net: {net_profit*100:.3f}% | "
+                                   f"Required: {threshold*100:.3f}% | "
+                                   f"Deficit: {deficit:.3f}%")
                 
                 except Exception as e:
                     logger.debug(f"Error evaluating {pair1} vs {pair2}: {e}")
@@ -557,7 +574,9 @@ class IntraExchangeArbitrageEngine:
         Scan an exchange for ALL profitable opportunities
         Returns ranked list of opportunities
         """
-        logger.info(f"🔍 Scanning {exchange_id.upper()} for opportunities...")
+        logger.info("=" * 80)
+        logger.info(f"🔍 SCANNING {exchange_id.upper()} FOR ARBITRAGE OPPORTUNITIES")
+        logger.info("=" * 80)
         
         start_time = time.time()
         exchange = self.exchange_manager.get_exchange(exchange_id)
@@ -570,16 +589,20 @@ class IntraExchangeArbitrageEngine:
                 if base:
                     base_cryptos.add(base)
         
-        logger.info(f"   Found {len(base_cryptos)} unique cryptos on {exchange_id}")
+        logger.info(f"   📊 Found {len(base_cryptos)} unique cryptos on {exchange_id.upper()}")
+        logger.info(f"   🎯 Scanning for profitable intra-exchange arbitrage pairs...")
+        logger.info("")
         
         opportunities = []
         scanned = 0
+        profitable_found = 0
         
         # Scan each crypto
         for base_crypto in list(base_cryptos)[:max_cryptos]:
             scanned += 1
             if scanned % 50 == 0:
-                logger.info(f"   Progress: {scanned}/{min(len(base_cryptos), max_cryptos)} cryptos scanned")
+                logger.info(f"   📈 Progress: {scanned}/{min(len(base_cryptos), max_cryptos)} cryptos | "
+                           f"✅ Profitable: {profitable_found} found so far")
             
             opportunity = await self._find_opportunity_for_crypto(
                 exchange_id=exchange_id,
@@ -589,13 +612,30 @@ class IntraExchangeArbitrageEngine:
             
             if opportunity:
                 opportunities.append(opportunity)
+                profitable_found += 1
                 self.stats[exchange_id]['opportunities_found'] += 1
         
         # Sort by opportunity score (highest first)
         opportunities.sort(key=lambda x: x.opportunity_score, reverse=True)
         
         scan_time = time.time() - start_time
-        logger.info(f"   ✅ Found {len(opportunities)} opportunities in {scan_time:.2f}s")
+        logger.info("")
+        logger.info(f"   ✅ [{exchange_id.upper()}] SCAN COMPLETE:")
+        logger.info(f"      Time: {scan_time:.2f}s")
+        logger.info(f"      Cryptos scanned: {scanned}")
+        logger.info(f"      ✅ Profitable opportunities: {len(opportunities)}")
+        
+        if opportunities:
+            logger.info(f"   🏆 TOP OPPORTUNITIES ON {exchange_id.upper()}:")
+            for i, opp in enumerate(opportunities[:5], 1):
+                logger.info(f"      {i}. {opp.base_crypto} | "
+                           f"{opp.buy_pair} → {opp.sell_pair} | "
+                           f"Profit: {opp.net_profit_percent:.3f}% | "
+                           f"${opp.expected_profit_usd:.2f}")
+        else:
+            logger.info(f"   ⚠️  No profitable opportunities found on {exchange_id.upper()}")
+        
+        logger.info("=" * 80)
         
         return opportunities
     
@@ -1108,8 +1148,23 @@ class IntraExchangeArbitrageEngine:
         while True:
             try:
                 # Scan both exchanges separately
+                logger.info("")
+                logger.info("🔍 STARTING NEW SCAN CYCLE")
+                logger.info("")
+                
                 coinbase_opps = await self.scan_exchange('coinbase', max_cryptos=200)
                 gemini_opps = await self.scan_exchange('gemini', max_cryptos=200)
+                
+                # SUMMARY OF ALL OPPORTUNITIES FOUND
+                logger.info("")
+                logger.info("=" * 80)
+                logger.info("📊 OPPORTUNITY SUMMARY")
+                logger.info("=" * 80)
+                logger.info(f"   ✅ COINBASE: {len(coinbase_opps)} profitable opportunities")
+                logger.info(f"   ✅ GEMINI: {len(gemini_opps)} profitable opportunities")
+                logger.info(f"   📈 TOTAL: {len(coinbase_opps) + len(gemini_opps)} opportunities found")
+                logger.info("=" * 80)
+                logger.info("")
                 
                 # Execute multiple opportunities concurrently (IMPROVEMENT!)
                 # Filter opportunities that use different pairs to avoid conflicts
@@ -1121,6 +1176,7 @@ class IntraExchangeArbitrageEngine:
                 gemini_used_pairs = set()
                 
                 # Execute top opportunities for Coinbase (up to max_concurrent)
+                coinbase_selected = 0
                 for opp in coinbase_opps[:self.max_concurrent_trades_per_exchange * 2]:  # Check more than we'll execute
                     if opp.net_profit_percent >= self.min_profit_threshold * 100:
                         # Check if pairs conflict with active trades
@@ -1142,10 +1198,15 @@ class IntraExchangeArbitrageEngine:
                             if not conflicts:
                                 coinbase_used_pairs.add(pair_key)
                                 coinbase_tasks.append(self.execute_trade(opp))
+                                coinbase_selected += 1
+                                logger.info(f"   🎯 [COINBASE] Selected opportunity #{coinbase_selected}: "
+                                           f"{opp.base_crypto} | {opp.buy_pair} → {opp.sell_pair} | "
+                                           f"Profit: {opp.net_profit_percent:.3f}% | ${opp.expected_profit_usd:.2f}")
                                 if len(coinbase_tasks) >= self.max_concurrent_trades_per_exchange:
                                     break
                 
                 # Execute top opportunities for Gemini (up to max_concurrent)
+                gemini_selected = 0
                 for opp in gemini_opps[:self.max_concurrent_trades_per_exchange * 2]:
                     if opp.net_profit_percent >= self.min_profit_threshold * 100:
                         pair_key = f"{opp.buy_pair}/{opp.sell_pair}"
@@ -1161,14 +1222,27 @@ class IntraExchangeArbitrageEngine:
                             if not conflicts:
                                 gemini_used_pairs.add(pair_key)
                                 gemini_tasks.append(self.execute_trade(opp))
+                                gemini_selected += 1
+                                logger.info(f"   🎯 [GEMINI] Selected opportunity #{gemini_selected}: "
+                                           f"{opp.base_crypto} | {opp.buy_pair} → {opp.sell_pair} | "
+                                           f"Profit: {opp.net_profit_percent:.3f}% | ${opp.expected_profit_usd:.2f}")
                                 if len(gemini_tasks) >= self.max_concurrent_trades_per_exchange:
                                     break
                 
                 # Execute all trades concurrently
                 all_tasks = coinbase_tasks + gemini_tasks
                 if all_tasks:
-                    logger.info(f"   🚀 Executing {len(all_tasks)} trades concurrently")
+                    logger.info("")
+                    logger.info("=" * 80)
+                    logger.info(f"🚀 EXECUTING {len(all_tasks)} TRADES")
+                    logger.info("=" * 80)
+                    logger.info(f"   COINBASE: {len(coinbase_tasks)} trades")
+                    logger.info(f"   GEMINI: {len(gemini_tasks)} trades")
+                    logger.info("=" * 80)
+                    logger.info("")
                     await asyncio.gather(*all_tasks, return_exceptions=True)
+                else:
+                    logger.info("   ⚠️  No trades selected - all opportunities below threshold or conflicts")
                 
                 # Print statistics
                 self._print_statistics()
@@ -1185,21 +1259,37 @@ class IntraExchangeArbitrageEngine:
     
     def _print_statistics(self):
         """Print current statistics"""
+        logger.info("")
         logger.info("=" * 80)
-        logger.info("📊 TRADING STATISTICS")
+        logger.info("📊 TRADING STATISTICS SUMMARY")
         logger.info("=" * 80)
+        
+        total_opportunities = 0
+        total_trades = 0
+        total_profit = 0.0
         
         for exchange_id in ['coinbase', 'gemini']:
             stats = self.stats[exchange_id]
-            logger.info(f"\n{exchange_id.upper()}:")
-            logger.info(f"   Opportunities found: {stats['opportunities_found']}")
-            logger.info(f"   Trades executed: {stats['trades_executed']}")
-            logger.info(f"   Successful: {stats['successful_trades']}")
-            logger.info(f"   Failed: {stats['failed_trades']}")
-            logger.info(f"   Total profit: ${stats['total_profit_usd']:.2f}")
+            total_opportunities += stats['opportunities_found']
+            total_trades += stats['trades_executed']
+            total_profit += stats['total_profit_usd']
+            
+            success_rate = (stats['successful_trades'] / max(stats['trades_executed'], 1)) * 100
+            
+            logger.info(f"\n   📈 {exchange_id.upper()}:")
+            logger.info(f"      Opportunities found: {stats['opportunities_found']}")
+            logger.info(f"      Trades executed: {stats['trades_executed']}")
+            logger.info(f"      ✅ Successful: {stats['successful_trades']} ({success_rate:.1f}%)")
+            logger.info(f"      ❌ Failed: {stats['failed_trades']}")
+            logger.info(f"      💰 Total profit: ${stats['total_profit_usd']:.2f}")
         
-        logger.info(f"\nBlacklisted pairs: {len(self.blacklisted_pairs)}")
+        logger.info(f"\n   🌐 TOTAL:")
+        logger.info(f"      Opportunities: {total_opportunities}")
+        logger.info(f"      Trades: {total_trades}")
+        logger.info(f"      💰 Profit: ${total_profit:.2f}")
+        logger.info(f"      🚫 Blacklisted pairs: {len(self.blacklisted_pairs)}")
         logger.info("=" * 80)
+        logger.info("")
 
 
 async def main():
