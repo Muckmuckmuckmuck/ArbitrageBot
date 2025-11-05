@@ -233,15 +233,24 @@ class IntraExchangeArbitrageEngine:
         # Execution latency tracking (for latency risk calculation)
         self.execution_latency_ms = 500  # Will be updated based on actual measurements
         
-        # Robustness settings
-        self.max_order_wait_seconds = 30  # Max time to wait for order fill
+        # Robustness settings - OPTIMIZED FOR SPEED
+        self.max_order_wait_seconds = 10  # Reduced from 30s - opportunities disappear fast!
+        self.price_chase_start_seconds = 2  # Start chasing after 2s (was 10s)
         self.price_chase_increment = 0.001  # 0.1% price adjustment if not filling
         self.max_price_chase_percent = 0.005  # Max 0.5% price chase
-        self.opportunity_timeout_seconds = 10  # Cancel if opportunity disappears
+        self.opportunity_timeout_seconds = 5  # Reduced from 10s - faster validation
         self.max_slippage_percent = 0.01  # 1% max slippage before canceling
         self.circuit_breaker_loss_threshold = -50.0  # Stop if lose $50 in session
         self.circuit_breaker_enabled = True
         self.session_loss = 0.0  # Track cumulative loss
+        
+        # Aggressive execution settings
+        self.max_concurrent_trades_per_exchange = 3  # Execute 3 trades simultaneously
+        self.market_order_fallback_enabled = True  # Use market orders if limit doesn't fill
+        self.market_order_threshold = 0.005  # Use market order if spread > 0.5%
+        self.dynamic_position_sizing = True  # Scale position with opportunity quality
+        self.min_position_size_usd = 25.0  # Minimum position size
+        self.max_position_size_usd = max_position_size_usd  # Maximum position size
         
     async def initialize(self):
         """Initialize exchanges"""
@@ -291,8 +300,23 @@ class IntraExchangeArbitrageEngine:
         Handles: USD, USDC, USDT, EUR, GBP, BTC, ETH, SOL, etc.
         CRITICAL: This must be accurate for crypto-to-crypto pairs
         """
-        if quote_currency in ['USD', 'USDC', 'USDT']:
-            # Stablecoins are approximately 1:1 with USD
+        if quote_currency == 'USD':
+            return price
+        
+        # USDC/USDT - fetch real rates (they're close but not exactly 1:1)
+        if quote_currency in ['USDC', 'USDT']:
+            try:
+                # Try to get real rate from exchange
+                exchange = self.exchange_manager.get_exchange(exchange_id)
+                stable_pair = f"{quote_currency}/USD"
+                if stable_pair in exchange.markets:
+                    ticker = await self.exchange_manager.fetch_ticker(exchange_id, stable_pair)
+                    rate = ticker.get('last') or ticker.get('close') or ticker.get('bid', 1.0)
+                    if rate and 0.99 < rate < 1.01:  # Sanity check
+                        return price * rate
+            except Exception as e:
+                logger.debug(f"Could not fetch {quote_currency}/USD rate: {e}")
+            # Fallback: assume 1:1 (very close)
             return price
         
         # Fiat currencies - fetch real-time rates
@@ -668,8 +692,8 @@ class IntraExchangeArbitrageEngine:
                 if filled > 0:
                     logger.info(f"   ⏳ Partially filled: {filled:.6f} {symbol}")
                 
-                # Price chasing: if not filled after 10s, adjust price slightly
-                if waited >= 10 and price_chased < self.max_price_chase_percent:
+                # Price chasing: if not filled after 2s, adjust price slightly (FASTER!)
+                if waited >= self.price_chase_start_seconds and price_chased < self.max_price_chase_percent:
                     # Cancel old order
                     try:
                         await self.exchange_manager.cancel_order(exchange_id, order_id, symbol)
@@ -677,11 +701,12 @@ class IntraExchangeArbitrageEngine:
                     except:
                         pass
                     
-                    # Adjust price
+                    # Adjust price (more aggressive chasing)
+                    chase_multiplier = max(1, (waited - self.price_chase_start_seconds) // self.price_chase_start_seconds)
                     if side == 'buy':
-                        current_price = original_price * (1 + self.price_chase_increment * (waited // 10))
+                        current_price = original_price * (1 + self.price_chase_increment * chase_multiplier)
                     else:
-                        current_price = original_price * (1 - self.price_chase_increment * (waited // 10))
+                        current_price = original_price * (1 - self.price_chase_increment * chase_multiplier)
                     
                     price_chased = abs(current_price - original_price) / original_price
                     
@@ -823,8 +848,17 @@ class IntraExchangeArbitrageEngine:
         execution_time = 0.0
         
         try:
-            # Calculate trade size in base currency
-            base_amount = opportunity.trade_size_usd / opportunity.buy_price
+            # Calculate trade size - dynamic sizing based on opportunity quality
+            if self.dynamic_position_sizing:
+                # Scale position size with opportunity score
+                # Better opportunity = larger position
+                score_multiplier = min(2.0, opportunity.opportunity_score / 10.0)  # Max 2x
+                dynamic_size = self.min_position_size_usd * (1 + score_multiplier)
+                trade_size = min(self.max_position_size_usd, max(self.min_position_size_usd, dynamic_size))
+            else:
+                trade_size = opportunity.trade_size_usd
+            
+            base_amount = trade_size / opportunity.buy_price
             
             # Get calculator for fees
             calculator = self.coinbase_calculator if exchange_id == 'coinbase' else self.gemini_calculator
@@ -853,11 +887,47 @@ class IntraExchangeArbitrageEngine:
             )
             
             if not buy_order_status or buy_order_status.get('status') not in ['closed', 'filled']:
-                logger.warning(f"   ⚠️ Buy order not filled - canceling")
-                try:
-                    await self.exchange_manager.cancel_order(exchange_id, buy_order_id, opportunity.buy_pair)
-                except:
-                    pass
+                # MARKET ORDER FALLBACK for time-sensitive opportunities
+                if self.market_order_fallback_enabled and opportunity.raw_spread_percent >= self.market_order_threshold * 100:
+                    logger.info(f"   ⚡ Using market order fallback (spread {opportunity.raw_spread_percent:.3f}% > {self.market_order_threshold*100:.1f}%)")
+                    try:
+                        # Cancel limit order
+                        await self.exchange_manager.cancel_order(exchange_id, buy_order_id, opportunity.buy_pair)
+                    except:
+                        pass
+                    
+                    # Place market order (taker fee, but fills immediately)
+                    try:
+                        market_order = await self.exchange_manager.create_order(
+                            exchange_id=exchange_id,
+                            symbol=opportunity.buy_pair,
+                            order_type='market',
+                            side='buy',
+                            amount=base_amount
+                        )
+                        buy_order_id = market_order.get('id')
+                        await asyncio.sleep(1)  # Wait for fill
+                        buy_order_status = await self.exchange_manager.fetch_order(exchange_id, buy_order_id, opportunity.buy_pair)
+                        if buy_order_status.get('status') in ['closed', 'filled']:
+                            actual_buy_price = buy_order_status.get('average') or buy_order_status.get('price') or buy_order_status.get('filled', 0) / max(buy_order_status.get('amount', 1), 0.000001)
+                            logger.info(f"   ✅ Market buy filled @ ${actual_buy_price:.6f}")
+                            # Use taker fee for market orders
+                            calculator = self.coinbase_calculator if exchange_id == 'coinbase' else self.gemini_calculator
+                            # Note: We'll use taker fee in profit calculation
+                        else:
+                            logger.warning(f"   ⚠️ Market order also failed")
+                    except Exception as e:
+                        logger.warning(f"   ⚠️ Market order fallback failed: {e}")
+                        try:
+                            await self.exchange_manager.cancel_order(exchange_id, buy_order_id, opportunity.buy_pair)
+                        except:
+                            pass
+                else:
+                    logger.warning(f"   ⚠️ Buy order not filled - canceling")
+                    try:
+                        await self.exchange_manager.cancel_order(exchange_id, buy_order_id, opportunity.buy_pair)
+                    except:
+                        pass
                 # Check if we got partial fill
                 if buy_order_status:
                     filled = buy_order_status.get('filled', 0)
@@ -1002,29 +1072,38 @@ class IntraExchangeArbitrageEngine:
         else:
             self.stats[exchange_id]['failed_trades'] += 1
             
-            # Learn from failure: Raise threshold if repeatedly fails
-            if self.stats[exchange_id]['failed_trades'] % 3 == 0:
-                # Increase threshold by 20% (more conservative)
-                self.pair_thresholds[pair_key] = self.pair_thresholds[pair_key] * 1.2
-                logger.warning(f"   ⚠️ Raised threshold for {pair_key} to {self.pair_thresholds[pair_key]*100:.3f}% due to failures")
+            # Learn from failure: Only raise threshold if actual execution failures (not opportunity disappeared)
+            # Don't count "opportunity disappeared" as a failure - that's normal!
+            if status == 'failed' and 'disappeared' not in str(opportunity).lower():
+                failure_count = sum(1 for h in self.trade_history.get(pair_key, []) if h < 0)
+                if failure_count >= 5 and failure_count / max(len(self.trade_history[pair_key]), 1) > 0.5:
+                    # Only raise threshold if >50% failure rate over last 10 trades
+                    self.pair_thresholds[pair_key] = self.pair_thresholds[pair_key] * 1.2
+                    logger.warning(f"   ⚠️ Raised threshold for {pair_key} to {self.pair_thresholds[pair_key]*100:.3f}% (failure rate: {failure_count/len(self.trade_history[pair_key])*100:.1f}%)")
             
-            # Blacklist if repeatedly fails (after 5 failures)
-            if self.stats[exchange_id]['failed_trades'] % 5 == 0:
-                self.blacklisted_pairs.add(pair_key)
-                logger.warning(f"   ⚠️ Blacklisted {pair_key} due to repeated failures")
+            # Blacklist only if consistently failing (not just low opportunity frequency)
+            if status == 'failed' and 'disappeared' not in str(opportunity).lower():
+                failure_count = sum(1 for h in self.trade_history.get(pair_key, []) if h < 0)
+                if failure_count >= 7 and failure_count / max(len(self.trade_history[pair_key]), 1) > 0.7:
+                    # Only blacklist if >70% failure rate over 10+ trades
+                    self.blacklisted_pairs.add(pair_key)
+                    logger.warning(f"   ⚠️ Blacklisted {pair_key} due to consistent failures (failure rate: {failure_count/len(self.trade_history[pair_key])*100:.1f}%)")
         
         return execution
     
     async def run_trading_loop(self, scan_interval_seconds: int = 60):
         """
         Main trading loop - continuously scans and trades
+        EXECUTES MULTIPLE OPPORTUNITIES CONCURRENTLY
         """
         logger.info("=" * 80)
         logger.info("🚀 STARTING TRADING LOOP")
         logger.info("=" * 80)
         logger.info(f"   Scan interval: {scan_interval_seconds}s")
         logger.info(f"   Min profit threshold: {self.min_profit_threshold * 100:.2f}%")
-        logger.info(f"   Max position size: ${self.max_position_size_usd:.2f}")
+        logger.info(f"   Position size: ${self.min_position_size_usd:.2f}-${self.max_position_size_usd:.2f}")
+        logger.info(f"   Max concurrent trades: {self.max_concurrent_trades_per_exchange} per exchange")
+        logger.info(f"   Market order fallback: {'Enabled' if self.market_order_fallback_enabled else 'Disabled'}")
         
         while True:
             try:
@@ -1032,16 +1111,64 @@ class IntraExchangeArbitrageEngine:
                 coinbase_opps = await self.scan_exchange('coinbase', max_cryptos=200)
                 gemini_opps = await self.scan_exchange('gemini', max_cryptos=200)
                 
-                # Execute top opportunities (one per exchange)
-                if coinbase_opps:
-                    best_coinbase = coinbase_opps[0]
-                    if best_coinbase.net_profit_percent >= self.min_profit_threshold * 100:
-                        await self.execute_trade(best_coinbase)
+                # Execute multiple opportunities concurrently (IMPROVEMENT!)
+                # Filter opportunities that use different pairs to avoid conflicts
+                coinbase_tasks = []
+                gemini_tasks = []
                 
-                if gemini_opps:
-                    best_gemini = gemini_opps[0]
-                    if best_gemini.net_profit_percent >= self.min_profit_threshold * 100:
-                        await self.execute_trade(best_gemini)
+                # Track used pairs to avoid conflicts
+                coinbase_used_pairs = set()
+                gemini_used_pairs = set()
+                
+                # Execute top opportunities for Coinbase (up to max_concurrent)
+                for opp in coinbase_opps[:self.max_concurrent_trades_per_exchange * 2]:  # Check more than we'll execute
+                    if opp.net_profit_percent >= self.min_profit_threshold * 100:
+                        # Check if pairs conflict with active trades
+                        pair_key = f"{opp.buy_pair}/{opp.sell_pair}"
+                        if pair_key not in coinbase_used_pairs:
+                            # Check if base crypto or quote currencies conflict
+                            base_crypto = opp.buy_pair.split('/')[0]
+                            buy_quote = opp.buy_pair.split('/')[1]
+                            sell_quote = opp.sell_pair.split('/')[1]
+                            
+                            # Allow if different base crypto or different quote currencies
+                            conflicts = False
+                            for used_pair in coinbase_used_pairs:
+                                used_base = used_pair.split('/')[0].split('/')[0]
+                                if used_base == base_crypto:
+                                    conflicts = True
+                                    break
+                            
+                            if not conflicts:
+                                coinbase_used_pairs.add(pair_key)
+                                coinbase_tasks.append(self.execute_trade(opp))
+                                if len(coinbase_tasks) >= self.max_concurrent_trades_per_exchange:
+                                    break
+                
+                # Execute top opportunities for Gemini (up to max_concurrent)
+                for opp in gemini_opps[:self.max_concurrent_trades_per_exchange * 2]:
+                    if opp.net_profit_percent >= self.min_profit_threshold * 100:
+                        pair_key = f"{opp.buy_pair}/{opp.sell_pair}"
+                        if pair_key not in gemini_used_pairs:
+                            base_crypto = opp.buy_pair.split('/')[0]
+                            conflicts = False
+                            for used_pair in gemini_used_pairs:
+                                used_base = used_pair.split('/')[0].split('/')[0]
+                                if used_base == base_crypto:
+                                    conflicts = True
+                                    break
+                            
+                            if not conflicts:
+                                gemini_used_pairs.add(pair_key)
+                                gemini_tasks.append(self.execute_trade(opp))
+                                if len(gemini_tasks) >= self.max_concurrent_trades_per_exchange:
+                                    break
+                
+                # Execute all trades concurrently
+                all_tasks = coinbase_tasks + gemini_tasks
+                if all_tasks:
+                    logger.info(f"   🚀 Executing {len(all_tasks)} trades concurrently")
+                    await asyncio.gather(*all_tasks, return_exceptions=True)
                 
                 # Print statistics
                 self._print_statistics()
