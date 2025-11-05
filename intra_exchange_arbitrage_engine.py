@@ -1134,103 +1134,29 @@ class IntraExchangeArbitrageEngine:
         required_amount: float
     ) -> bool:
         """
-        Ensure we have the required currency, converting if necessary
-        Returns True if currency is available (either already had it or converted successfully)
+        Ensure we have the required currency - simplified for USD/USDC/USDT only
+        Since we only trade USD/USDC/USDT pairs, no conversion needed
         """
-        try:
-            balance = await self.exchange_manager.fetch_balance(exchange_id)
-            free_balance = balance.get('free', {})
-            
-            # Check if we already have enough
-            available = free_balance.get(required_currency, 0)
-            if available >= required_amount * 1.1:  # 10% buffer
-                logger.debug(f"   ✅ Already have {required_currency}: {available:.2f}")
-                return True
-            
-            logger.info(f"   💱 Need {required_amount:.2f} {required_currency}, have {available:.2f}")
-            
-            # Log all available balances for debugging
-            logger.info(f"   📊 Available balances:")
-            for currency, amount in free_balance.items():
-                if amount > 0.01:  # Only show currencies with meaningful balance
-                    logger.info(f"      {currency}: {amount:.2f}")
-            
-            # Get exchange to check available markets
-            exchange = self.exchange_manager.get_exchange(exchange_id)
-            
-            # Calculate total available balance in convertible currencies
+        balance = await self.exchange_manager.fetch_balance(exchange_id)
+        free_balance = balance.get('free', {})
+        
+        # Check if we have the required currency
+        available = free_balance.get(required_currency, 0)
+        if available >= required_amount * 1.1:  # 10% buffer
+            return True
+        
+        # For USD/USDC/USDT, check if we have any of them (they're interchangeable for our purposes)
+        if required_currency in ['USD', 'USDC', 'USDT']:
             total_available = 0
             for currency in ['USD', 'USDC', 'USDT']:
                 total_available += free_balance.get(currency, 0)
             
-            logger.info(f"   💰 Total available for conversion: ${total_available:.2f}")
-            
-            # If we don't have enough, check if we can use less than required
-            if total_available < required_amount * 1.2:
-                # We can still convert what we have, but the trade will be smaller
-                logger.info(f"   ⚠️ Limited balance: ${total_available:.2f} available, need ${required_amount * 1.2:.2f}")
-                logger.info(f"   💡 Will convert available amount and adjust trade size")
-                # Use 80% of available to leave buffer for fees
-                required_amount = total_available * 0.8
-            
-            # Find currencies we can convert from (USD, USDC, USDT)
-            convertible_currencies = ['USD', 'USDC', 'USDT']
-            for from_currency in convertible_currencies:
-                from_balance = free_balance.get(from_currency, 0)
-                
-                # Check if we have enough balance (use what we have if less)
-                available_for_conversion = min(from_balance * 0.9, required_amount * 1.1)  # Use 90% of balance, need 110% of required
-                if available_for_conversion < required_amount * 0.5:  # Need at least 50% of required
-                    logger.debug(f"   ⚠️ Insufficient {from_currency} balance: {from_balance:.2f}")
-                    continue
-                
-                # Check if conversion pair exists
-                conversion_pair = f"{from_currency}/{required_currency}"
-                reverse_pair = f"{required_currency}/{from_currency}"
-                
-                # Log what we're checking
-                logger.info(f"   🔍 Checking conversion pairs:")
-                logger.info(f"      {conversion_pair}: {'✅ EXISTS' if conversion_pair in exchange.markets else '❌ NOT FOUND'}")
-                logger.info(f"      {reverse_pair}: {'✅ EXISTS' if reverse_pair in exchange.markets else '❌ NOT FOUND'}")
-                
-                # Also check if we can use a bridge (e.g., USD -> BTC -> EUR if direct pair doesn't exist)
-                # For now, try direct pairs first
-                if conversion_pair not in exchange.markets and reverse_pair not in exchange.markets:
-                    logger.warning(f"   ⚠️ No direct conversion pair: {conversion_pair} or {reverse_pair}")
-                    # Try to find if there's a common bridge currency
-                    # For EUR/GBP, we might need to check if there's a USD/EUR or similar
-                    # For now, skip and try next currency
-                    continue
-                
-                logger.info(f"   ✅ Found conversion pair: {conversion_pair if conversion_pair in exchange.markets else reverse_pair}")
-                
-                # Use available balance, not required amount
-                amount_to_convert = min(available_for_conversion, required_amount * 1.1)
-                
-                logger.info(f"   💱 Found conversion path: {from_currency} → {required_currency}")
-                logger.info(f"      Available: {from_balance:.2f} {from_currency}")
-                logger.info(f"      Converting: {amount_to_convert:.2f} {required_currency}")
-                
-                success = await self._convert_currency(
-                    exchange_id=exchange_id,
-                    from_currency=from_currency,
-                    to_currency=required_currency,
-                    amount=amount_to_convert
-                )
-                if success:
-                    logger.info(f"   ✅ Currency conversion completed!")
-                    return True
-                else:
-                    logger.warning(f"   ⚠️ Conversion failed for {from_currency} → {required_currency}, trying next...")
-            
-            # If we get here, no conversion worked
-            logger.warning(f"   ⚠️ No convertible currency available for {required_currency}")
-            logger.warning(f"   📋 Summary:")
-            logger.warning(f"      Required: {required_amount:.2f} {required_currency}")
-            logger.warning(f"      Available balances:")
-            for currency in convertible_currencies:
-                bal = free_balance.get(currency, 0)
-                logger.warning(f"         {currency}: {bal:.2f}")
+            if total_available >= required_amount * 1.1:
+                logger.info(f"   ✅ Have ${total_available:.2f} in USD/USDC/USDT (need ${required_amount:.2f} {required_currency})")
+                return True
+        
+        logger.warning(f"   ⚠️ Insufficient {required_currency}: have {available:.2f}, need {required_amount:.2f}")
+        return False
             
             return False
             
