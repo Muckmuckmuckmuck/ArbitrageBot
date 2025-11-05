@@ -306,8 +306,13 @@ class IntraExchangeArbitrageScanner:
         if price1 == 0 or price2 == 0:
             return None
         
+        # Final safety check - ensure no None values
+        if price1 is None or price2 is None:
+            return None
+        
         # Calculate raw spread
-        if price2 > price1:
+        try:
+            if price2 > price1:
             # Buy pair1, sell pair2
             raw_spread = (price2 - price1) / price1
             direction = f'{quote1}→{quote2}'
@@ -319,6 +324,9 @@ class IntraExchangeArbitrageScanner:
             direction = f'{quote2}→{quote1}'
             buy_pair = pair2
             sell_pair = pair1
+        except (TypeError, ValueError, ZeroDivisionError) as e:
+            # If any error in comparison/calculation, skip this pair
+            return None
         
         # For display, use the actual prices
         display_price1 = price1
