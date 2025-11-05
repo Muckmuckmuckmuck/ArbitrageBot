@@ -7,7 +7,18 @@ Tests buying $2 worth of BTC with USDC
 import asyncio
 import ccxt
 import logging
+import os
+from dotenv import load_dotenv
 from coinbase_gemini_config import Config
+
+# Load environment variables first
+# Try .env first, then .env.railway
+env_loaded = load_dotenv() or load_dotenv('.env.railway')
+if not env_loaded:
+    # Check if env vars are already set (e.g., in Railway)
+    if not os.getenv('COINBASE_API_KEY'):
+        print("⚠️  Warning: No .env file found and COINBASE_API_KEY not in environment")
+        print("   This script needs Coinbase API credentials to run")
 
 # Setup detailed logging
 logging.basicConfig(
@@ -24,12 +35,36 @@ async def test_coinbase_order():
     logger.info("")
     
     try:
+        # Verify credentials are loaded
+        logger.info("STEP 0: Verifying credentials...")
+        api_key = Config.COINBASE_API_KEY or os.getenv('COINBASE_API_KEY')
+        secret_key = Config.COINBASE_SECRET_KEY or os.getenv('COINBASE_SECRET_KEY')
+        passphrase = Config.COINBASE_PASSPHRASE or os.getenv('COINBASE_PASSPHRASE')
+        
+        if not api_key or not secret_key:
+            logger.error("❌ Missing Coinbase API credentials!")
+            logger.error(f"   API Key: {'SET' if api_key else 'MISSING'}")
+            logger.error(f"   Secret Key: {'SET' if secret_key else 'MISSING'}")
+            logger.error(f"   Passphrase: {'SET' if passphrase else 'MISSING (optional)'}")
+            logger.error("")
+            logger.error("   Please ensure .env file exists with:")
+            logger.error("   - COINBASE_API_KEY")
+            logger.error("   - COINBASE_SECRET_KEY")
+            logger.error("   - COINBASE_PASSPHRASE (optional for newer API keys)")
+            return
+        
+        logger.info(f"✅ Credentials loaded:")
+        logger.info(f"   API Key: {api_key[:10]}...{api_key[-5:] if len(api_key) > 15 else 'SET'}")
+        logger.info(f"   Secret Key: {'SET' if secret_key else 'MISSING'}")
+        logger.info(f"   Passphrase: {'SET' if passphrase else 'NOT SET (optional)'}")
+        logger.info("")
+        
         # Initialize Coinbase
         logger.info("STEP 1: Initializing Coinbase exchange...")
         coinbase_config = {
-            'apiKey': Config.COINBASE_API_KEY,
-            'secret': Config.COINBASE_SECRET_KEY,
-            'password': Config.COINBASE_PASSPHRASE,
+            'apiKey': api_key,
+            'secret': secret_key,
+            'password': passphrase,
             **Config.EXCHANGE_CONFIGS['coinbase'],
         }
         
