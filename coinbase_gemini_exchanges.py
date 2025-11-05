@@ -30,13 +30,28 @@ class CoinbaseGeminiExchangeManager:
         logger.info("Initializing Coinbase + Gemini exchanges...")
         
         try:
-            # Initialize Coinbase Advanced
-            self.coinbase = ccxt.coinbase({
+            # Initialize Coinbase Advanced Trade API
+            # Ensure we're using Advanced Trade (not deprecated Coinbase Pro)
+            coinbase_config = {
                 'apiKey': Config.COINBASE_API_KEY,
                 'secret': Config.COINBASE_SECRET_KEY,
                 'password': Config.COINBASE_PASSPHRASE,
                 **Config.EXCHANGE_CONFIGS['coinbase'],
-            })
+            }
+            
+            # Explicitly ensure Advanced Trade mode
+            # CCXT coinbase() should default to Advanced Trade, but verify
+            if 'options' not in coinbase_config:
+                coinbase_config['options'] = {}
+            
+            # Ensure Advanced Trade is enabled (should be default)
+            coinbase_config['options'].setdefault('advanced', True)
+            
+            self.coinbase = ccxt.coinbase(coinbase_config)
+            
+            # Verify we're using Advanced Trade API
+            if hasattr(self.coinbase, 'options') and self.coinbase.options.get('advanced'):
+                logger.info("✅ Coinbase Advanced Trade API mode confirmed")
             
             # Set sandbox mode if enabled
             if Config.COINBASE_SANDBOX:
@@ -46,6 +61,15 @@ class CoinbaseGeminiExchangeManager:
             # Load markets (CCXT load_markets is synchronous)
             self.coinbase.load_markets()
             logger.info(f"✅ Coinbase initialized: {len(self.coinbase.markets)} markets")
+            
+            # Verify we can access accounts (test connection)
+            try:
+                test_balance = self.coinbase.fetch_balance()
+                if test_balance:
+                    logger.debug("✅ Coinbase account connection verified")
+            except Exception as balance_error:
+                logger.warning(f"⚠️ Could not verify Coinbase account access: {balance_error}")
+                logger.warning("   This may indicate API key or account issues")
             
         except Exception as e:
             logger.error(f"Failed to initialize Coinbase: {e}")
@@ -138,32 +162,37 @@ class CoinbaseGeminiExchangeManager:
     async def create_order(self, exchange_id: str, symbol: str, order_type: str, 
                           side: str, amount: float, price: Optional[float] = None, 
                           params: Optional[Dict] = None) -> Dict:
-        """Create order on exchange"""
+        """Create order on exchange using Coinbase Advanced Trade API"""
         exchange = self.get_exchange(exchange_id)
         try:
-            # For Coinbase, first verify we can access the account
+            # For Coinbase Advanced Trade, ensure proper configuration
             if exchange_id == 'coinbase':
-                try:
-                    # Try to fetch balance to verify account access
-                    balance_check = await self.fetch_balance(exchange_id)
-                    if balance_check:
-                        logger.debug(f"✅ Account access verified - balance fetch successful")
-                except Exception as balance_error:
-                    logger.warning(f"⚠️ Could not verify account access: {balance_error}")
-                    # Continue anyway - might be a different issue
+                # Verify we're using Advanced Trade API
+                if not (hasattr(exchange, 'options') and exchange.options.get('advanced', False)):
+                    logger.warning("⚠️ Coinbase exchange may not be in Advanced Trade mode")
+                
+                # Ensure symbol format is correct (CCXT should handle this, but double-check)
+                # Coinbase Advanced Trade uses format like "BTC-USD" not "BTC/USD"
+                # But CCXT should normalize this automatically
+                logger.debug(f"Creating order: {symbol} {order_type} {side} {amount} @ {price}")
             
-            # Build params dict (don't add portfolio_id - Coinbase Advanced Trade doesn't accept it)
+            # Build params dict - ensure we're not passing invalid parameters
             order_params = params.copy() if params else {}
             
-            # For Coinbase Advanced Trade, ensure we don't pass invalid params
+            # For Coinbase Advanced Trade, remove any invalid params
             if exchange_id == 'coinbase':
-                # Remove portfolio_id if it exists - Coinbase API doesn't accept it
+                # Remove portfolio_id if it exists - Advanced Trade API doesn't accept it in order params
                 if 'portfolio_id' in order_params:
                     logger.debug("Removing portfolio_id from params (not supported by Coinbase Advanced Trade API)")
                     order_params.pop('portfolio_id', None)
+                
+                # Remove retail_portfolio_id if it exists - not needed for standard orders
+                if 'retail_portfolio_id' in order_params:
+                    logger.debug("Removing retail_portfolio_id from params")
+                    order_params.pop('retail_portfolio_id', None)
             
-            # CCXT create_order is synchronous, check if it returns awaitable
-            # Pass params only if it's not empty, otherwise let CCXT handle defaults
+            # CCXT create_order - call it directly
+            # CCXT handles the conversion to Advanced Trade API format automatically
             if order_params:
                 order_result = exchange.create_order(
                     symbol=symbol,
@@ -182,7 +211,7 @@ class CoinbaseGeminiExchangeManager:
                     price=price,
                 )
             
-            # Handle both sync and async responses
+            # Handle both sync and async responses (CCXT can return either)
             if hasattr(order_result, '__await__'):
                 order = await order_result
             else:
@@ -194,22 +223,24 @@ class CoinbaseGeminiExchangeManager:
             error_msg = str(e)
             logger.error(f"Error creating order on {exchange_id}: {e}")
             
-            # Provide helpful error message for account issues
+            # Provide detailed error message for account issues
             if 'account is not available' in error_msg.lower():
                 logger.error(f"   ⚠️ Coinbase 'account is not available' error:")
                 logger.error(f"      This usually means:")
-                logger.error(f"      1. Account trading is disabled in account settings")
+                logger.error(f"      1. Account trading is disabled in Coinbase account settings")
                 logger.error(f"      2. Account has restrictions/holds preventing trading")
                 logger.error(f"      3. Account needs verification/KYC completion")
                 logger.error(f"      4. API key missing 'Trade' permission (check: View, Trade, Transfer)")
                 logger.error(f"      5. Wrong API key type (Coinbase Pro vs Advanced Trade)")
+                logger.error(f"      6. Account not enabled for Advanced Trade")
                 logger.error(f"   💡 Solutions:")
                 logger.error(f"      - Log into Coinbase web UI and verify trading is enabled")
                 logger.error(f"      - Check for any account holds or restrictions")
                 logger.error(f"      - Verify API key has 'Trade' permission at: https://portal.cdp.coinbase.com/")
                 logger.error(f"      - Ensure account has completed KYC verification")
+                logger.error(f"      - Ensure Advanced Trade is enabled on your account")
                 logger.error(f"      - If using Coinbase Pro keys, create new Advanced Trade API keys")
-                logger.error(f"      - Note: 'View', 'Trade', 'Transfer' permissions should be sufficient")
+                logger.error(f"      - Try placing a manual test order in Coinbase web UI first")
             
             raise
     
