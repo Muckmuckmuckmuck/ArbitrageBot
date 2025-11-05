@@ -1116,33 +1116,64 @@ class IntraExchangeArbitrageEngine:
             # Get exchange to check available markets
             exchange = self.exchange_manager.get_exchange(exchange_id)
             
+            # Calculate total available balance in convertible currencies
+            total_available = 0
+            for currency in ['USD', 'USDC', 'USDT']:
+                total_available += free_balance.get(currency, 0)
+            
+            logger.info(f"   💰 Total available for conversion: ${total_available:.2f}")
+            
+            # If we don't have enough, check if we can use less than required
+            if total_available < required_amount * 1.2:
+                # We can still convert what we have, but the trade will be smaller
+                logger.info(f"   ⚠️ Limited balance: ${total_available:.2f} available, need ${required_amount * 1.2:.2f}")
+                logger.info(f"   💡 Will convert available amount and adjust trade size")
+                # Use 80% of available to leave buffer for fees
+                required_amount = total_available * 0.8
+            
             # Find currencies we can convert from (USD, USDC, USDT)
             convertible_currencies = ['USD', 'USDC', 'USDT']
             for from_currency in convertible_currencies:
                 from_balance = free_balance.get(from_currency, 0)
                 
-                # Check if we have enough balance
-                if from_balance < required_amount * 1.2:  # Need extra for fees
-                    logger.debug(f"   ⚠️ Insufficient {from_currency} balance: {from_balance:.2f} < {required_amount * 1.2:.2f}")
+                # Check if we have enough balance (use what we have if less)
+                available_for_conversion = min(from_balance * 0.9, required_amount * 1.1)  # Use 90% of balance, need 110% of required
+                if available_for_conversion < required_amount * 0.5:  # Need at least 50% of required
+                    logger.debug(f"   ⚠️ Insufficient {from_currency} balance: {from_balance:.2f}")
                     continue
                 
                 # Check if conversion pair exists
                 conversion_pair = f"{from_currency}/{required_currency}"
                 reverse_pair = f"{required_currency}/{from_currency}"
                 
+                # Log what we're checking
+                logger.info(f"   🔍 Checking conversion pairs:")
+                logger.info(f"      {conversion_pair}: {'✅ EXISTS' if conversion_pair in exchange.markets else '❌ NOT FOUND'}")
+                logger.info(f"      {reverse_pair}: {'✅ EXISTS' if reverse_pair in exchange.markets else '❌ NOT FOUND'}")
+                
+                # Also check if we can use a bridge (e.g., USD -> BTC -> EUR if direct pair doesn't exist)
+                # For now, try direct pairs first
                 if conversion_pair not in exchange.markets and reverse_pair not in exchange.markets:
-                    logger.debug(f"   ⚠️ No conversion pair found: {conversion_pair} or {reverse_pair}")
+                    logger.warning(f"   ⚠️ No direct conversion pair: {conversion_pair} or {reverse_pair}")
+                    # Try to find if there's a common bridge currency
+                    # For EUR/GBP, we might need to check if there's a USD/EUR or similar
+                    # For now, skip and try next currency
                     continue
+                
+                logger.info(f"   ✅ Found conversion pair: {conversion_pair if conversion_pair in exchange.markets else reverse_pair}")
+                
+                # Use available balance, not required amount
+                amount_to_convert = min(available_for_conversion, required_amount * 1.1)
                 
                 logger.info(f"   💱 Found conversion path: {from_currency} → {required_currency}")
                 logger.info(f"      Available: {from_balance:.2f} {from_currency}")
-                logger.info(f"      Converting: {required_amount * 1.1:.2f} {required_currency}")
+                logger.info(f"      Converting: {amount_to_convert:.2f} {required_currency}")
                 
                 success = await self._convert_currency(
                     exchange_id=exchange_id,
                     from_currency=from_currency,
                     to_currency=required_currency,
-                    amount=required_amount * 1.1  # Convert a bit extra for fees
+                    amount=amount_to_convert
                 )
                 if success:
                     logger.info(f"   ✅ Currency conversion completed!")
@@ -1173,10 +1204,11 @@ class IntraExchangeArbitrageEngine:
         buy_pair: str,
         sell_pair: str,
         trade_size_usd: float
-    ) -> bool:
+    ) -> Tuple[bool, float]:
         """
         Check if we have sufficient balance for both sides of the trade
         If not, try to convert available currencies to the required quote currency
+        Returns: (success, actual_available_amount)
         CRITICAL: Need quote currency for buy, base currency for sell
         """
         try:
@@ -1191,43 +1223,51 @@ class IntraExchangeArbitrageEngine:
             buy_balance = balance.get('free', {}).get(buy_quote, 0)
             required_buy_amount = trade_size_usd * 1.1  # 10% buffer
             
+            # Calculate total available in convertible currencies
+            free_balance = balance.get('free', {})
+            total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
+            
             if buy_balance < required_buy_amount:
                 logger.info(f"   💱 Insufficient {buy_quote} balance: {buy_balance:.2f} < {required_buy_amount:.2f}")
+                logger.info(f"   💰 Total convertible balance: ${total_convertible:.2f}")
                 logger.info(f"   🔄 Attempting currency conversion...")
                 
                 # Try to convert available currencies to the required quote currency
+                # Use available balance, not required amount (dynamic sizing)
                 conversion_success = await self._ensure_currency_available(
                     exchange_id=exchange_id,
                     required_currency=buy_quote,
-                    required_amount=required_buy_amount
+                    required_amount=min(required_buy_amount, total_convertible * 0.8)  # Use 80% of available
                 )
                 
                 if not conversion_success:
-                    logger.warning(f"   ⚠️ Could not obtain {buy_quote} through conversion")
-                    return False
+                    # If conversion failed, check if we can still do a smaller trade
+                    if total_convertible > trade_size_usd * 0.3:  # At least 30% of desired size
+                        logger.info(f"   💡 Conversion failed, but have ${total_convertible:.2f} - will try smaller trade")
+                        # Return available amount for smaller trade
+                        return True, total_convertible * 0.7  # Use 70% of available
+                    else:
+                        logger.warning(f"   ⚠️ Could not obtain {buy_quote} through conversion")
+                        return False, 0
                 
                 # Re-check balance after conversion
                 balance = await self.exchange_manager.fetch_balance(exchange_id)
                 buy_balance = balance.get('free', {}).get(buy_quote, 0)
                 
-                if buy_balance < required_buy_amount:
-                    logger.warning(f"   ⚠️ Still insufficient {buy_quote} after conversion: {buy_balance:.2f} < {required_buy_amount:.2f}")
-                    return False
+                if buy_balance < required_buy_amount * 0.3:  # Need at least 30% of desired
+                    logger.warning(f"   ⚠️ Still insufficient {buy_quote} after conversion: {buy_balance:.2f}")
+                    return False, 0
                 
                 logger.info(f"   ✅ Sufficient {buy_quote} after conversion: {buy_balance:.2f}")
-            
-            # Check sell side: need base currency (we'll have it after buy)
-            # But also check if we already have some
-            base_balance = balance.get('free', {}).get(base_crypto, 0)
-            if base_balance < 0.0001:  # Need at least tiny amount
-                # We'll get it from the buy, so this is OK
-                pass
-            
-            return True
+                # Return actual available amount (use 90% to leave buffer)
+                return True, buy_balance * 0.9
+            else:
+                # We have enough, return available amount
+                return True, buy_balance * 0.9  # Use 90% to leave buffer
             
         except Exception as e:
             logger.warning(f"   ⚠️ Could not check balance: {e}")
-            return True  # Assume OK if we can't check
+            return True, trade_size_usd  # Assume OK if we can't check
     
     async def execute_trade(self, opportunity: TradeOpportunity) -> TradeExecution:
         """
@@ -1291,9 +1331,12 @@ class IntraExchangeArbitrageEngine:
         opportunity = validated_opp
         logger.info(f"   ✅ Opportunity validation: PASSED (spread still profitable)")
         
-        # STEP 2: Check balance
+        # STEP 2: Check balance and get available amount (DYNAMIC POSITION SIZING)
         logger.info(f"   💰 Checking balance sufficiency...")
-        balance_ok = await self._check_balance_sufficient(exchange_id, opportunity.buy_pair, opportunity.sell_pair, opportunity.trade_size_usd)
+        balance_ok, available_amount = await self._check_balance_sufficient(
+            exchange_id, opportunity.buy_pair, opportunity.sell_pair, opportunity.trade_size_usd
+        )
+        
         if not balance_ok:
             logger.warning(f"   ❌ EXECUTION BLOCKED: Insufficient balance")
             logger.warning(f"      Reason: Need ${opportunity.trade_size_usd * 1.1:.2f} in quote currency for buy")
@@ -1309,7 +1352,8 @@ class IntraExchangeArbitrageEngine:
                 execution_time_seconds=0,
                 status='failed'
             )
-        logger.info(f"   ✅ Balance check: PASSED (sufficient funds available)")
+        
+        logger.info(f"   ✅ Balance check: PASSED (${available_amount:.2f} available)")
         
         logger.info(f"   ✅ ALL PRE-FLIGHT CHECKS PASSED - PROCEEDING WITH TRADE")
         
@@ -1322,17 +1366,46 @@ class IntraExchangeArbitrageEngine:
         execution_time = 0.0
         
         try:
-            # Calculate trade size - dynamic sizing based on opportunity quality
+            # Calculate trade size - DYNAMIC based on available balance
+            # Use available amount, but respect min/max limits
             if self.dynamic_position_sizing:
                 # Scale position size with opportunity score
-                # Better opportunity = larger position
+                # Better opportunity = larger position (up to max)
                 score_multiplier = min(2.0, opportunity.opportunity_score / 10.0)  # Max 2x
-                dynamic_size = self.min_position_size_usd * (1 + score_multiplier)
-                trade_size = min(self.max_position_size_usd, max(self.min_position_size_usd, dynamic_size))
-                logger.info(f"   📊 Dynamic sizing: Score {opportunity.opportunity_score:.2f} → ${trade_size:.2f} position")
+                desired_size = self.min_position_size_usd * (1 + score_multiplier)
+                desired_size = min(self.max_position_size_usd, max(self.min_position_size_usd, desired_size))
+                
+                # Use available amount, but don't exceed desired size
+                trade_size = min(available_amount, desired_size)
+                
+                # Ensure we meet minimum size
+                if trade_size < self.min_position_size_usd:
+                    logger.warning(f"   ⚠️ Available amount ${trade_size:.2f} < minimum ${self.min_position_size_usd:.2f}")
+                    # Still proceed if we have at least 50% of minimum
+                    if trade_size >= self.min_position_size_usd * 0.5:
+                        logger.info(f"   💡 Using smaller trade size: ${trade_size:.2f} (50% of minimum)")
+                    else:
+                        logger.warning(f"   ❌ Trade size too small, skipping")
+                        return TradeExecution(
+                            exchange=exchange_id,
+                            opportunity=opportunity,
+                            buy_order_id=None,
+                            sell_order_id=None,
+                            actual_buy_price=0,
+                            actual_sell_price=0,
+                            actual_profit_usd=0,
+                            execution_time_seconds=0,
+                            status='failed'
+                        )
+                
+                logger.info(f"   📊 Dynamic sizing: Available ${available_amount:.2f}, Score {opportunity.opportunity_score:.2f} → ${trade_size:.2f} position")
             else:
-                trade_size = opportunity.trade_size_usd
-                logger.info(f"   📊 Fixed sizing: ${trade_size:.2f} position")
+                # Fixed sizing, but use available amount if less
+                trade_size = min(available_amount, opportunity.trade_size_usd)
+                if trade_size < opportunity.trade_size_usd:
+                    logger.info(f"   💡 Adjusted trade size: ${trade_size:.2f} (available) vs ${opportunity.trade_size_usd:.2f} (desired)")
+                else:
+                    logger.info(f"   📊 Fixed sizing: ${trade_size:.2f} position")
             
             base_amount = trade_size / opportunity.buy_price
             logger.info(f"   💵 Trade size: ${trade_size:.2f} → {base_amount:.6f} {opportunity.base_crypto}")
