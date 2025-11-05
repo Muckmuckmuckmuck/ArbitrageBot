@@ -126,33 +126,45 @@ class IntraExchangeArbitrageScanner:
         if not orderbook or 'bids' not in orderbook or 'asks' not in orderbook:
             return 0.002  # Default 0.2% slippage if no data
         
-        bids = orderbook['bids']
-        asks = orderbook['asks']
+        bids = orderbook.get('bids', [])
+        asks = orderbook.get('asks', [])
         
         if not bids or not asks:
             return 0.002
         
-        # Calculate average price for trade size
-        total_cost = 0.0
-        remaining = trade_size_usd
-        best_price = bids[0][0] if bids else 0.0
-        
-        # For buying (using asks)
-        for ask in asks:
-            price, volume = ask[0], ask[1]
-            cost = min(remaining, volume * price)
-            total_cost += cost
-            remaining -= cost
-            if remaining <= 0:
-                break
-        
-        if total_cost == 0:
-            return 0.002
-        
-        avg_price = total_cost / trade_size_usd
-        slippage = (avg_price - best_price) / best_price if best_price > 0 else 0.002
-        
-        return max(0.0, min(0.01, slippage))  # Cap at 1%
+        try:
+            # Calculate average price for trade size
+            total_cost = 0.0
+            remaining = trade_size_usd
+            best_price = float(bids[0][0]) if bids and len(bids) > 0 and bids[0] and len(bids[0]) > 0 else 0.0
+            
+            if best_price == 0:
+                return 0.002
+            
+            # For buying (using asks)
+            for ask in asks:
+                if not ask or len(ask) < 2:
+                    continue
+                try:
+                    price = float(ask[0])
+                    volume = float(ask[1])
+                    cost = min(remaining, volume * price)
+                    total_cost += cost
+                    remaining -= cost
+                    if remaining <= 0:
+                        break
+                except (ValueError, TypeError, IndexError):
+                    continue
+            
+            if total_cost == 0:
+                return 0.002
+            
+            avg_price = total_cost / trade_size_usd
+            slippage = (avg_price - best_price) / best_price if best_price > 0 else 0.002
+            
+            return max(0.0, min(0.01, slippage))  # Cap at 1%
+        except Exception:
+            return 0.002  # Default on any error
     
     def calculate_order_book_depth(self, orderbook: Optional[Dict], side: str = 'both') -> float:
         """Calculate order book depth in USD"""
@@ -176,17 +188,36 @@ class IntraExchangeArbitrageScanner:
         if not ticker:
             return 0.0
         
-        high = ticker.get('high', 0)
-        low = ticker.get('low', 0)
-        last = ticker.get('last', ticker.get('close', 0))
+        high = ticker.get('high') or ticker.get('high24h') or 0
+        low = ticker.get('low') or ticker.get('low24h') or 0
+        last = ticker.get('last') or ticker.get('close') or ticker.get('bid') or 0
+        
+        # Handle None values
+        if high is None:
+            high = 0
+        if low is None:
+            low = 0
+        if last is None:
+            last = 0
+        
+        # Convert to float
+        try:
+            high = float(high)
+            low = float(low)
+            last = float(last)
+        except (ValueError, TypeError):
+            return 0.0
         
         if last == 0:
             return 0.0
         
         # Simple volatility estimate: (high - low) / last
-        volatility = (high - low) / last if high > low else 0.0
+        if high > low and high > 0 and low > 0:
+            volatility = (high - low) / last
+        else:
+            volatility = 0.0
         
-        return min(0.10, volatility)  # Cap at 10%
+        return min(0.10, max(0.0, volatility))  # Cap at 10%, floor at 0%
     
     def calculate_arb_score(self, opp: ArbitrageOpportunity) -> float:
         """Calculate arbitrage score for ranking
@@ -346,7 +377,12 @@ class IntraExchangeArbitrageScanner:
         
         depth1 = self.calculate_order_book_depth(orderbook1)
         depth2 = self.calculate_order_book_depth(orderbook2)
-        volatility = self.calculate_volatility(ticker1)
+        
+        # Calculate volatility safely
+        try:
+            volatility = self.calculate_volatility(ticker1)
+        except Exception:
+            volatility = 0.0
         
         # Create opportunity
         # For display, use the actual pair names
