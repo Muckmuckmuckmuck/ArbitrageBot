@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
 """
 Simple script to buy $2 of BTC with USDC on Coinbase
+ONLY shows BTC purchase logging - nothing else
 """
 
 import ccxt
 import os
+import sys
 import logging
 from dotenv import load_dotenv
 
-# Suppress all logging except critical errors
-logging.getLogger('ccxt').setLevel(logging.CRITICAL)
-logging.getLogger('urllib3').setLevel(logging.CRITICAL)
+# Completely suppress ALL logging
+logging.disable(logging.CRITICAL)
+for logger_name in ['ccxt', 'urllib3', 'requests']:
+    logging.getLogger(logger_name).setLevel(logging.CRITICAL)
+    logging.getLogger(logger_name).disabled = True
+
+# Suppress stdout/stderr from ccxt
+class NullWriter:
+    def write(self, s): pass
+    def flush(self): pass
 
 # Load credentials
 load_dotenv()
@@ -21,18 +30,19 @@ api_key = os.getenv('COINBASE_API_KEY')
 secret_key = os.getenv('COINBASE_SECRET_KEY')
 passphrase = os.getenv('COINBASE_PASSPHRASE', '')
 
-# Initialize Coinbase
+# Initialize Coinbase - suppress verbose output
 coinbase = ccxt.coinbase({
     'apiKey': api_key,
     'secret': secret_key,
     'password': passphrase,
     'options': {
-        'advanced': True  # Advanced Trade API
+        'advanced': True
     },
     'enableRateLimit': True,
+    'verbose': False,
 })
 
-# Load markets
+# Load markets silently
 coinbase.load_markets()
 
 # Get BTC/USDC price
@@ -43,12 +53,11 @@ btc_price = ticker['ask']
 # Calculate amount for $2
 usd_amount = 2.0
 btc_amount = usd_amount / btc_price
-
-# Set limit price (1% above ask to ensure fill)
 buy_price = btc_price * 1.01
 
-print(f"Buying {btc_amount:.8f} BTC for ${usd_amount:.2f} USDC")
-print(f"Price: ${buy_price:.2f} per BTC")
+# BTC PURCHASE LOGGING ONLY
+print(f"BTC Purchase: Buying {btc_amount:.8f} BTC for ${usd_amount:.2f} USDC")
+print(f"BTC Purchase: Price ${buy_price:.2f} per BTC")
 
 # Place order
 order = coinbase.create_order(
@@ -59,9 +68,9 @@ order = coinbase.create_order(
     price=buy_price
 )
 
-print(f"\n✅ Order placed!")
-print(f"Order ID: {order['id']}")
-print(f"Status: {order['status']}")
-print(f"Amount: {order['amount']} BTC")
-print(f"Price: ${order['price']}")
+# BTC PURCHASE RESULT ONLY
+print(f"BTC Purchase: Order placed - ID: {order['id']}")
+print(f"BTC Purchase: Status: {order['status']}")
+print(f"BTC Purchase: Amount: {order['amount']} BTC")
+print(f"BTC Purchase: Price: ${order['price']}")
 
