@@ -160,29 +160,47 @@ class CoinbaseGeminiExchangeManager:
             order_params = params
         
         # Simple direct call - exactly like BTC script that worked
-        if order_params:
-            order = exchange.create_order(
-                symbol=symbol,
-                type=order_type,
-                side=side,
-                amount=amount,
-                price=price,
-                params=order_params
-            )
-        else:
-            order = exchange.create_order(
-                symbol=symbol,
-                type=order_type,
-                side=side,
-                amount=amount,
-                price=price
-            )
-        
-        # CCXT returns sync result, but handle async just in case
-        if hasattr(order, '__await__'):
-            order = await order
-        
-        return order
+        try:
+            if order_params:
+                order = exchange.create_order(
+                    symbol=symbol,
+                    type=order_type,
+                    side=side,
+                    amount=amount,
+                    price=price,
+                    params=order_params
+                )
+            else:
+                order = exchange.create_order(
+                    symbol=symbol,
+                    type=order_type,
+                    side=side,
+                    amount=amount,
+                    price=price
+                )
+            
+            # CCXT returns sync result, but handle async just in case
+            if hasattr(order, '__await__'):
+                order = await order
+            
+            return order
+            
+        except Exception as e:
+            error_msg = str(e)
+            # If it's "account is not available", provide detailed diagnostics
+            if "account is not available" in error_msg.lower():
+                logger.error(f"   ❌ Coinbase account error for {symbol} ({side}):")
+                logger.error(f"      Error: {error_msg}")
+                logger.error(f"   ⚠️ Possible causes:")
+                logger.error(f"      1. Account not enabled for {symbol.split('/')[1]} trading")
+                logger.error(f"      2. Account restrictions on EUR/GBP pairs")
+                logger.error(f"      3. KYC verification incomplete")
+                logger.error(f"      4. Account type limitations (Business vs Retail)")
+                logger.error(f"      5. Trading permissions not enabled for this currency pair")
+                logger.error(f"   💡 Check Coinbase account settings and trading permissions")
+                raise
+            # Re-raise other errors as-is
+            raise
     
     async def convert_currency(self, exchange_id: str, from_currency: str, to_currency: str, amount: float) -> bool:
         """
