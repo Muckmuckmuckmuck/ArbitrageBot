@@ -101,7 +101,7 @@ class GeminiMarketMakingEngine:
         logger.info("=" * 80)
         logger.info("🚀 INITIALIZING GEMINI MARKET-MAKING ENGINE")
         logger.info("=" * 80)
-        logger.info(f"   Pairs: {len(TOP_GEMINI_PAIRS)}")
+        logger.info(f"   Total pairs to check: {len(TOP_GEMINI_PAIRS)}")
         logger.info(f"   Capital per pair: ${self.capital_per_pair:.2f}")
         logger.info(f"   Grid spacing: {self.grid_spacing_percent:.2f}%")
         logger.info(f"   Order size: {self.order_size_percent*100:.1f}% of capital")
