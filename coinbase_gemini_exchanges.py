@@ -291,26 +291,26 @@ class CoinbaseGeminiExchangeManager:
                                     max_wait = 30
                                     for _ in range(max_wait):
                                         await asyncio.sleep(1)
-                                order_status = await self.fetch_order(exchange_id, order_id, pair_to_use)
-                                status = order_status.get('status', 'unknown')
-                                if status in ['closed', 'filled']:
-                                    # Verify we actually have the target currency
-                                    balance_check = await self.fetch_balance(exchange_id)
-                                    final_balance = balance_check.get('free', {}).get(to_currency, 0)
-                                    if final_balance > 0:
-                                        logger.info(f"   ✅ BTC conversion successful: {btc_balance:.8f} BTC → {final_balance:.2f} {to_currency}")
-                                        return True
-                                    else:
-                                        logger.warning(f"   ⚠️ Order filled but no {to_currency} in balance yet, waiting...")
-                                        await asyncio.sleep(2)
-                                        # Check once more
-                                        balance_check = await self.fetch_balance(exchange_id)
-                                        final_balance = balance_check.get('free', {}).get(to_currency, 0)
-                                        if final_balance > 0:
-                                            logger.info(f"   ✅ BTC conversion verified: {final_balance:.2f} {to_currency}")
-                                            return True
-                                elif status == 'canceled':
-                                    break
+                                        order_status = await self.fetch_order(exchange_id, order_id, pair_to_use)
+                                        status = order_status.get('status', 'unknown')
+                                        if status in ['closed', 'filled']:
+                                            # Verify we actually have the target currency
+                                            balance_check = await self.fetch_balance(exchange_id)
+                                            final_balance = balance_check.get('free', {}).get(to_currency, 0)
+                                            if final_balance > 0:
+                                                logger.info(f"   ✅ BTC conversion successful: {btc_balance:.8f} BTC → {final_balance:.2f} {to_currency}")
+                                                return True
+                                            else:
+                                                logger.warning(f"   ⚠️ Order filled but no {to_currency} in balance yet, waiting...")
+                                                await asyncio.sleep(2)
+                                                # Check once more
+                                                balance_check = await self.fetch_balance(exchange_id)
+                                                final_balance = balance_check.get('free', {}).get(to_currency, 0)
+                                                if final_balance > 0:
+                                                    logger.info(f"   ✅ BTC conversion verified: {final_balance:.2f} {to_currency}")
+                                                    return True
+                                        elif status == 'canceled':
+                                            break
                                 
                                 logger.info(f"   ✅ BTC conversion order placed")
                                 return True
