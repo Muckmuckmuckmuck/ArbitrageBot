@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
 """
 Dual Strategy Trading Bot
-- Gemini: Market Making (Top 10 pairs)
-- Coinbase: Intra-Exchange Arbitrage (USD/USDC/USDT pairs)
-Both strategies run concurrently on Railway
+Runs two independent strategies concurrently:
+
+🔵 COINBASE: Intra-Exchange Arbitrage (USD/USDC/USDT pairs)
+   - Strategy: Buy on one pair, sell on another (same exchange)
+   - Pairs: USD/USDC/USDT quote currencies only
+   - Execution: Immediate mode (trades execute as soon as found)
+
+🟢 GEMINI: Market Making (Top 10 pairs)
+   - Strategy: Passive market making with grid orders
+   - Pairs: ARB/USD, OP/USD, LINK/USD, etc. (filtered by availability)
+   - Execution: Continuous loop with 15s updates
+
+Both strategies run concurrently on Railway with independent loops.
 """
 
 import asyncio

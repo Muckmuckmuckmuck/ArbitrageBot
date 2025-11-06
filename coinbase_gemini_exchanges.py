@@ -113,7 +113,12 @@ class CoinbaseGeminiExchangeManager:
         return self.exchanges[exchange_id]
     
     async def fetch_balance(self, exchange_id: str) -> Dict:
-        """Fetch balance from exchange"""
+        """
+        ⚪ COMMON: Fetch balance from exchange (works for both Coinbase and Gemini)
+        
+        Args:
+            exchange_id: EXCHANGE_COINBASE or EXCHANGE_GEMINI
+        """
         exchange = self.get_exchange(exchange_id)
         try:
             # CCXT fetch_balance can be sync or async depending on version
@@ -129,7 +134,12 @@ class CoinbaseGeminiExchangeManager:
             raise
     
     async def fetch_ticker(self, exchange_id: str, symbol: str) -> Dict:
-        """Fetch ticker (price) from exchange"""
+        """
+        ⚪ COMMON: Fetch ticker (price) from exchange (works for both Coinbase and Gemini)
+        
+        Args:
+            exchange_id: EXCHANGE_COINBASE or EXCHANGE_GEMINI
+        """
         exchange = self.get_exchange(exchange_id)
         try:
             # CCXT fetch_ticker can be sync or async depending on version
@@ -145,7 +155,12 @@ class CoinbaseGeminiExchangeManager:
             raise
     
     async def fetch_order_book(self, exchange_id: str, symbol: str, limit: int = 20) -> Dict:
-        """Fetch order book from exchange"""
+        """
+        ⚪ COMMON: Fetch order book from exchange (works for both Coinbase and Gemini)
+        
+        Args:
+            exchange_id: EXCHANGE_COINBASE or EXCHANGE_GEMINI
+        """
         exchange = self.get_exchange(exchange_id)
         try:
             # CCXT fetch_order_book can be sync or async
@@ -354,7 +369,12 @@ class CoinbaseGeminiExchangeManager:
     # Keeping them could cause unintended BTC purchases
     
     async def fetch_order(self, exchange_id: str, order_id: str, symbol: str) -> Dict:
-        """Fetch order status"""
+        """
+        ⚪ COMMON: Fetch order status (works for both Coinbase and Gemini)
+        
+        Args:
+            exchange_id: EXCHANGE_COINBASE or EXCHANGE_GEMINI
+        """
         exchange = self.get_exchange(exchange_id)
         try:
             # CCXT fetch_order is synchronous, check if it returns awaitable
@@ -372,7 +392,12 @@ class CoinbaseGeminiExchangeManager:
             raise
     
     async def cancel_order(self, exchange_id: str, order_id: str, symbol: str) -> Dict:
-        """Cancel order"""
+        """
+        ⚪ COMMON: Cancel order (works for both Coinbase and Gemini)
+        
+        Args:
+            exchange_id: EXCHANGE_COINBASE or EXCHANGE_GEMINI
+        """
         exchange = self.get_exchange(exchange_id)
         try:
             # CCXT cancel_order is synchronous, check if it returns awaitable
