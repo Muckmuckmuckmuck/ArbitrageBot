@@ -304,6 +304,19 @@ class CoinbaseGeminiExchangeManager:
                             limit_price = price * (0.995 if side == 'sell' else 1.005)
                             
                             logger.info(f"   📝 Placing BTC sell order: {order_amount:.8f} BTC @ {limit_price:.2f} {to_currency}")
+                            logger.info(f"   🔍 Pair: {pair_to_use}, Side: {side}, Amount: {order_amount:.8f}, Price: {limit_price:.2f}")
+                            
+                            # Check if account can trade this pair before attempting
+                            try:
+                                # Simple test - fetch ticker to verify pair exists and is tradeable
+                                test_ticker = await self.fetch_ticker(exchange_id, pair_to_use)
+                                if not test_ticker or (test_ticker.get('bid', 0) == 0 and test_ticker.get('ask', 0) == 0):
+                                    logger.error(f"   ❌ Pair {pair_to_use} appears to be unavailable or not tradeable")
+                                    return False
+                                logger.info(f"   ✅ Pair {pair_to_use} verified tradeable (bid: {test_ticker.get('bid', 0):.2f}, ask: {test_ticker.get('ask', 0):.2f})")
+                            except Exception as ticker_error:
+                                logger.error(f"   ❌ Cannot fetch ticker for {pair_to_use}: {ticker_error}")
+                                return False
                             
                             order = await self.create_order(
                                 exchange_id=exchange_id,
