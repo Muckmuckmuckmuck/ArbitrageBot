@@ -66,24 +66,38 @@ class DualStrategyBot:
         await self.arbitrage_engine.initialize()
         
         # ====================================================================
-        # 🟢 GEMINI STRATEGY: Market Making
+        # 🟢 GEMINI STRATEGY: Market Making (OPTIONAL - only if Gemini is available)
         # ====================================================================
-        # Initialize Gemini market-making engine
-        logger.info("\n📊 Initializing Gemini Market-Making Engine...")
-        self.market_making_engine = GeminiMarketMakingEngine(
-            exchange_manager=self.exchange_manager,
-            capital_per_pair=50.0,  # $50 per pair (increased from $10 to allow meaningful orders)
-            grid_spacing_percent=0.20,  # 0.20% spacing
-            order_size_percent=0.10,  # 10% of capital per order (increased from 1% to $5 per order)
-            min_spread_percent=0.12,  # Skip if spread < 0.12%
-            max_inventory_percent=0.25,  # Max 25% in one asset
-            requote_interval_seconds=15,  # Update every 15s
-            stop_loss_percent=0.02,  # -2% stop loss
-            take_profit_interval_minutes=60,  # Flatten every hour
-        )
-        await self.market_making_engine.initialize()
+        self.market_making_engine = None  # Initialize to None
+        if self.exchange_manager.is_exchange_available('gemini'):
+            # Initialize Gemini market-making engine
+            logger.info("\n📊 Initializing Gemini Market-Making Engine...")
+            try:
+                self.market_making_engine = GeminiMarketMakingEngine(
+                    exchange_manager=self.exchange_manager,
+                    capital_per_pair=50.0,  # $50 per pair (increased from $10 to allow meaningful orders)
+                    grid_spacing_percent=0.20,  # 0.20% spacing
+                    order_size_percent=0.10,  # 10% of capital per order (increased from 1% to $5 per order)
+                    min_spread_percent=0.12,  # Skip if spread < 0.12%
+                    max_inventory_percent=0.25,  # Max 25% in one asset
+                    requote_interval_seconds=15,  # Update every 15s
+                    stop_loss_percent=0.02,  # -2% stop loss
+                    take_profit_interval_minutes=60,  # Flatten every hour
+                )
+                await self.market_making_engine.initialize()
+                logger.info("   ✅ Gemini Market-Making Engine initialized successfully")
+            except Exception as e:
+                logger.warning(f"   ⚠️ Failed to initialize Gemini Market-Making Engine: {e}")
+                logger.warning(f"   💡 Bot will continue with Coinbase arbitrage only")
+                self.market_making_engine = None
+        else:
+            logger.warning("\n⚠️ Gemini exchange not available - skipping Market-Making Engine initialization")
+            logger.warning("   💡 Bot will run with Coinbase arbitrage only")
         
-        logger.info("\n✅ Both strategies initialized successfully!")
+        if self.market_making_engine:
+            logger.info("\n✅ Both strategies initialized successfully!")
+        else:
+            logger.info("\n✅ Coinbase arbitrage strategy initialized successfully!")
         logger.info("=" * 80)
     
     # ========================================================================
@@ -124,6 +138,10 @@ class DualStrategyBot:
     # ========================================================================
     async def run_market_making_strategy(self):
         """🟢 Run Gemini market-making strategy"""
+        if not self.market_making_engine:
+            logger.warning("   ⚠️ Market-making strategy skipped - Gemini not available")
+            return
+        
         logger.info("\n🚀 Starting Gemini Market-Making Strategy...")
         
         try:
@@ -139,14 +157,21 @@ class DualStrategyBot:
         """Run both strategies concurrently"""
         self.running = True
         
-        # Start both strategies as concurrent tasks
+        # Start strategies as concurrent tasks (only if available)
         arbitrage_task = asyncio.create_task(self.run_arbitrage_strategy())
-        market_making_task = asyncio.create_task(self.run_market_making_strategy())
+        tasks = [arbitrage_task]
+        
+        if self.market_making_engine:
+            market_making_task = asyncio.create_task(self.run_market_making_strategy())
+            tasks.append(market_making_task)
+        else:
+            logger.info("   ⚠️ Market-making strategy not started - Gemini unavailable")
         
         # Wait for shutdown signal or any task to complete/fail
         try:
-            # Use asyncio.wait to monitor both tasks
+            # Use asyncio.wait to monitor all tasks
             done, pending = await asyncio.wait(
+                tasks,
                 [arbitrage_task, market_making_task],
                 return_when=asyncio.FIRST_COMPLETED
             )

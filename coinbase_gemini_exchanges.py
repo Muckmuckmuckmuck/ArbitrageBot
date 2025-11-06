@@ -73,8 +73,9 @@ class CoinbaseGeminiExchangeManager:
             raise
         
         # ====================================================================
-        # 🟢 GEMINI INITIALIZATION
+        # 🟢 GEMINI INITIALIZATION (OPTIONAL - bot can run with Coinbase only)
         # ====================================================================
+        self.gemini = None  # Initialize to None in case of failure
         try:
             # 🟢 Initialize Gemini
             self.gemini = ccxt.gemini({
@@ -86,23 +87,33 @@ class CoinbaseGeminiExchangeManager:
             # 🟢 Gemini sandbox mode
             if Config.GEMINI_SANDBOX:
                 self.gemini.set_sandbox_mode(True)
-                logger.info("Gemini: Sandbox mode enabled")
+                logger.info("   🟢 Gemini: Sandbox mode enabled")
             
             # 🟢 Load Gemini markets (CCXT load_markets is synchronous)
             self.gemini.load_markets()
-            logger.info(f"✅ Gemini initialized: {len(self.gemini.markets)} markets")
+            logger.info(f"   ✅ Gemini initialized: {len(self.gemini.markets)} markets")
             
         except Exception as e:
-            logger.error(f"Failed to initialize Gemini: {e}")
-            raise
+            # 🔵 CRITICAL FIX: Don't crash if Gemini is unavailable - allow bot to run with Coinbase only
+            error_msg = str(e)
+            if "maintenance" in error_msg.lower() or "503" in error_msg or "OnMaintenance" in str(type(e).__name__):
+                logger.warning(f"   ⚠️ Gemini is currently under maintenance - bot will run with Coinbase only")
+                logger.warning(f"   💡 Check https://status.gemini.com/ for maintenance status")
+            else:
+                logger.warning(f"   ⚠️ Failed to initialize Gemini: {error_msg}")
+                logger.warning(f"   💡 Bot will continue with Coinbase only")
+            self.gemini = None  # Set to None so we can check availability later
         
         # ⚪ Store both exchanges in dict for easy access
         self.exchanges = {
             EXCHANGE_COINBASE: self.coinbase,  # 🔵 Coinbase exchange
-            EXCHANGE_GEMINI: self.gemini,      # 🟢 Gemini exchange
+            EXCHANGE_GEMINI: self.gemini,      # 🟢 Gemini exchange (may be None)
         }
         
-        logger.info("✅ Both exchanges initialized successfully")
+        if self.gemini:
+            logger.info("   ✅ Both exchanges initialized successfully")
+        else:
+            logger.info("   ✅ Coinbase initialized successfully (Gemini unavailable)")
         
         return True
     
@@ -110,7 +121,15 @@ class CoinbaseGeminiExchangeManager:
         """Get exchange object by ID"""
         if exchange_id not in self.exchanges:
             raise ValueError(f"Unknown exchange: {exchange_id}")
-        return self.exchanges[exchange_id]
+        exchange = self.exchanges[exchange_id]
+        if exchange is None:
+            exchange_marker = "🔵" if exchange_id == EXCHANGE_COINBASE else "🟢"
+            raise ValueError(f"{exchange_marker} [{exchange_id.upper()}] Exchange not available (initialization failed or maintenance)")
+        return exchange
+    
+    def is_exchange_available(self, exchange_id: str) -> bool:
+        """Check if an exchange is available"""
+        return exchange_id in self.exchanges and self.exchanges[exchange_id] is not None
     
     async def fetch_balance(self, exchange_id: str) -> Dict:
         """
