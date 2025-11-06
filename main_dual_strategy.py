@@ -172,7 +172,6 @@ class DualStrategyBot:
             # Use asyncio.wait to monitor all tasks
             done, pending = await asyncio.wait(
                 tasks,
-                [arbitrage_task, market_making_task],
                 return_when=asyncio.FIRST_COMPLETED
             )
             
