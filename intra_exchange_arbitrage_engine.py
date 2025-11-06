@@ -318,16 +318,17 @@ class IntraExchangeArbitrageEngine:
     
     async def _get_all_pairs_for_crypto(self, exchange_id: str, base_crypto: str) -> List[Tuple[str, str]]:
         """
-        Get all trading pairs for a crypto (e.g., BTC/USD, BTC/USDC, BTC/USDT)
+        Get all trading pairs for a crypto (e.g., BTC/USD, BTC/USDC, BTC/USDT, BTC/ETH, SOL/BTC)
         Returns list of (pair_symbol, quote_currency) tuples
         Excludes futures, swaps, and other derivative markets
-        Only USD/USDC/USDT pairs for simple intra-exchange arbitrage
+        Includes USD/USDC/USDT AND crypto-to-crypto pairs (e.g., BTC/ETH, SOL/BTC)
         """
         exchange = self.exchange_manager.get_exchange(exchange_id)
         pairs = []
         
-        # Only allow USD/USDC/USDT pairs - no EUR/GBP to avoid conversion issues
-        allowed_quotes = ['USD', 'USDC', 'USDT']
+        # Allow USD/USDC/USDT AND crypto quote currencies (e.g., ETH, BTC, SOL)
+        # Exclude fiat currencies like EUR/GBP (they don't work well for arbitrage)
+        excluded_quotes = ['EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY']  # Exclude fiat
         
         for symbol, market_info in exchange.markets.items():
             if not market_info.get('active', True):
@@ -345,8 +346,9 @@ class IntraExchangeArbitrageEngine:
             base = market_info.get('base', '').strip().upper()
             quote = market_info.get('quote', '').strip().upper()
             
-            # Only include pairs with allowed quote currencies (USD/USDC/USDT)
-            if base == base_crypto.upper() and quote in allowed_quotes:
+            # Include pairs where base matches AND quote is not excluded fiat
+            # This includes: USD/USDC/USDT pairs AND crypto-to-crypto pairs (BTC/ETH, SOL/BTC, etc.)
+            if base == base_crypto.upper() and quote not in excluded_quotes:
                 pairs.append((symbol, quote))
         
         return pairs
@@ -359,8 +361,8 @@ class IntraExchangeArbitrageEngine:
     ) -> float:
         """
         Normalize any price to USD equivalent
-        Handles: USD, USDC, USDT (no EUR/GBP - removed for simplicity)
-        CRITICAL: This must be accurate for crypto-to-crypto pairs
+        Handles: USD, USDC, USDT, and crypto quote currencies (ETH, BTC, SOL, etc.)
+        For crypto-to-crypto pairs: converts through USD (e.g., BTC/ETH -> get ETH/USD rate)
         """
         if quote_currency == 'USD':
             return price
@@ -381,32 +383,33 @@ class IntraExchangeArbitrageEngine:
             # Fallback: assume 1:1 (very close)
             return price
         
-        # Crypto quote currencies - MUST fetch USD price for accuracy
-        # This is critical for crypto-to-crypto pairs (e.g., BTC/ETH)
+        # Crypto quote currency (e.g., ETH, BTC, SOL) - convert through USD
+        # Example: BTC/ETH price = 15.5 ETH per BTC
+        # We need: ETH/USD rate to convert to USD
         try:
             exchange = self.exchange_manager.get_exchange(exchange_id)
-            usd_pair = f"{quote_currency}/USD"
-            
-            # Try USD pair first (skip futures markets)
-            if usd_pair in exchange.markets and ':' not in usd_pair:
-                ticker = await self.exchange_manager.fetch_ticker(exchange_id, usd_pair)
-                usd_price = ticker.get('last') or ticker.get('close') or ticker.get('bid', 0)
-                if usd_price and usd_price > 0:
-                    return price * usd_price
-            
-            # Fallback: Try USDC pair (skip futures markets)
-            usdc_pair = f"{quote_currency}/USDC"
-            if usdc_pair in exchange.markets and ':' not in usdc_pair:
-                ticker = await self.exchange_manager.fetch_ticker(exchange_id, usdc_pair)
-                usdc_price = ticker.get('last') or ticker.get('close') or ticker.get('bid', 0)
-                if usdc_price and usdc_price > 0:
-                    # USDC ≈ USD, so use directly
-                    return price * usdc_price
-                    
+            # Try to get quote_currency/USD pair (e.g., ETH/USD, BTC/USD)
+            crypto_usd_pair = f"{quote_currency}/USD"
+            if crypto_usd_pair in exchange.markets and ':' not in crypto_usd_pair:
+                ticker = await self.exchange_manager.fetch_ticker(exchange_id, crypto_usd_pair)
+                rate = ticker.get('last') or ticker.get('close') or ticker.get('bid')
+                if rate and rate > 0:
+                    # price is in quote_currency, multiply by quote_currency/USD rate to get USD
+                    return price * rate
+            else:
+                # If quote_currency/USD doesn't exist, try USD/quote_currency and invert
+                usd_crypto_pair = f"USD/{quote_currency}"
+                if usd_crypto_pair in exchange.markets and ':' not in usd_crypto_pair:
+                    ticker = await self.exchange_manager.fetch_ticker(exchange_id, usd_crypto_pair)
+                    rate = ticker.get('last') or ticker.get('close') or ticker.get('ask')
+                    if rate and rate > 0:
+                        # price is in quote_currency, divide by USD/quote_currency rate to get USD
+                        return price / rate
         except Exception as e:
-            logger.warning(f"Failed to normalize {quote_currency} to USD: {e}")
+            logger.debug(f"Could not fetch {quote_currency}/USD rate for normalization: {e}")
         
-        # Last resort: return original (will be filtered by sanity check)
+        # Fallback: log warning and return original price (will cause calculation issues)
+        logger.warning(f"   ⚠️ Could not normalize {quote_currency} to USD - using price as-is (may be inaccurate)")
         return price
     
     async def _calculate_order_book_depth(
@@ -656,17 +659,17 @@ class IntraExchangeArbitrageEngine:
                         depth_buy, depth_sell = depth_sell, depth_buy
                         # Recalculate profit data with reversed prices
                         spread_width = abs(usd_sell_price - usd_buy_price)
-                        profit_data = calculator.calculate_net_profit(
+                    profit_data = calculator.calculate_net_profit(
                             buy_price=usd_buy_price,
                             sell_price=usd_sell_price,
-                            trade_size_usd=trade_size_usd,
-                            order_book_depth_buy=depth_buy,
-                            order_book_depth_sell=depth_sell,
-                            spread_width=spread_width,
-                            volatility_24h=volatility,
-                            execution_latency_ms=self.execution_latency_ms
-                        )
-                        logger.debug(f"   ✅ Reversed: Now buying {buy_pair} @ ${usd_buy_price:.6f}, selling {sell_pair} @ ${usd_sell_price:.6f}")
+                        trade_size_usd=trade_size_usd,
+                        order_book_depth_buy=depth_buy,
+                        order_book_depth_sell=depth_sell,
+                        spread_width=spread_width,
+                        volatility_24h=volatility,
+                        execution_latency_ms=self.execution_latency_ms
+                    )
+                    logger.debug(f"   ✅ Reversed: Now buying {buy_pair} @ ${usd_buy_price:.6f}, selling {sell_pair} @ ${usd_sell_price:.6f}")
                     
                     # 🔵 CRITICAL FIX: Double-check that raw_spread is positive
                     # If it's still negative after reversal, skip this opportunity
@@ -808,10 +811,11 @@ class IntraExchangeArbitrageEngine:
         start_time = time.time()
         exchange = self.exchange_manager.get_exchange(exchange_id)
         
-        # Get all unique base cryptos that have at least 2 USD/USDC/USDT pairs
+        # Get all unique base cryptos that have at least 2 pairs (USD/USDC/USDT OR crypto-to-crypto)
         # This filters for cryptos that can actually be arbitraged
         base_cryptos = set()
         crypto_pair_count = {}
+        excluded_quotes = ['EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY']  # Exclude fiat
         
         for symbol, market_info in exchange.markets.items():
             if not market_info.get('active', True):
@@ -826,8 +830,8 @@ class IntraExchangeArbitrageEngine:
             base = market_info.get('base', '').strip().upper()
             quote = market_info.get('quote', '').strip().upper()
             
-            # Only count USD/USDC/USDT pairs
-            if quote in ['USD', 'USDC', 'USDT']:
+            # Count all pairs (USD/USDC/USDT AND crypto-to-crypto), exclude fiat
+            if base and quote not in excluded_quotes:
                 if base not in crypto_pair_count:
                     crypto_pair_count[base] = 0
                 crypto_pair_count[base] += 1
@@ -837,7 +841,7 @@ class IntraExchangeArbitrageEngine:
             if pair_count >= 2:
                 base_cryptos.add(crypto)
         
-        logger.info(f"   📊 Found {len(base_cryptos)} unique cryptos on {exchange_id.upper()} (with 2+ USD/USDC/USDT pairs)")
+        logger.info(f"   📊 Found {len(base_cryptos)} unique cryptos on {exchange_id.upper()} (with 2+ pairs: USD/USDC/USDT + crypto-to-crypto)")
         logger.info(f"   🎯 Scanning for profitable intra-exchange arbitrage pairs...")
         logger.info("")
         
@@ -902,10 +906,11 @@ class IntraExchangeArbitrageEngine:
         start_time = time.time()
         exchange = self.exchange_manager.get_exchange(exchange_id)
         
-        # Get all unique base cryptos that have at least 2 USD/USDC/USDT pairs
+        # Get all unique base cryptos that have at least 2 pairs (USD/USDC/USDT OR crypto-to-crypto)
         # This filters for cryptos that can actually be arbitraged
         base_cryptos = set()
         crypto_pair_count = {}
+        excluded_quotes = ['EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY']  # Exclude fiat
         
         for symbol, market_info in exchange.markets.items():
             if not market_info.get('active', True):
@@ -920,8 +925,8 @@ class IntraExchangeArbitrageEngine:
             base = market_info.get('base', '').strip().upper()
             quote = market_info.get('quote', '').strip().upper()
             
-            # Only count USD/USDC/USDT pairs
-            if base and quote in ['USD', 'USDC', 'USDT']:
+            # Count all pairs (USD/USDC/USDT AND crypto-to-crypto), exclude fiat
+            if base and quote not in excluded_quotes:
                 if base not in crypto_pair_count:
                     crypto_pair_count[base] = 0
                 crypto_pair_count[base] += 1
@@ -932,7 +937,7 @@ class IntraExchangeArbitrageEngine:
                 base_cryptos.add(crypto)
         
         exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
-        logger.info(f"{exchange_marker} [{exchange_id.upper()}] 📊 Found {len(base_cryptos)} unique cryptos (with 2+ USD/USDC/USDT pairs)")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}] 📊 Found {len(base_cryptos)} unique cryptos (with 2+ pairs: USD/USDC/USDT + crypto-to-crypto)")
         logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⚡ IMMEDIATE EXECUTION MODE: Trades execute as soon as found!")
         
         # 🔵 IMPROVEMENT: Skip during low liquidity hours (reduce scan size)
