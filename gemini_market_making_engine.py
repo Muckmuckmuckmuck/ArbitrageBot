@@ -201,32 +201,44 @@ class GeminiMarketMakingEngine:
             logger.debug(f"   Error fetching balance: {e}")
             return 0.0
     
-    async def place_market_making_orders(self, pair: str) -> bool:
-        """Place buy and sell limit orders for market making"""
+    async def place_market_making_orders(self, pair: str) -> dict:
+        """Place buy and sell limit orders for market making
+        
+        Returns:
+            dict with 'success' (bool), 'orders_placed' (int), 'orders_filled' (int), 'error' (str)
+        """
+        orders_placed = 0
+        orders_filled = 0
+        
         try:
+            logger.info(f"   🟢 [GEMINI] 🔍 PROCESSING {pair}...")
+            
             # 🟢 IMPROVEMENT: Skip low volume pairs
             try:
                 ticker = await self.exchange_manager.fetch_ticker('gemini', pair)
                 volume_24h = ticker.get('quoteVolume', 0) or (ticker.get('volume', 0) * ticker.get('last', 0))
+                logger.debug(f"   🟢 [GEMINI] {pair}: 24h volume = ${volume_24h:.2f}")
                 if volume_24h < 10000:  # Less than $10k volume
                     logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - low volume: ${volume_24h:.0f} < $10,000")
-                    return False
+                    return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'low_volume'}
             except Exception as e:
-                logger.debug(f"   🟢 [GEMINI] Volume check failed for {pair}: {e}")
+                logger.warning(f"   🟢 [GEMINI] ⚠️ Volume check failed for {pair}: {e}")
                 pass  # Continue if volume check fails
             
             # 🟢 IMPROVEMENT: Dynamic grid spacing based on spread
             spread = await self.get_spread(pair)
+            logger.debug(f"   🟢 [GEMINI] {pair}: Current spread = {spread}%")
             if spread is None or spread <= 0 or spread < self.min_spread_percent:
                 spread_msg = f"{spread:.3f}%" if spread is not None else "None"
                 logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - spread {spread_msg} < minimum {self.min_spread_percent:.2f}%")
-                return False  # Spread too tight
+                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'spread_too_tight'}
             
             # Get current price
             current_price = await self.get_current_price(pair)
+            logger.debug(f"   🟢 [GEMINI] {pair}: Current price = ${current_price}")
             if current_price is None or current_price <= 0:
-                logger.debug(f"   🟢 [GEMINI] Skipping {pair} - invalid price")
-                return False
+                logger.warning(f"   🟢 [GEMINI] ⚠️ Skipping {pair} - invalid price: {current_price}")
+                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'invalid_price'}
             
             # 🟢 IMPROVEMENT: Use 50% of current spread as grid spacing (max 0.5%, min 0.15%)
             dynamic_spacing = min(max(spread * 0.5, 0.15), 0.5)
@@ -270,23 +282,25 @@ class GeminiMarketMakingEngine:
             order_amount = order_value_usd / current_price
             
             # Ensure order value meets minimum cost requirement
+            logger.debug(f"   🟢 [GEMINI] {pair}: Order value = ${order_value_usd:.2f}, min cost = ${min_cost:.2f}")
             if order_value_usd < min_cost:
                 logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order value ${order_value_usd:.2f} < minimum ${min_cost:.2f}")
-                return False
+                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_value_too_small'}
             
             # Round amounts to exchange precision (but ensure it's not 0)
             order_amount = round(order_amount, amount_precision)
             
             # 🔵 CRITICAL FIX: If rounding caused amount to become 0, recalculate
+            logger.debug(f"   🟢 [GEMINI] {pair}: Order amount after rounding = {order_amount}, min amount = {min_amount}")
             if order_amount <= 0:
                 # Try to use minimum amount if available
                 if min_amount > 0:
                     order_amount = min_amount
                     order_value_usd = order_amount * current_price
-                    logger.debug(f"   🟢 [GEMINI] {pair}: Using minimum amount {min_amount} after rounding to 0")
+                    logger.info(f"   🟢 [GEMINI] {pair}: Using minimum amount {min_amount} after rounding to 0")
                 else:
                     logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order amount too small after rounding: {order_amount}")
-                    return False
+                    return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'amount_too_small_after_rounding'}
             
             # Ensure order amount meets minimum amount requirement
             if min_amount > 0 and order_amount < min_amount:
@@ -322,16 +336,21 @@ class GeminiMarketMakingEngine:
                 # Final check
                 if min_order_value < min_cost:
                     logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order value ${min_order_value:.2f} < minimum ${min_cost:.2f} (after rounding)")
-                    return False
+                    return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_value_too_small_after_rounding'}
             
             # Check inventory limits
             inventory = await self.get_inventory_balance(base_currency)
             inventory_value = inventory * current_price
             max_inventory = self.capital_per_pair * self.max_inventory_percent
             
+            logger.info(f"   🟢 [GEMINI] {pair}: Inventory = {inventory:.6f} {base_currency} (${inventory_value:.2f}), Max = ${max_inventory:.2f}")
+            logger.info(f"   🟢 [GEMINI] {pair}: Buy price = ${buy_price:.6f}, Sell price = ${sell_price:.6f}, Amount = {order_amount:.6f}")
+            
             # Place buy order (if not over-inventoried)
             if inventory_value < max_inventory:
+                logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE BUY ORDER...")
                 try:
+                    logger.debug(f"   🟢 [GEMINI] {pair}: Creating buy order - amount={order_amount:.6f}, price=${buy_price:.6f}")
                     buy_order = await self.exchange_manager.create_order(
                         exchange_id='gemini',
                         symbol=pair,
@@ -340,50 +359,83 @@ class GeminiMarketMakingEngine:
                         amount=order_amount,
                         price=buy_price
                     )
+                    logger.debug(f"   🟢 [GEMINI] {pair}: Buy order response = {buy_order}")
+                    
                     if buy_order and buy_order.get('id'):
+                        buy_order_id = buy_order.get('id')
                         buy_mm_order = MarketMakingOrder(
                             pair=pair,
                             side='buy',
-                            order_id=buy_order.get('id'),
+                            order_id=buy_order_id,
                             price=buy_price,
                             amount=order_amount,
                             status='open'
                         )
                         self.active_orders[pair].append(buy_mm_order)
-                        logger.info(f"   🟢 [GEMINI] ✅ BUY ORDER PLACED: {pair} @ ${buy_price:.4f} for {order_amount:.6f} (${order_amount * buy_price:.2f})")
+                        orders_placed += 1
+                        logger.info(f"   🟢 [GEMINI] ✅✅✅ BUY ORDER PLACED SUCCESSFULLY: {pair} @ ${buy_price:.4f} for {order_amount:.6f} (${order_amount * buy_price:.2f}) | Order ID: {buy_order_id}")
+                    else:
+                        logger.warning(f"   🟢 [GEMINI] ⚠️ Buy order creation returned no ID: {buy_order}")
                 except Exception as e:
-                    logger.debug(f"   ⚠️ Failed to place buy order for {pair}: {e}")
+                    logger.error(f"   🟢 [GEMINI] ❌ FAILED TO PLACE BUY ORDER for {pair}: {type(e).__name__}: {e}")
+                    import traceback
+                    logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
+            else:
+                logger.info(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping buy order - inventory ${inventory_value:.2f} >= max ${max_inventory:.2f}")
             
             # Place sell order (if we have inventory)
             if inventory > order_amount * 0.5:  # Only sell if we have at least 50% of order size
+                logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE SELL ORDER...")
                 try:
+                    sell_amount = min(order_amount, inventory)
+                    logger.debug(f"   🟢 [GEMINI] {pair}: Creating sell order - amount={sell_amount:.6f}, price=${sell_price:.6f}")
                     sell_order = await self.exchange_manager.create_order(
                         exchange_id='gemini',
                         symbol=pair,
                         order_type='limit',
                         side='sell',
-                        amount=min(order_amount, inventory),
+                        amount=sell_amount,
                         price=sell_price
                     )
+                    logger.debug(f"   🟢 [GEMINI] {pair}: Sell order response = {sell_order}")
+                    
                     if sell_order and sell_order.get('id'):
+                        sell_order_id = sell_order.get('id')
                         sell_mm_order = MarketMakingOrder(
                             pair=pair,
                             side='sell',
-                            order_id=sell_order.get('id'),
+                            order_id=sell_order_id,
                             price=sell_price,
-                            amount=min(order_amount, inventory),
+                            amount=sell_amount,
                             status='open'
                         )
                         self.active_orders[pair].append(sell_mm_order)
-                        logger.info(f"   🟢 [GEMINI] ✅ SELL ORDER PLACED: {pair} @ ${sell_price:.4f} for {min(order_amount, inventory):.6f} (${min(order_amount, inventory) * sell_price:.2f})")
+                        orders_placed += 1
+                        logger.info(f"   🟢 [GEMINI] ✅✅✅ SELL ORDER PLACED SUCCESSFULLY: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} (${sell_amount * sell_price:.2f}) | Order ID: {sell_order_id}")
+                    else:
+                        logger.warning(f"   🟢 [GEMINI] ⚠️ Sell order creation returned no ID: {sell_order}")
                 except Exception as e:
-                    logger.debug(f"   ⚠️ Failed to place sell order for {pair}: {e}")
+                    logger.error(f"   🟢 [GEMINI] ❌ FAILED TO PLACE SELL ORDER for {pair}: {type(e).__name__}: {e}")
+                    import traceback
+                    logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
+            else:
+                logger.info(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping sell order - inventory {inventory:.6f} < 50% of order size {order_amount * 0.5:.6f}")
             
-            return True
+            # Check for filled orders
+            orders_filled = await self.check_order_status(pair)
+            
+            if orders_placed > 0:
+                logger.info(f"   🟢 [GEMINI] ✅ {pair}: Successfully placed {orders_placed} order(s), {orders_filled} filled")
+            else:
+                logger.info(f"   🟢 [GEMINI] ⚠️ {pair}: No orders placed (inventory limits or errors)")
+            
+            return {'success': orders_placed > 0, 'orders_placed': orders_placed, 'orders_filled': orders_filled, 'error': None}
             
         except Exception as e:
-            logger.error(f"   ❌ Error placing market-making orders for {pair}: {e}")
-            return False
+            logger.error(f"   🟢 [GEMINI] ❌❌❌ ERROR placing market-making orders for {pair}: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
+            return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': str(e)}
     
     async def cancel_pair_orders(self, pair: str):
         """Cancel all active orders for a pair"""
@@ -608,21 +660,25 @@ class GeminiMarketMakingEngine:
     
     async def _process_pair_safely(self, pair: str):
         """Process a single pair with error handling"""
-        orders_placed = 0
-        orders_filled = 0
         try:
             # Check and update existing orders
             filled_count = await self.check_and_update_orders(pair)
-            orders_filled = filled_count
             
             # Place new orders if needed
-            placed = await self.place_market_making_orders(pair)
-            if placed:
-                orders_placed = 1
+            result = await self.place_market_making_orders(pair)
             
-            return {'orders_placed': orders_placed, 'orders_filled': orders_filled}
+            # Extract orders from result (now returns dict)
+            if isinstance(result, dict):
+                orders_placed = result.get('orders_placed', 0)
+                orders_filled = result.get('orders_filled', 0) + filled_count
+                return {'orders_placed': orders_placed, 'orders_filled': orders_filled}
+            else:
+                # Legacy support (shouldn't happen)
+                return {'orders_placed': 0, 'orders_filled': filled_count}
         except Exception as e:
-            logger.debug(f"   🟢 [GEMINI] Error processing {pair}: {e}")
+            logger.error(f"   🟢 [GEMINI] ❌ Error processing {pair}: {type(e).__name__}: {e}")
+            import traceback
+            logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
             # Don't raise - continue with other pairs
             return {'orders_placed': 0, 'orders_filled': 0}
     
