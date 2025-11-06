@@ -961,8 +961,8 @@ class CoinbaseMarketMakingEngine:
                         market_info = exchange.markets.get(pair, {})
                         limits = market_info.get('limits', {})
                         # 🔵 FLEXIBLE: Use exchange minimum or $1.00 (whichever is lower) to allow smaller orders
-            exchange_min_cost = limits.get('cost', {}).get('min', 0) or 0
-            min_cost = max(exchange_min_cost, 1.0) if exchange_min_cost > 0 else 1.0  # At least $1.00, use exchange min if higher
+                        exchange_min_cost = limits.get('cost', {}).get('min', 0) or 0
+                        min_cost = max(exchange_min_cost, 1.0) if exchange_min_cost > 0 else 1.0  # At least $1.00, use exchange min if higher
                         
                         position_value = inventory * current_price
                         if position_value < min_cost:
