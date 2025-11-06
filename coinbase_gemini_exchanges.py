@@ -181,8 +181,12 @@ class CoinbaseGeminiExchangeManager:
         market_info = exchange.markets.get(symbol, {})
         if market_info:
             precision = market_info.get('precision', {})
-            amount_precision = precision.get('amount', 8)
-            price_precision = precision.get('price', 8)
+            # CCXT precision can be int (decimal places) or float (step size)
+            # Convert to int for round() function
+            amount_precision_val = precision.get('amount', 8)
+            price_precision_val = precision.get('price', 8)
+            amount_precision = int(amount_precision_val) if amount_precision_val else 8
+            price_precision = int(price_precision_val) if price_precision_val else 8
             
             # Round amount and price to exchange precision
             amount = round(amount, amount_precision)

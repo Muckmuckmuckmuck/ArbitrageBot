@@ -22,12 +22,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Top 10 pairs for market making on Gemini (ranked by profitability)
+# Note: These will be filtered during initialization to only include pairs that exist on Gemini
 TOP_GEMINI_PAIRS = [
     'ARB/USD',   # Rank 1: 1.5-4.0% daily ROI, Low-Med risk
     'OP/USD',    # Rank 2: 1.2-3.5% daily ROI, Low risk
     'LINK/USD',  # Rank 3: 0.8-2.2% daily ROI, Low risk
     'AVAX/USD',  # Rank 4: 1.0-2.8% daily ROI, Low-Med risk
-    'MATIC/USD', # Rank 5: 1.0-2.5% daily ROI, Low risk
+    'MATIC/USD', # Rank 5: 1.0-2.5% daily ROI, Low risk (may not exist on Gemini)
     'AAVE/USD',  # Rank 6: 1.2-3.2% daily ROI, Low-Med risk
     'SOL/USD',   # Rank 7: 0.7-2.0% daily ROI, Low risk
     'INJ/USD',   # Rank 8: 1.3-3.0% daily ROI, Low-Med risk
@@ -87,10 +88,9 @@ class GeminiMarketMakingEngine:
         # Active orders tracking
         self.active_orders: Dict[str, List[MarketMakingOrder]] = defaultdict(list)
         
-        # Statistics
+        # Statistics (will be initialized with available pairs)
         self.stats: Dict[str, MarketMakingStats] = {}
-        for pair in TOP_GEMINI_PAIRS:
-            self.stats[pair] = MarketMakingStats(pair=pair)
+        self.available_pairs: List[str] = []  # Will be set during initialization
         
         # Running state
         self.running = False
@@ -108,7 +108,7 @@ class GeminiMarketMakingEngine:
         logger.info(f"   Min spread: {self.min_spread_percent:.2f}%")
         logger.info("=" * 80)
         
-        # Verify Gemini has these pairs
+        # Verify Gemini has these pairs and filter out non-existent ones
         exchange = self.exchange_manager.get_exchange('gemini')
         available_pairs = []
         for pair in TOP_GEMINI_PAIRS:
@@ -119,9 +119,21 @@ class GeminiMarketMakingEngine:
                 else:
                     logger.warning(f"   ⚠️ {pair} is not active on Gemini")
             else:
-                logger.warning(f"   ⚠️ {pair} not found on Gemini")
+                logger.warning(f"   ⚠️ {pair} not found on Gemini - will be skipped")
+        
+        # Store available pairs in instance variable (don't modify global)
+        self.available_pairs = available_pairs
+        
+        # Initialize stats for available pairs only
+        self.stats = {}
+        for pair in available_pairs:
+            self.stats[pair] = MarketMakingStats(pair=pair)
         
         logger.info(f"   ✅ Available pairs: {len(available_pairs)}/{len(TOP_GEMINI_PAIRS)}")
+        if len(available_pairs) < len(TOP_GEMINI_PAIRS):
+            logger.warning(f"   ⚠️ Some pairs not available on Gemini - using {len(available_pairs)} pairs")
+        if len(available_pairs) == 0:
+            logger.error(f"   ❌ No pairs available on Gemini! Market making will not work.")
         logger.info("=" * 80)
         
     async def get_current_price(self, pair: str) -> Optional[float]:
@@ -186,8 +198,11 @@ class GeminiMarketMakingEngine:
             market_info = exchange.markets.get(pair, {})
             
             # Apply precision requirements (if available from market info)
-            amount_precision = market_info.get('precision', {}).get('amount', 8)
-            price_precision = market_info.get('precision', {}).get('price', 8)
+            # CCXT precision can be int (decimal places) or float (step size)
+            # Convert to int for round() function
+            precision_data = market_info.get('precision', {})
+            amount_precision = int(precision_data.get('amount', 8)) if precision_data.get('amount') else 8
+            price_precision = int(precision_data.get('price', 8)) if precision_data.get('price') else 8
             
             # Round amounts and prices to exchange precision
             order_amount = round(order_amount, amount_precision)
@@ -339,7 +354,8 @@ class GeminiMarketMakingEngine:
         """Flatten all positions (take profit)"""
         try:
             logger.info("   🔄 Flattening positions...")
-            for pair in TOP_GEMINI_PAIRS:
+            pairs_to_process = self.available_pairs if self.available_pairs else TOP_GEMINI_PAIRS
+            for pair in pairs_to_process:
                 base_currency = pair.split('/')[0]
                 inventory = await self.get_inventory_balance(base_currency)
                 
@@ -366,7 +382,8 @@ class GeminiMarketMakingEngine:
                             logger.warning(f"   ⚠️ Failed to flatten {pair}: {e}")
             
             # Cancel all orders
-            for pair in TOP_GEMINI_PAIRS:
+            pairs_to_process = self.available_pairs if self.available_pairs else TOP_GEMINI_PAIRS
+            for pair in pairs_to_process:
                 await self.cancel_pair_orders(pair)
             
             self.last_flatten_time = datetime.now()
@@ -398,8 +415,11 @@ class GeminiMarketMakingEngine:
                 # Gemini rate limit: 10 req/sec, so we process 10 pairs max per second
                 pairs_per_batch = 10  # Process 10 pairs per second to stay under rate limit
                 
-                for i in range(0, len(TOP_GEMINI_PAIRS), pairs_per_batch):
-                    batch = TOP_GEMINI_PAIRS[i:i+pairs_per_batch]
+                # Use available pairs (filtered during initialization)
+                pairs_to_process = self.available_pairs if self.available_pairs else TOP_GEMINI_PAIRS
+                
+                for i in range(0, len(pairs_to_process), pairs_per_batch):
+                    batch = pairs_to_process[i:i+pairs_per_batch]
                     
                     # Process batch concurrently
                     tasks = []
@@ -410,7 +430,7 @@ class GeminiMarketMakingEngine:
                     await asyncio.gather(*tasks, return_exceptions=True)
                     
                     # Wait 1 second between batches to respect rate limit
-                    if i + pairs_per_batch < len(TOP_GEMINI_PAIRS):
+                    if i + pairs_per_batch < len(pairs_to_process):
                         await asyncio.sleep(1)
                 
                 # Wait before next update cycle
@@ -438,7 +458,8 @@ class GeminiMarketMakingEngine:
         self.running = False
         
         # Cancel all orders
-        for pair in TOP_GEMINI_PAIRS:
+        pairs_to_process = self.available_pairs if self.available_pairs else TOP_GEMINI_PAIRS
+        for pair in pairs_to_process:
             asyncio.create_task(self.cancel_pair_orders(pair))
     
     def get_stats_summary(self) -> Dict:
