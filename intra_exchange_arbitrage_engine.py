@@ -1279,6 +1279,7 @@ class IntraExchangeArbitrageEngine:
             total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
             
             # Check for BTC - if we have BTC and need EUR/GBP, convert it first (PRIORITY)
+            # This prevents BTC from getting stuck in the account
             btc_balance = free_balance.get('BTC', 0)
             btc_price = 0
             btc_value_usd = 0
@@ -1290,15 +1291,20 @@ class IntraExchangeArbitrageEngine:
                     btc_price = btc_ticker.get('last') or btc_ticker.get('bid', 0)
                     btc_value_usd = btc_balance * btc_price if btc_price > 0 else 0
                     
-                    if btc_value_usd >= trade_size_usd * 0.3:
+                    # Always try to convert BTC if we have it and need EUR/GBP
+                    # This prevents funds from getting stuck
+                    if btc_value_usd > 0:  # Changed from >= trade_size_usd * 0.3 to > 0
                         logger.info(f"   💰 Found {btc_balance:.8f} BTC (${btc_value_usd:.2f}) - converting to {buy_quote}")
+                        logger.info(f"   🔄 Converting BTC to {buy_quote} to prevent stuck funds...")
                         
                         # Convert BTC directly to required currency
+                        # Use 95% to leave small buffer, but convert as much as possible
+                        amount_to_convert = btc_balance * 0.95
                         success = await self.exchange_manager.convert_currency(
                             exchange_id=exchange_id,
                             from_currency='BTC',
                             to_currency=buy_quote,
-                            amount=btc_balance * 0.95  # Use 95% to leave buffer
+                            amount=amount_to_convert
                         )
                         
                         if success:
@@ -1308,13 +1314,16 @@ class IntraExchangeArbitrageEngine:
                             free_balance = balance.get('free', {})
                             # Update BTC balance after conversion
                             btc_balance = free_balance.get('BTC', 0)
+                            if btc_balance > 0:
+                                logger.warning(f"   ⚠️ Still have {btc_balance:.8f} BTC remaining after conversion")
                         else:
-                            logger.warning(f"   ⚠️ BTC conversion failed, will try other methods")
+                            logger.warning(f"   ⚠️ BTC conversion failed - BTC may remain stuck")
+                            logger.warning(f"   💡 Will retry conversion on next opportunity")
                 except Exception as e:
-                    logger.debug(f"   Error checking/converting BTC: {e}")
-                    # If we can't get price, estimate it
+                    logger.error(f"   ❌ Error checking/converting BTC: {e}")
+                    # If we can't get price, estimate it for logging
                     if btc_price == 0:
-                        btc_price = 103000  # Approximate BTC price
+                        btc_price = 103000  # Approximate BTC price for display
                         btc_value_usd = btc_balance * btc_price
             
             # OPTION 1: Check if we have the required quote currency directly
