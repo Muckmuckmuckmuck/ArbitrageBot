@@ -453,23 +453,68 @@ class CoinbaseGeminiExchangeManager:
             
             if btc_amount <= 0:
                 logger.warning(f"   ⚠️ Invalid BTC amount received: {btc_amount}")
-                return False
+                # Try to verify actual BTC balance
+                balance = await self.fetch_balance(exchange_id)
+                actual_btc = balance.get('free', {}).get('BTC', 0)
+                if actual_btc > 0:
+                    logger.info(f"   💡 Found {actual_btc:.8f} BTC in account - using it")
+                    btc_amount = actual_btc * 0.95  # Use 95% to leave buffer
+                else:
+                    logger.error(f"   ❌ Step 1 failed and no BTC found in account")
+                    return False
             
-            logger.info(f"   ✅ Step 1 complete: Received {btc_amount:.8f} {bridge_currency}")
+            logger.info(f"   ✅ Step 1 complete: Have {btc_amount:.8f} {bridge_currency}")
             
-            # Execute Step 2: BTC → to_currency
-            step2_result = await self._execute_bridge_step_with_fill(
-                exchange_id, bridge_currency, to_currency, btc_amount, bridge_pair3, bridge_pair4
-            )
+            # CRITICAL: Execute Step 2 immediately - must complete or funds stuck
+            logger.info(f"   🔄 Executing Step 2: {bridge_currency} → {to_currency} (MUST COMPLETE)")
             
-            if not step2_result or step2_result[0] is None:
-                logger.warning(f"   ⚠️ Bridge step 2 failed: {bridge_currency} → {to_currency}")
-                return False
+            # Retry step 2 if it fails (up to 3 times)
+            max_retries = 3
+            for attempt in range(max_retries):
+                step2_result = await self._execute_bridge_step_with_fill(
+                    exchange_id, bridge_currency, to_currency, btc_amount, bridge_pair3, bridge_pair4
+                )
+                
+                if step2_result and step2_result[0] is not None:
+                    final_amount = step2_result[1]
+                    logger.info(f"   ✅ Step 2 complete: Received {final_amount:.2f} {to_currency}")
+                    
+                    # Verify we actually have the target currency
+                    balance = await self.fetch_balance(exchange_id)
+                    final_balance = balance.get('free', {}).get(to_currency, 0)
+                    if final_balance > 0:
+                        logger.info(f"   ✅ Verified: Have {final_balance:.2f} {to_currency} in account")
+                        logger.info(f"   ✅ Bridge conversion successful! Total received: {final_balance:.2f} {to_currency}")
+                        return True
+                    else:
+                        logger.warning(f"   ⚠️ Step 2 reported success but no {to_currency} found in account")
+                        if attempt < max_retries - 1:
+                            logger.info(f"   🔄 Retrying step 2 (attempt {attempt + 2}/{max_retries})...")
+                            await asyncio.sleep(2)
+                            continue
+                
+                logger.warning(f"   ⚠️ Bridge step 2 failed (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    # Check BTC balance before retry
+                    balance = await self.fetch_balance(exchange_id)
+                    current_btc = balance.get('free', {}).get('BTC', 0)
+                    if current_btc > 0:
+                        btc_amount = current_btc * 0.95
+                        logger.info(f"   💡 Retrying with {btc_amount:.8f} BTC")
+                        await asyncio.sleep(2)
+                    else:
+                        logger.error(f"   ❌ No BTC available for retry")
+                        break
             
-            final_amount = step2_result[1]
-            logger.info(f"   ✅ Step 2 complete: Received {final_amount:.2f} {to_currency}")
-            logger.info(f"   ✅ Bridge conversion successful! Total received: {final_amount:.2f} {to_currency}")
-            return True
+            # Final check - if we still have BTC, log error
+            balance = await self.fetch_balance(exchange_id)
+            remaining_btc = balance.get('free', {}).get('BTC', 0)
+            if remaining_btc > 0:
+                logger.error(f"   ❌ BRIDGE CONVERSION INCOMPLETE: {remaining_btc:.8f} BTC stuck in account")
+                logger.error(f"   ⚠️ Funds are stuck in BTC - conversion failed at step 2")
+                logger.error(f"   💡 Manual intervention may be required to sell BTC for {to_currency}")
+            
+            return False
             
         except Exception as e:
             logger.error(f"   ❌ Bridge currency conversion error: {e}")
