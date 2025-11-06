@@ -1278,6 +1278,36 @@ class IntraExchangeArbitrageEngine:
             # Check for convertible currencies (USD/USDC/USDT) first
             total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
             
+            # Check for BTC - if we have BTC and need EUR/GBP, convert it first
+            btc_balance = free_balance.get('BTC', 0)
+            if buy_quote in ['EUR', 'GBP'] and btc_balance > 0:
+                # Get BTC value in USD
+                try:
+                    btc_ticker = await self.exchange_manager.fetch_ticker(exchange_id, 'BTC/USD')
+                    btc_price = btc_ticker.get('last') or btc_ticker.get('bid', 0)
+                    btc_value_usd = btc_balance * btc_price if btc_price > 0 else 0
+                    
+                    if btc_value_usd >= trade_size_usd * 0.3:
+                        logger.info(f"   💰 Found {btc_balance:.8f} BTC (${btc_value_usd:.2f}) - converting to {buy_quote}")
+                        
+                        # Convert BTC directly to required currency
+                        success = await self.exchange_manager.convert_currency(
+                            exchange_id=exchange_id,
+                            from_currency='BTC',
+                            to_currency=buy_quote,
+                            amount=btc_balance * 0.95  # Use 95% to leave buffer
+                        )
+                        
+                        if success:
+                            logger.info(f"   ✅ BTC converted to {buy_quote}!")
+                            # Re-check balance after conversion
+                            balance = await self.exchange_manager.fetch_balance(exchange_id)
+                            free_balance = balance.get('free', {})
+                        else:
+                            logger.warning(f"   ⚠️ BTC conversion failed, will try other methods")
+                except Exception as e:
+                    logger.debug(f"   Error checking/converting BTC: {e}")
+            
             # OPTION 1: Check if we have the required quote currency directly
             buy_balance = free_balance.get(buy_quote, 0)
             
@@ -1345,20 +1375,16 @@ class IntraExchangeArbitrageEngine:
             base_crypto_balance = free_balance.get(base_crypto, 0)
             crypto_value_usd = base_crypto_balance * sell_price  # Value if we sell what we have
             
+            # Calculate total available BEFORE logging (fixes scoping error)
+            total_available_usd = cash_available_usd + crypto_value_usd
+            
             logger.info(f"   💰 Balance check:")
             logger.info(f"      Cash ({buy_quote}): {buy_balance:.2f} = ${cash_available_usd:.2f} USD equivalent")
             logger.info(f"      Convertible (USD/USDC/USDT): ${total_convertible:.2f}")
+            if btc_balance > 0:
+                logger.info(f"      BTC: {btc_balance:.8f} = ${btc_balance * (btc_price if 'btc_price' in locals() else 43000):.2f} USD value")
             logger.info(f"      Position ({base_crypto}): {base_crypto_balance:.8f} = ${crypto_value_usd:.2f} USD value")
             logger.info(f"      Total available: ${total_available_usd:.2f}")
-            
-            # Calculate maximum position size based on what we have
-            # We can either:
-            # 1. Buy with cash: limited by cash_available_usd
-            # 2. Sell existing position: limited by crypto_value_usd
-            # 3. Combination: cash_available_usd + crypto_value_usd
-            
-            # Total available = cash + existing positions
-            total_available_usd = cash_available_usd + crypto_value_usd
             
             # Determine actual position size based on available resources
             # Use 90% of available to leave buffer for fees/slippage
