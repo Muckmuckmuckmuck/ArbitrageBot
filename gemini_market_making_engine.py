@@ -647,10 +647,12 @@ class GeminiMarketMakingEngine:
                             logger.info(f"   🟢 [GEMINI] ✅✅✅ SELL ORDER PLACED SUCCESSFULLY: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} (${sell_amount * sell_price:.2f}) | Order ID: {sell_order_id}")
                         else:
                             logger.warning(f"   🟢 [GEMINI] ⚠️ Sell order creation returned no ID: {sell_order}")
-                except Exception as e:
-                    logger.error(f"   🟢 [GEMINI] ❌ FAILED TO PLACE SELL ORDER for {pair}: {type(e).__name__}: {e}")
-                    import traceback
-                    logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
+                    except Exception as e:
+                        logger.error(f"   🟢 [GEMINI] ❌ FAILED TO PLACE SELL ORDER for {pair}: {type(e).__name__}: {e}")
+                        import traceback
+                        logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
+                else:
+                    logger.debug(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping sell order - order value ${min_sell_amount * sell_price:.2f} < minimum ${min_cost:.2f}")
             else:
                 if inventory is None or inventory <= 0:
                     logger.debug(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping sell order - no inventory")
