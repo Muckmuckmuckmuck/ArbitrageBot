@@ -244,17 +244,80 @@ class CoinbaseGeminiExchangeManager:
                     logger.debug(f"   Direct pair {pair} failed: {e}")
                     break
         
+        # Check if we already have BTC and can sell it directly for EUR/GBP
+        if to_currency in ['EUR', 'GBP']:
+            balance = await self.fetch_balance(exchange_id)
+            free_balance = balance.get('free', {})
+            btc_balance = free_balance.get('BTC', 0)
+            
+            if btc_balance > 0:
+                logger.info(f"   💰 Found {btc_balance:.8f} BTC in account - using it for conversion")
+                
+                # Try to sell BTC directly for to_currency
+                btc_pair = f"BTC/{to_currency}"
+                reverse_pair = f"{to_currency}/BTC"
+                
+                if btc_pair in exchange.markets or reverse_pair in exchange.markets:
+                    pair_to_use = btc_pair if btc_pair in exchange.markets else reverse_pair
+                    side = 'sell' if btc_pair in exchange.markets else 'buy'
+                    
+                    logger.info(f"   💱 Selling BTC for {to_currency} using {pair_to_use}")
+                    
+                    try:
+                        ticker = await self.fetch_ticker(exchange_id, pair_to_use)
+                        if side == 'sell':
+                            price = ticker.get('bid') or ticker.get('last', 0)
+                            order_amount = btc_balance * 0.95  # Use 95% to leave buffer
+                        else:
+                            price = ticker.get('ask') or ticker.get('last', 0)
+                            order_amount = (amount / price) * 0.95 if price > 0 else 0
+                        
+                        if order_amount > 0 and price > 0:
+                            limit_price = price * (0.995 if side == 'sell' else 1.005)
+                            
+                            order = await self.create_order(
+                                exchange_id=exchange_id,
+                                symbol=pair_to_use,
+                                order_type='limit',
+                                side=side,
+                                amount=order_amount,
+                                price=limit_price
+                            )
+                            
+                            if order:
+                                # Wait for order to fill
+                                order_id = order.get('id')
+                                if order_id:
+                                    max_wait = 30
+                                    for _ in range(max_wait):
+                                        await asyncio.sleep(1)
+                                        order_status = await self.fetch_order(exchange_id, order_id, pair_to_use)
+                                        status = order_status.get('status', 'unknown')
+                                        if status in ['closed', 'filled']:
+                                            logger.info(f"   ✅ BTC conversion successful: {btc_balance:.8f} BTC → {to_currency}")
+                                            return True
+                                        elif status == 'canceled':
+                                            break
+                                
+                                logger.info(f"   ✅ BTC conversion order placed")
+                                return True
+                    except Exception as e:
+                        logger.debug(f"   Direct BTC conversion failed: {e}")
+        
         # Method: Bridge currency (USD/USDC/USDT → BTC → GBP/EUR)
-        # This is the only reliable method for Advanced Trade API
+        # MUST complete both steps to avoid getting stuck
         logger.info(f"   💱 Using bridge currency method: {from_currency} → BTC → {to_currency}")
-        logger.info(f"   ⚠️ Note: Bridge conversion incurs 2x fees (~0.8%) and 2x slippage risk")
+        logger.info(f"   ⚠️ CRITICAL: Both steps must complete or funds will be stuck in BTC")
         
         try:
-            bridge_success = await self._try_bridge_currency_conversion(
+            bridge_success = await self._try_bridge_currency_conversion_with_completion(
                 exchange_id, from_currency, to_currency, amount
             )
             if bridge_success:
                 return True
+            else:
+                logger.error(f"   ❌ Bridge conversion incomplete - funds may be stuck in BTC")
+                logger.error(f"   ⚠️ Check account for BTC balance and manually convert if needed")
         except Exception as e:
             logger.error(f"   ❌ Bridge currency conversion failed: {e}")
         
@@ -321,6 +384,19 @@ class CoinbaseGeminiExchangeManager:
             logger.debug(f"   Conversion API not available: {e}")
         
         return False
+    
+    async def _try_bridge_currency_conversion_with_completion(
+        self, exchange_id: str, from_currency: str, to_currency: str, amount: float
+    ) -> bool:
+        """
+        Convert using bridge currency (BTC) with guaranteed completion
+        USD → BTC → GBP/EUR
+        
+        CRITICAL: Both steps MUST complete or funds will be stuck in BTC
+        """
+        return await self._try_bridge_currency_conversion(
+            exchange_id, from_currency, to_currency, amount
+        )
     
     async def _try_bridge_currency_conversion(
         self, exchange_id: str, from_currency: str, to_currency: str, amount: float

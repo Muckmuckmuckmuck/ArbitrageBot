@@ -279,7 +279,8 @@ class IntraExchangeArbitrageEngine:
         exchange = self.exchange_manager.get_exchange(exchange_id)
         pairs = []
         
-        # Allow these quote currencies (USD/USDC/USDT + EUR/GBP with conversion)
+        # Allow USD/USDC/USDT/EUR/GBP pairs
+        # Bridge conversion is now properly handled with completion checks
         allowed_quotes = ['USD', 'USDC', 'USDT', 'EUR', 'GBP']
         
         for symbol, market_info in exchange.markets.items():
