@@ -683,15 +683,36 @@ class IntraExchangeArbitrageEngine:
         start_time = time.time()
         exchange = self.exchange_manager.get_exchange(exchange_id)
         
-        # Get all unique base cryptos
+        # Get all unique base cryptos that have at least 2 USD/USDC/USDT pairs
+        # This filters for cryptos that can actually be arbitraged
         base_cryptos = set()
-        for symbol, market_info in exchange.markets.items():
-            if market_info.get('active', True):
-                base = market_info.get('base', '').strip().upper()
-                if base:
-                    base_cryptos.add(base)
+        crypto_pair_count = {}
         
-        logger.info(f"   📊 Found {len(base_cryptos)} unique cryptos on {exchange_id.upper()}")
+        for symbol, market_info in exchange.markets.items():
+            if not market_info.get('active', True):
+                continue
+            
+            # Skip futures/derivatives
+            if market_info.get('future', False) or market_info.get('swap', False):
+                continue
+            if ':' in symbol:
+                continue
+            
+            base = market_info.get('base', '').strip().upper()
+            quote = market_info.get('quote', '').strip().upper()
+            
+            # Only count USD/USDC/USDT pairs
+            if base and quote in ['USD', 'USDC', 'USDT']:
+                if base not in crypto_pair_count:
+                    crypto_pair_count[base] = 0
+                crypto_pair_count[base] += 1
+        
+        # Only include cryptos with at least 2 pairs (needed for arbitrage)
+        for crypto, pair_count in crypto_pair_count.items():
+            if pair_count >= 2:
+                base_cryptos.add(crypto)
+        
+        logger.info(f"   📊 Found {len(base_cryptos)} unique cryptos on {exchange_id.upper()} (with 2+ USD/USDC/USDT pairs)")
         logger.info(f"   ⚡ IMMEDIATE EXECUTION MODE: Trades execute as soon as found!")
         logger.info("")
         
