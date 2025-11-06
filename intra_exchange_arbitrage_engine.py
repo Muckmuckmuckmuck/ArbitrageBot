@@ -4,6 +4,10 @@ Production-Grade Intra-Exchange Arbitrage Trading Engine
 Implements comprehensive profitability calculations for USD/USDC/USDT pairs only
 Works on Coinbase and Gemini separately (no cross-exchange confusion)
 Only supports USD/USDC/USDT quote currencies (no EUR/GBP for simplicity and reliability)
+
+EXCHANGE USAGE:
+    🔵 COINBASE - Primary exchange for intra-exchange arbitrage
+    🟢 GEMINI - Can also run arbitrage, but currently only Coinbase is used in main_dual_strategy.py
 """
 
 import asyncio
@@ -878,6 +882,7 @@ class IntraExchangeArbitrageEngine:
                 return None  # Opportunity reversed
             
             # Check if still profitable
+            # 🔵 Use Coinbase calculator for Coinbase, 🟢 Gemini calculator for Gemini
             calculator = self.coinbase_calculator if exchange_id == 'coinbase' else self.gemini_calculator
             fees_total = calculator.maker_fee + calculator.maker_fee
             net_spread = raw_spread - fees_total - 0.002  # Account for slippage
@@ -1282,6 +1287,7 @@ class IntraExchangeArbitrageEngine:
             logger.info(f"   💵 Trade size: ${trade_size:.2f} → {base_amount:.6f} {opportunity.base_crypto}")
             
             # Get calculator for fees
+            # 🔵 Use Coinbase calculator for Coinbase, 🟢 Gemini calculator for Gemini
             calculator = self.coinbase_calculator if exchange_id == 'coinbase' else self.gemini_calculator
             
             # Place limit buy order (maker fee) - use exchange manager

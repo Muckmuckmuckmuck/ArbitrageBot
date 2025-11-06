@@ -43,6 +43,9 @@ class DualStrategyBot:
         self.exchange_manager = CoinbaseGeminiExchangeManager()
         await self.exchange_manager.initialize()
         
+        # ====================================================================
+        # 🔵 COINBASE STRATEGY: Intra-Exchange Arbitrage
+        # ====================================================================
         # Initialize Coinbase arbitrage engine
         logger.info("\n📊 Initializing Coinbase Intra-Exchange Arbitrage Engine...")
         # Note: IntraExchangeArbitrageEngine creates its own exchange_manager internally
@@ -52,6 +55,9 @@ class DualStrategyBot:
         )
         await self.arbitrage_engine.initialize()
         
+        # ====================================================================
+        # 🟢 GEMINI STRATEGY: Market Making
+        # ====================================================================
         # Initialize Gemini market-making engine
         logger.info("\n📊 Initializing Gemini Market-Making Engine...")
         self.market_making_engine = GeminiMarketMakingEngine(
@@ -70,8 +76,11 @@ class DualStrategyBot:
         logger.info("\n✅ Both strategies initialized successfully!")
         logger.info("=" * 80)
     
+    # ========================================================================
+    # 🔵 COINBASE STRATEGY: Intra-Exchange Arbitrage Loop
+    # ========================================================================
     async def run_arbitrage_strategy(self):
-        """Run Coinbase intra-exchange arbitrage strategy"""
+        """🔵 Run Coinbase intra-exchange arbitrage strategy"""
         logger.info("\n🚀 Starting Coinbase Intra-Exchange Arbitrage Strategy...")
         
         while self.running:
@@ -100,8 +109,11 @@ class DualStrategyBot:
                 logger.error(traceback.format_exc())
                 await asyncio.sleep(60)
     
+    # ========================================================================
+    # 🟢 GEMINI STRATEGY: Market Making Loop
+    # ========================================================================
     async def run_market_making_strategy(self):
-        """Run Gemini market-making strategy"""
+        """🟢 Run Gemini market-making strategy"""
         logger.info("\n🚀 Starting Gemini Market-Making Strategy...")
         
         try:

@@ -1,6 +1,11 @@
 """
 Exchange Manager for Coinbase + Gemini
 Handles all API interactions with both exchanges
+
+EXCHANGE MARKERS:
+    🔵 COINBASE - All Coinbase-specific code is marked with 🔵
+    🟢 GEMINI - All Gemini-specific code is marked with 🟢
+    ⚪ COMMON - Code that works for both exchanges
 """
 
 import ccxt
@@ -17,6 +22,12 @@ from coinbase_gemini_config import Config
 
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# EXCHANGE CONSTANTS
+# ============================================================================
+EXCHANGE_COINBASE = 'coinbase'
+EXCHANGE_GEMINI = 'gemini'
+
 class CoinbaseGeminiExchangeManager:
     """Manages connections to Coinbase and Gemini exchanges"""
     
@@ -30,8 +41,11 @@ class CoinbaseGeminiExchangeManager:
         """Initialize both exchanges with API keys"""
         logger.info("Initializing Coinbase + Gemini exchanges...")
         
+        # ====================================================================
+        # 🔵 COINBASE INITIALIZATION
+        # ====================================================================
         try:
-            # Initialize Coinbase - simplified to match working BTC script
+            # 🔵 Initialize Coinbase - simplified to match working BTC script
             coinbase_config = {
                 'apiKey': Config.COINBASE_API_KEY,
                 'secret': Config.COINBASE_SECRET_KEY,
@@ -46,10 +60,11 @@ class CoinbaseGeminiExchangeManager:
             
             self.coinbase = ccxt.coinbase(coinbase_config)
             
+            # 🔵 Coinbase sandbox mode
             if Config.COINBASE_SANDBOX:
                 self.coinbase.set_sandbox_mode(True)
             
-            # Load markets - same as BTC script
+            # 🔵 Load Coinbase markets - same as BTC script
             self.coinbase.load_markets()
             logger.info(f"✅ Coinbase initialized: {len(self.coinbase.markets)} markets")
             
@@ -57,20 +72,23 @@ class CoinbaseGeminiExchangeManager:
             logger.error(f"Failed to initialize Coinbase: {e}")
             raise
         
+        # ====================================================================
+        # 🟢 GEMINI INITIALIZATION
+        # ====================================================================
         try:
-            # Initialize Gemini
+            # 🟢 Initialize Gemini
             self.gemini = ccxt.gemini({
                 'apiKey': Config.GEMINI_API_KEY,
                 'secret': Config.GEMINI_SECRET_KEY,
                 **Config.EXCHANGE_CONFIGS['gemini'],
             })
             
-            # Set sandbox mode if enabled
+            # 🟢 Gemini sandbox mode
             if Config.GEMINI_SANDBOX:
                 self.gemini.set_sandbox_mode(True)
                 logger.info("Gemini: Sandbox mode enabled")
             
-            # Load markets (CCXT load_markets is synchronous)
+            # 🟢 Load Gemini markets (CCXT load_markets is synchronous)
             self.gemini.load_markets()
             logger.info(f"✅ Gemini initialized: {len(self.gemini.markets)} markets")
             
@@ -78,10 +96,10 @@ class CoinbaseGeminiExchangeManager:
             logger.error(f"Failed to initialize Gemini: {e}")
             raise
         
-        # Store in dict for easy access
+        # ⚪ Store both exchanges in dict for easy access
         self.exchanges = {
-            'coinbase': self.coinbase,  # Keep 'coinbase' as internal key for compatibility
-            'gemini': self.gemini,
+            EXCHANGE_COINBASE: self.coinbase,  # 🔵 Coinbase exchange
+            EXCHANGE_GEMINI: self.gemini,      # 🟢 Gemini exchange
         }
         
         logger.info("✅ Both exchanges initialized successfully")
@@ -148,12 +166,15 @@ class CoinbaseGeminiExchangeManager:
         Create order on exchange - simplified to match working BTC purchase script
         Uses exact same approach that worked for BTC/USDC purchase
         
-        CRITICAL: Gemini only supports limit orders, not market orders
+        CRITICAL: 🟢 Gemini only supports limit orders, not market orders
         """
         exchange = self.get_exchange(exchange_id)
         
-        # CRITICAL FIX: Gemini doesn't support market orders
-        if exchange_id == 'gemini' and order_type == 'market':
+        # ====================================================================
+        # 🟢 GEMINI-SPECIFIC: Market order conversion
+        # ====================================================================
+        # 🟢 CRITICAL FIX: Gemini doesn't support market orders - convert to limit
+        if exchange_id == EXCHANGE_GEMINI and order_type == 'market':
             logger.warning(f"   ⚠️ Gemini doesn't support market orders - converting to limit order")
             # Get current price for limit order
             ticker = await self.fetch_ticker(exchange_id, symbol)
@@ -168,16 +189,22 @@ class CoinbaseGeminiExchangeManager:
             order_type = 'limit'
             logger.info(f"   💡 Converted to limit order: {side} @ ${price:.4f}")
         
-        # For Coinbase, remove invalid params (same as BTC script approach)
-        if exchange_id == 'coinbase' and params:
+        # ====================================================================
+        # 🔵 COINBASE-SPECIFIC: Parameter cleanup
+        # ====================================================================
+        # 🔵 For Coinbase, remove invalid params (same as BTC script approach)
+        if exchange_id == EXCHANGE_COINBASE and params:
             order_params = params.copy()
-            # Remove params that cause errors (same approach as BTC script)
+            # 🔵 Remove params that cause errors (same approach as BTC script)
             order_params.pop('portfolio_id', None)
             order_params.pop('retail_portfolio_id', None)
         else:
             order_params = params
         
-        # Apply precision requirements from market info
+        # ====================================================================
+        # ⚪ COMMON: Precision and validation (works for both exchanges)
+        # ====================================================================
+        # ⚪ Apply precision requirements from market info
         market_info = exchange.markets.get(symbol, {})
         if market_info:
             precision = market_info.get('precision', {})
@@ -201,7 +228,10 @@ class CoinbaseGeminiExchangeManager:
             if min_order_value < min_cost:
                 raise ValueError(f"Order value ${min_order_value:.2f} < minimum ${min_cost:.2f} for {symbol}")
         
-        # Simple direct call - exactly like BTC script that worked
+        # ====================================================================
+        # ⚪ COMMON: Order creation (works for both exchanges)
+        # ====================================================================
+        # ⚪ Simple direct call - exactly like BTC script that worked
         try:
             if order_params:
                 order = exchange.create_order(
@@ -229,8 +259,11 @@ class CoinbaseGeminiExchangeManager:
             
         except Exception as e:
             error_msg = str(e)
-            # If it's "account is not available", provide detailed diagnostics
-            if "account is not available" in error_msg.lower():
+            # ================================================================
+            # 🔵 COINBASE-SPECIFIC: Error handling
+            # ================================================================
+            # 🔵 If it's "account is not available", provide detailed diagnostics
+            if "account is not available" in error_msg.lower() and exchange_id == EXCHANGE_COINBASE:
                 logger.error(f"   ❌ Coinbase account error for {symbol} ({side}):")
                 logger.error(f"      Error: {error_msg}")
                 logger.error(f"   ⚠️ Possible causes:")
@@ -276,11 +309,14 @@ class CoinbaseGeminiExchangeManager:
         # USD/USDC/USDT are interchangeable - no conversion cost
         return 0.0
     
+    # ============================================================================
+    # 🔵 COINBASE-SPECIFIC: Conversion API (not used currently)
+    # ============================================================================
     async def _try_coinbase_conversion_api(
         self, exchange, from_currency: str, to_currency: str, amount: float
     ) -> bool:
         """
-        Try Coinbase conversion API endpoint
+        🔵 Try Coinbase conversion API endpoint
         Note: This may only work with Coinbase Exchange API (Pro), not Advanced Trade
         """
         try:
@@ -361,11 +397,16 @@ class CoinbaseGeminiExchangeManager:
         Args:
             exchange_id: 'coinbase' or 'gemini'
             currency: Currency code (e.g., 'API3', 'ZEC', 'XRP')
-            network: Network parameter (e.g., 'ETH', 'ZEC', 'XRP') - required for ERC-20 tokens on Coinbase
+            network: 🔵 Network parameter (e.g., 'ETH', 'ZEC', 'XRP') - required for ERC-20 tokens on Coinbase
             params: Additional parameters dict (will be merged with network)
         """
         exchange = self.get_exchange(exchange_id)
-        try:
+        
+        # ====================================================================
+        # 🔵 COINBASE-SPECIFIC: Network parameter handling
+        # ====================================================================
+        if exchange_id == EXCHANGE_COINBASE:
+            # 🔵 Add network if provided (required for ERC-20 tokens on Coinbase)
             # Build params dict
             fetch_params = {}
             if params:
@@ -426,9 +467,12 @@ class CoinbaseGeminiExchangeManager:
             logger.error(f"Error fetching deposit address for {currency} on {exchange_id}: {e}")
             raise
     
+    # ============================================================================
+    # 🔵 COINBASE-SPECIFIC: Exchange API signature generation
+    # ============================================================================
     def _generate_coinbase_exchange_signature(self, timestamp: str, method: str, 
-                                             request_path: str, body: str = '') -> str:
-        """Generate Coinbase Exchange API signature
+                                              request_path: str, body: str = '') -> str:
+        """🔵 Generate Coinbase Exchange API signature
         
         Args:
             timestamp: Unix timestamp as string
@@ -600,8 +644,11 @@ class CoinbaseGeminiExchangeManager:
             logger.info(f"   Amount: {amount}")
             logger.info(f"   Address: {address[:10]}...{address[-6:]}")
             
-            # For Coinbase, use Exchange API directly (bypasses CCXT's Send Money API)
-            if exchange_id == 'coinbase':
+            # ====================================================================
+            # 🔵 COINBASE-SPECIFIC: Use Exchange API directly
+            # ====================================================================
+            # 🔵 For Coinbase, use Exchange API directly (bypasses CCXT's Send Money API)
+            if exchange_id == EXCHANGE_COINBASE:
                 # Use Exchange API for withdrawals
                 return await self._coinbase_exchange_withdraw(
                     currency=currency,
@@ -931,12 +978,14 @@ class CoinbaseGeminiExchangeManager:
     async def close(self):
         """Close exchange connections"""
         try:
+            # 🔵 Close Coinbase connection
             if self.coinbase and hasattr(self.coinbase, 'close'):
                 await self.coinbase.close()
         except Exception as e:
             logger.warning(f"Error closing Coinbase: {e}")
         
         try:
+            # 🟢 Close Gemini connection
             if self.gemini and hasattr(self.gemini, 'close'):
                 await self.gemini.close()
         except Exception as e:

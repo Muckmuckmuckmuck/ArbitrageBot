@@ -3,6 +3,8 @@
 Gemini Market Making Engine
 Implements passive market-making strategy on Gemini exchange
 Top 10 pairs optimized for maximum profitability
+
+EXCHANGE: 🟢 GEMINI ONLY - This entire module is for Gemini market making
 """
 
 import asyncio
