@@ -617,9 +617,9 @@ class GeminiMarketMakingEngine:
                         if sell_amount is None or sell_amount <= 0:
                             logger.error(f"   🟢 [GEMINI] ❌ Invalid sell_amount: {sell_amount}")
                             raise ValueError(f"Invalid sell_amount: {sell_amount}")
-                    if sell_price is None or sell_price <= 0:
-                        logger.error(f"   🟢 [GEMINI] ❌ Invalid sell_price: {sell_price}")
-                        raise ValueError(f"Invalid sell_price: {sell_price}")
+                        if sell_price is None or sell_price <= 0:
+                            logger.error(f"   🟢 [GEMINI] ❌ Invalid sell_price: {sell_price}")
+                            raise ValueError(f"Invalid sell_price: {sell_price}")
                     
                     logger.debug(f"   🟢 [GEMINI] {pair}: Creating sell order - amount={sell_amount:.6f}, price=${sell_price:.6f}")
                     sell_order = await self.exchange_manager.create_order(
