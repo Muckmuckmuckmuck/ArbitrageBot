@@ -238,8 +238,31 @@ class CoinbaseGeminiExchangeManager:
                     )
                     
                     if order:
-                        logger.info(f"   ✅ Direct pair conversion successful: {pair}")
-                        return True
+                        # Wait for order to fill and verify
+                        order_id = order.get('id')
+                        if order_id:
+                            max_wait = 30
+                            for _ in range(max_wait):
+                                await asyncio.sleep(1)
+                                try:
+                                    order_status = await self.fetch_order(exchange_id, order_id, pair)
+                                    status = order_status.get('status', 'unknown')
+                                    if status in ['closed', 'filled']:
+                                        # Verify conversion
+                                        balance_check = await self.fetch_balance(exchange_id)
+                                        final_balance = balance_check.get('free', {}).get(to_currency, 0)
+                                        if final_balance > 0:
+                                            logger.info(f"   ✅ Direct pair conversion successful: {pair} → {final_balance:.2f} {to_currency}")
+                                            return True
+                                    elif status == 'canceled':
+                                        break
+                                except Exception as check_error:
+                                    logger.debug(f"   Error checking order status: {check_error}")
+                            
+                            # If we get here, order didn't fill - log it
+                            logger.warning(f"   ⚠️ Direct pair order didn't fill within timeout")
+                        else:
+                            logger.warning(f"   ⚠️ Direct pair order placed but no order ID")
                 except Exception as e:
                     logger.debug(f"   Direct pair {pair} failed: {e}")
                     break
@@ -275,6 +298,8 @@ class CoinbaseGeminiExchangeManager:
                         if order_amount > 0 and price > 0:
                             limit_price = price * (0.995 if side == 'sell' else 1.005)
                             
+                            logger.info(f"   📝 Placing BTC sell order: {order_amount:.8f} BTC @ {limit_price:.2f} {to_currency}")
+                            
                             order = await self.create_order(
                                 exchange_id=exchange_id,
                                 symbol=pair_to_use,
@@ -285,37 +310,78 @@ class CoinbaseGeminiExchangeManager:
                             )
                             
                             if order:
-                                # Wait for order to fill
                                 order_id = order.get('id')
                                 if order_id:
+                                    logger.info(f"   ✅ Order placed: {order_id}, waiting for fill...")
                                     max_wait = 30
-                                    for _ in range(max_wait):
+                                    for wait_count in range(max_wait):
                                         await asyncio.sleep(1)
-                                        order_status = await self.fetch_order(exchange_id, order_id, pair_to_use)
-                                        status = order_status.get('status', 'unknown')
-                                        if status in ['closed', 'filled']:
-                                            # Verify we actually have the target currency
-                                            balance_check = await self.fetch_balance(exchange_id)
-                                            final_balance = balance_check.get('free', {}).get(to_currency, 0)
-                                            if final_balance > 0:
-                                                logger.info(f"   ✅ BTC conversion successful: {btc_balance:.8f} BTC → {final_balance:.2f} {to_currency}")
-                                                return True
-                                            else:
-                                                logger.warning(f"   ⚠️ Order filled but no {to_currency} in balance yet, waiting...")
-                                                await asyncio.sleep(2)
-                                                # Check once more
+                                        try:
+                                            order_status = await self.fetch_order(exchange_id, order_id, pair_to_use)
+                                            status = order_status.get('status', 'unknown')
+                                            
+                                            if status in ['closed', 'filled']:
+                                                # Verify we actually have the target currency
                                                 balance_check = await self.fetch_balance(exchange_id)
                                                 final_balance = balance_check.get('free', {}).get(to_currency, 0)
                                                 if final_balance > 0:
-                                                    logger.info(f"   ✅ BTC conversion verified: {final_balance:.2f} {to_currency}")
+                                                    logger.info(f"   ✅ BTC conversion successful: {btc_balance:.8f} BTC → {final_balance:.2f} {to_currency}")
                                                     return True
-                                        elif status == 'canceled':
-                                            break
-                                
-                                logger.info(f"   ✅ BTC conversion order placed")
-                                return True
+                                                else:
+                                                    logger.warning(f"   ⚠️ Order filled but no {to_currency} in balance yet, waiting...")
+                                                    await asyncio.sleep(2)
+                                                    # Check once more
+                                                    balance_check = await self.fetch_balance(exchange_id)
+                                                    final_balance = balance_check.get('free', {}).get(to_currency, 0)
+                                                    if final_balance > 0:
+                                                        logger.info(f"   ✅ BTC conversion verified: {final_balance:.2f} {to_currency}")
+                                                        return True
+                                                    else:
+                                                        logger.error(f"   ❌ Order filled but still no {to_currency} in balance")
+                                                        return False
+                                            elif status == 'canceled':
+                                                logger.warning(f"   ⚠️ BTC conversion order was canceled")
+                                                break
+                                            elif status == 'open':
+                                                if wait_count % 5 == 0:  # Log every 5 seconds
+                                                    filled = order_status.get('filled', 0)
+                                                    logger.info(f"   ⏳ Order still open... ({wait_count}s elapsed, filled: {filled:.8f})")
+                                        except Exception as check_error:
+                                            logger.debug(f"   Error checking order status: {check_error}")
+                                    
+                                    # Timeout - check one more time
+                                    try:
+                                        order_status = await self.fetch_order(exchange_id, order_id, pair_to_use)
+                                        status = order_status.get('status', 'unknown')
+                                        if status in ['closed', 'filled']:
+                                            balance_check = await self.fetch_balance(exchange_id)
+                                            final_balance = balance_check.get('free', {}).get(to_currency, 0)
+                                            if final_balance > 0:
+                                                logger.info(f"   ✅ BTC conversion successful (timeout check): {final_balance:.2f} {to_currency}")
+                                                return True
+                                    except:
+                                        pass
+                                    
+                                    logger.error(f"   ❌ BTC conversion order did not fill within {max_wait} seconds")
+                                    # Try to cancel the order
+                                    try:
+                                        await self.cancel_order(exchange_id, order_id, pair_to_use)
+                                        logger.info(f"   ✅ Canceled unfilled order")
+                                    except:
+                                        pass
+                                    return False
+                                else:
+                                    logger.error(f"   ❌ No order ID returned from order creation")
+                                    return False
+                            else:
+                                logger.error(f"   ❌ Failed to create BTC conversion order")
+                                return False
+                        else:
+                            logger.error(f"   ❌ Invalid order amount or price: amount={order_amount}, price={price}")
                     except Exception as e:
-                        logger.debug(f"   Direct BTC conversion failed: {e}")
+                        logger.error(f"   ❌ Direct BTC conversion failed: {e}")
+                        import traceback
+                        logger.error(f"   Traceback: {traceback.format_exc()}")
         
         # Method: Bridge currency (USD/USDC/USDT → BTC → GBP/EUR)
         # MUST complete both steps to avoid getting stuck
