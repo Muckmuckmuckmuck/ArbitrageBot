@@ -147,8 +147,26 @@ class CoinbaseGeminiExchangeManager:
         """
         Create order on exchange - simplified to match working BTC purchase script
         Uses exact same approach that worked for BTC/USDC purchase
+        
+        CRITICAL: Gemini only supports limit orders, not market orders
         """
         exchange = self.get_exchange(exchange_id)
+        
+        # CRITICAL FIX: Gemini doesn't support market orders
+        if exchange_id == 'gemini' and order_type == 'market':
+            logger.warning(f"   ⚠️ Gemini doesn't support market orders - converting to limit order")
+            # Get current price for limit order
+            ticker = await self.fetch_ticker(exchange_id, symbol)
+            current_price = ticker.get('bid' if side == 'sell' else 'ask') or ticker.get('last', 0)
+            if current_price <= 0:
+                raise ValueError(f"Cannot convert market order to limit: no price available for {symbol}")
+            # Use limit order slightly worse than market to ensure fill
+            if side == 'buy':
+                price = current_price * 1.001  # 0.1% above market
+            else:
+                price = current_price * 0.999  # 0.1% below market
+            order_type = 'limit'
+            logger.info(f"   💡 Converted to limit order: {side} @ ${price:.4f}")
         
         # For Coinbase, remove invalid params (same as BTC script approach)
         if exchange_id == 'coinbase' and params:
@@ -158,6 +176,26 @@ class CoinbaseGeminiExchangeManager:
             order_params.pop('retail_portfolio_id', None)
         else:
             order_params = params
+        
+        # Apply precision requirements from market info
+        market_info = exchange.markets.get(symbol, {})
+        if market_info:
+            precision = market_info.get('precision', {})
+            amount_precision = precision.get('amount', 8)
+            price_precision = precision.get('price', 8)
+            
+            # Round amount and price to exchange precision
+            amount = round(amount, amount_precision)
+            if price is not None:
+                price = round(price, price_precision)
+        
+        # Validate minimum order size
+        if price is not None:
+            min_order_value = amount * price
+            # Check market minimums (typically $5-10)
+            min_cost = market_info.get('limits', {}).get('cost', {}).get('min', 5.0)
+            if min_order_value < min_cost:
+                raise ValueError(f"Order value ${min_order_value:.2f} < minimum ${min_cost:.2f} for {symbol}")
         
         # Simple direct call - exactly like BTC script that worked
         try:

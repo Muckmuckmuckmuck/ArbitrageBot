@@ -92,8 +92,13 @@ class DualStrategyBot:
                 # Wait before next scan
                 await asyncio.sleep(60)  # Scan every 60 seconds
                 
+            except asyncio.CancelledError:
+                logger.info("   🛑 Arbitrage strategy cancelled")
+                break
             except Exception as e:
                 logger.error(f"❌ Error in arbitrage strategy: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 await asyncio.sleep(60)
     
     async def run_market_making_strategy(self):
@@ -102,8 +107,12 @@ class DualStrategyBot:
         
         try:
             await self.market_making_engine.run_market_making_loop()
+        except asyncio.CancelledError:
+            logger.info("   🛑 Market-making strategy cancelled")
         except Exception as e:
             logger.error(f"❌ Error in market-making strategy: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     async def run(self):
         """Run both strategies concurrently"""
@@ -113,31 +122,58 @@ class DualStrategyBot:
         arbitrage_task = asyncio.create_task(self.run_arbitrage_strategy())
         market_making_task = asyncio.create_task(self.run_market_making_strategy())
         
-        # Wait for shutdown signal
+        # Wait for shutdown signal or any task to complete/fail
         try:
-            await self.shutdown_event.wait()
+            # Use asyncio.wait to monitor both tasks
+            done, pending = await asyncio.wait(
+                [arbitrage_task, market_making_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            
+            # If a task completed (or failed), log it
+            for task in done:
+                try:
+                    await task  # This will raise if task failed
+                except Exception as e:
+                    logger.error(f"❌ Strategy task failed: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+            
+            # If we're still running, wait for shutdown signal
+            if self.running:
+                await self.shutdown_event.wait()
+                
         except KeyboardInterrupt:
             logger.info("\n🛑 Shutdown signal received...")
-        
-        # Stop both strategies
-        self.running = False
-        self.market_making_engine.stop()
-        
-        # Cancel tasks
-        arbitrage_task.cancel()
-        market_making_task.cancel()
-        
-        try:
-            await arbitrage_task
-        except asyncio.CancelledError:
-            pass
-        
-        try:
-            await market_making_task
-        except asyncio.CancelledError:
-            pass
-        
-        logger.info("✅ Both strategies stopped")
+        except Exception as e:
+            logger.error(f"❌ Error in dual strategy runner: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+        finally:
+            # Stop both strategies
+            self.running = False
+            self.market_making_engine.stop()
+            
+            # Cancel all tasks
+            arbitrage_task.cancel()
+            market_making_task.cancel()
+            
+            # Wait for cancellation
+            try:
+                await arbitrage_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.debug(f"Arbitrage task error during cleanup: {e}")
+            
+            try:
+                await market_making_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.debug(f"Market making task error during cleanup: {e}")
+            
+            logger.info("✅ Both strategies stopped")
     
     def stop(self):
         """Stop the bot"""

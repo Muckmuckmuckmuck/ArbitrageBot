@@ -181,9 +181,33 @@ class GeminiMarketMakingEngine:
             base_currency = pair.split('/')[0]
             order_amount = (self.capital_per_pair * self.order_size_percent) / current_price
             
+            # Get market info for precision requirements
+            exchange = self.exchange_manager.get_exchange('gemini')
+            market_info = exchange.markets.get(pair, {})
+            
+            # Apply precision requirements (if available from market info)
+            amount_precision = market_info.get('precision', {}).get('amount', 8)
+            price_precision = market_info.get('precision', {}).get('price', 8)
+            
+            # Round amounts and prices to exchange precision
+            order_amount = round(order_amount, amount_precision)
+            if order_amount <= 0:
+                logger.debug(f"   ⚠️ Order amount too small after rounding: {order_amount}")
+                return False
+            
             # Calculate grid prices
             buy_price = current_price * (1 - self.grid_spacing_percent / 100)
             sell_price = current_price * (1 + self.grid_spacing_percent / 100)
+            
+            # Round prices to exchange precision
+            buy_price = round(buy_price, price_precision)
+            sell_price = round(sell_price, price_precision)
+            
+            # Check minimum order size (typically $5-10 for most pairs)
+            min_order_value = order_amount * buy_price
+            if min_order_value < 5.0:  # Minimum $5 order
+                logger.debug(f"   ⚠️ Order value ${min_order_value:.2f} < minimum $5.00")
+                return False
             
             # Check inventory limits
             inventory = await self.get_inventory_balance(base_currency)
@@ -323,16 +347,21 @@ class GeminiMarketMakingEngine:
                     # Get current price
                     current_price = await self.get_current_price(pair)
                     if current_price and current_price > 0:
-                        # Sell all inventory
+                        # CRITICAL: Gemini only supports limit orders, not market orders
+                        # Use limit order slightly below market to ensure fill
+                        sell_amount = inventory * 0.95  # 95% to leave buffer
+                        sell_price = current_price * 0.995  # 0.5% below market to ensure fill
+                        
                         try:
                             sell_order = await self.exchange_manager.create_order(
                                 exchange_id='gemini',
                                 symbol=pair,
-                                order_type='market',
+                                order_type='limit',  # CRITICAL: Gemini only supports limit orders
                                 side='sell',
-                                amount=inventory * 0.95  # 95% to leave buffer
+                                amount=sell_amount,
+                                price=sell_price
                             )
-                            logger.info(f"   ✅ Flattened {pair}: Sold {inventory * 0.95:.6f} {base_currency}")
+                            logger.info(f"   ✅ Flattened {pair}: Placed sell order for {sell_amount:.6f} {base_currency} @ ${sell_price:.4f}")
                         except Exception as e:
                             logger.warning(f"   ⚠️ Failed to flatten {pair}: {e}")
             
@@ -365,21 +394,24 @@ class GeminiMarketMakingEngine:
                 if time_since_flatten >= self.take_profit_interval_minutes:
                     await self.flatten_positions()
                 
-                # Process each pair
-                for pair in TOP_GEMINI_PAIRS:
-                    try:
-                        # Check and update existing orders
-                        await self.check_and_update_orders(pair)
-                        
-                        # Place new orders if needed
-                        await self.place_market_making_orders(pair)
-                        
-                        # Small delay between pairs
-                        await asyncio.sleep(0.5)
-                        
-                    except Exception as e:
-                        logger.debug(f"   Error processing {pair}: {e}")
-                        continue
+                # Process each pair (with rate limiting)
+                # Gemini rate limit: 10 req/sec, so we process 10 pairs max per second
+                pairs_per_batch = 10  # Process 10 pairs per second to stay under rate limit
+                
+                for i in range(0, len(TOP_GEMINI_PAIRS), pairs_per_batch):
+                    batch = TOP_GEMINI_PAIRS[i:i+pairs_per_batch]
+                    
+                    # Process batch concurrently
+                    tasks = []
+                    for pair in batch:
+                        tasks.append(self._process_pair_safely(pair))
+                    
+                    # Wait for batch to complete
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    
+                    # Wait 1 second between batches to respect rate limit
+                    if i + pairs_per_batch < len(TOP_GEMINI_PAIRS):
+                        await asyncio.sleep(1)
                 
                 # Wait before next update cycle
                 await asyncio.sleep(self.requote_interval_seconds)
@@ -387,6 +419,18 @@ class GeminiMarketMakingEngine:
             except Exception as e:
                 logger.error(f"   ❌ Error in market-making loop: {e}")
                 await asyncio.sleep(self.requote_interval_seconds)
+    
+    async def _process_pair_safely(self, pair: str):
+        """Process a single pair with error handling"""
+        try:
+            # Check and update existing orders
+            await self.check_and_update_orders(pair)
+            
+            # Place new orders if needed
+            await self.place_market_making_orders(pair)
+        except Exception as e:
+            logger.debug(f"   Error processing {pair}: {e}")
+            # Don't raise - continue with other pairs
     
     def stop(self):
         """Stop the market-making engine"""
