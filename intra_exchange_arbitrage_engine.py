@@ -1138,11 +1138,14 @@ class IntraExchangeArbitrageEngine:
             # Calculate total available BEFORE logging (fixes scoping error)
             total_available_usd = cash_available_usd + crypto_value_usd
             
-            logger.info(f"   💰 Balance check:")
-            logger.info(f"      Cash ({buy_quote}): {buy_balance:.2f} = ${cash_available_usd:.2f} USD equivalent")
-            logger.info(f"      Convertible (USD/USDC/USDT): ${total_convertible:.2f}")
-            logger.info(f"      Position ({base_crypto}): {base_crypto_balance:.8f} = ${crypto_value_usd:.2f} USD value")
-            logger.info(f"      Total available: ${total_available_usd:.2f}")
+            # 🔵 COINBASE / 🟢 GEMINI: Add exchange marker for balance logging
+            exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
+            
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]    💰 Balance check:")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Cash ({buy_quote}): {buy_balance:.2f} = ${cash_available_usd:.2f} USD equivalent")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Convertible (USD/USDC/USDT): ${total_convertible:.2f}")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Position ({base_crypto}): {base_crypto_balance:.8f} = ${crypto_value_usd:.2f} USD value")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Total available: ${total_available_usd:.2f}")
             
             # Determine actual position size based on available resources
             # Use 90% of available to leave buffer for fees/slippage
@@ -1185,21 +1188,24 @@ class IntraExchangeArbitrageEngine:
         if exchange_id not in ['coinbase', 'gemini']:
             raise ValueError(f"Invalid exchange ID: {exchange_id}. Must be 'coinbase' or 'gemini'")
         
+        # 🔵 COINBASE / 🟢 GEMINI: Exchange marker for logging
+        exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
+        
         logger.info("")
-        logger.info(f"💰 [{exchange_id.upper()}] STARTING TRADE EXECUTION")
-        logger.info(f"   Crypto: {opportunity.base_crypto}")
-        logger.info(f"   Strategy: Buy {opportunity.buy_pair} → Sell {opportunity.sell_pair}")
-        logger.info(f"   Expected profit: {opportunity.net_profit_percent:.3f}% (${opportunity.expected_profit_usd:.2f})")
-        logger.info(f"   Raw spread: {opportunity.raw_spread_percent:.3f}%")
-        logger.info(f"   Fees: {opportunity.fees_buy:.3f}% + {opportunity.fees_sell:.3f}%")
-        logger.info(f"   Estimated slippage: {opportunity.estimated_slippage:.3f}%")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}] 💰 STARTING TRADE EXECUTION")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    Crypto: {opportunity.base_crypto}")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    Strategy: Buy {opportunity.buy_pair} → Sell {opportunity.sell_pair}")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    Expected profit: {opportunity.net_profit_percent:.3f}% (${opportunity.expected_profit_usd:.2f})")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    Raw spread: {opportunity.raw_spread_percent:.3f}%")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    Fees: {opportunity.fees_buy:.3f}% + {opportunity.fees_sell:.3f}%")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    Estimated slippage: {opportunity.estimated_slippage:.3f}%")
         
         # CIRCUIT BREAKER CHECK
         if self.circuit_breaker_enabled and self.session_loss <= self.circuit_breaker_loss_threshold:
-            logger.warning(f"   ❌ EXECUTION BLOCKED: Circuit breaker active")
-            logger.warning(f"      Session loss: ${self.session_loss:.2f}")
-            logger.warning(f"      Threshold: ${self.circuit_breaker_loss_threshold:.2f}")
-            logger.warning(f"      Reason: Too much loss this session - protecting capital")
+            logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    ❌ EXECUTION BLOCKED: Circuit breaker active")
+            logger.warning(f"{exchange_marker} [{exchange_id.upper()}]       Session loss: ${self.session_loss:.2f}")
+            logger.warning(f"{exchange_marker} [{exchange_id.upper()}]       Threshold: ${self.circuit_breaker_loss_threshold:.2f}")
+            logger.warning(f"{exchange_marker} [{exchange_id.upper()}]       Reason: Too much loss this session - protecting capital")
             return TradeExecution(
                 exchange=exchange_id,
                 opportunity=opportunity,
@@ -1211,15 +1217,15 @@ class IntraExchangeArbitrageEngine:
                 execution_time_seconds=0,
                 status='failed'
             )
-        logger.info(f"   ✅ Circuit breaker: PASSED (session loss: ${self.session_loss:.2f})")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    ✅ Circuit breaker: PASSED (session loss: ${self.session_loss:.2f})")
         
         # STEP 1: Validate opportunity still exists (CRITICAL - opportunities disappear fast)
-        logger.info(f"   🔍 Validating opportunity still exists...")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    🔍 Validating opportunity still exists...")
         validated_opp = await self._validate_opportunity_still_exists(opportunity)
         if not validated_opp:
-            logger.warning(f"   ❌ EXECUTION BLOCKED: Opportunity disappeared")
-            logger.warning(f"      Reason: Spread changed or opportunity no longer profitable")
-            logger.warning(f"      This is normal - market moves fast, protecting against losses")
+            logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    ❌ EXECUTION BLOCKED: Opportunity disappeared")
+            logger.warning(f"{exchange_marker} [{exchange_id.upper()}]       Reason: Spread changed or opportunity no longer profitable")
+            logger.warning(f"{exchange_marker} [{exchange_id.upper()}]       This is normal - market moves fast, protecting against losses")
             return TradeExecution(
                 exchange=exchange_id,
                 opportunity=opportunity,
@@ -1232,18 +1238,18 @@ class IntraExchangeArbitrageEngine:
                 status='failed'
             )
         opportunity = validated_opp
-        logger.info(f"   ✅ Opportunity validation: PASSED (spread still profitable)")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    ✅ Opportunity validation: PASSED (spread still profitable)")
         
         # STEP 2: Check balance and get available amount (DYNAMIC POSITION SIZING)
-        logger.info(f"   💰 Checking balance sufficiency...")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    💰 Checking balance sufficiency...")
         balance_ok, available_amount = await self._check_balance_sufficient(
             exchange_id, opportunity.buy_pair, opportunity.sell_pair, opportunity.trade_size_usd
         )
         
         if not balance_ok:
-            logger.warning(f"   ❌ EXECUTION BLOCKED: Insufficient balance")
-            logger.warning(f"      Reason: Need ${opportunity.trade_size_usd * 1.1:.2f} in quote currency for buy")
-            logger.warning(f"      This trade requires sufficient balance to execute both sides")
+            logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    ❌ EXECUTION BLOCKED: Insufficient balance")
+            logger.warning(f"{exchange_marker} [{exchange_id.upper()}]       Reason: Need ${opportunity.trade_size_usd * 1.1:.2f} in quote currency for buy")
+            logger.warning(f"{exchange_marker} [{exchange_id.upper()}]       This trade requires sufficient balance to execute both sides")
             return TradeExecution(
                 exchange=exchange_id,
                 opportunity=opportunity,
@@ -1256,9 +1262,9 @@ class IntraExchangeArbitrageEngine:
                 status='failed'
             )
         
-        logger.info(f"   ✅ Balance check: PASSED (${available_amount:.2f} available)")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    ✅ Balance check: PASSED (${available_amount:.2f} available)")
         
-        logger.info(f"   ✅ ALL PRE-FLIGHT CHECKS PASSED - PROCEEDING WITH TRADE")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    ✅ ALL PRE-FLIGHT CHECKS PASSED - PROCEEDING WITH TRADE")
         
         start_time = time.time()
         buy_order_id = None
@@ -1341,11 +1347,11 @@ class IntraExchangeArbitrageEngine:
             
             # Place limit buy order (maker fee) - use exchange manager
             buy_price_limit = opportunity.buy_price * price_buffer
-            logger.info(f"   📝 Placing BUY limit order:")
-            logger.info(f"      Pair: {opportunity.buy_pair}")
-            logger.info(f"      Amount: {base_amount:.6f} {opportunity.base_crypto}")
-            logger.info(f"      Price: ${buy_price_limit:.6f} (target: ${opportunity.buy_price:.6f})")
-            logger.info(f"      Fee type: Maker (lower fee)")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]    📝 Placing BUY limit order:")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Pair: {opportunity.buy_pair}")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Amount: {base_amount:.6f} {opportunity.base_crypto}")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Price: ${buy_price_limit:.6f} (target: ${opportunity.buy_price:.6f})")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Fee type: Maker (lower fee)")
             
             buy_order = await self.exchange_manager.create_order(
                 exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
@@ -1356,7 +1362,7 @@ class IntraExchangeArbitrageEngine:
                 price=buy_price_limit
             )
             buy_order_id = buy_order.get('id')
-            logger.info(f"   ✅ Buy order placed: {buy_order_id}")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]    ✅ Buy order placed: {buy_order_id}")
             
             # Wait for fill with price chasing
             buy_order_status, actual_buy_price = await self._wait_for_order_fill_with_chase(
@@ -1439,14 +1445,14 @@ class IntraExchangeArbitrageEngine:
                 if filled < base_amount * 0.99:
                     base_amount = filled  # Adjust for partial fill
                     logger.info(f"   ⚠️ Buy partial fill: {filled:.6f} (using this amount)")
-                logger.info(f"   ✅ Buy order filled @ ${actual_buy_price:.6f}")
+                logger.info(f"{exchange_marker} [{exchange_id.upper()}]    ✅ Buy order filled @ ${actual_buy_price:.6f}")
             
             # ====================================================================
             # 🔵 COINBASE / 🟢 GEMINI: Wait for balance to update after buy
             # ====================================================================
             # CRITICAL: Exchange balance may not update immediately after order fill
             # We need to verify we actually have the crypto before selling
-            logger.info(f"   🔵 [{exchange_id.upper()}] Verifying balance after buy...")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]    Verifying balance after buy...")
             max_balance_wait = 10  # Wait up to 10 seconds for balance to update
             balance_check_interval = 0.5  # Check every 0.5 seconds
             balance_verified = False
@@ -1469,34 +1475,33 @@ class IntraExchangeArbitrageEngine:
                         # We need at least 95% of what we bought (account for fees/precision)
                         if actual_available_amount >= base_amount * 0.95:
                             balance_verified = True
-                            logger.info(f"   🔵 [{exchange_id.upper()}] ✅ Balance verified: {actual_available_amount:.6f} {base_crypto} available")
+                            logger.info(f"{exchange_marker} [{exchange_id.upper()}]    ✅ Balance verified: {actual_available_amount:.6f} {base_crypto} available")
                             break
                         else:
-                            logger.debug(f"   🔵 [{exchange_id.upper()}] Balance not ready: {actual_available_amount:.6f} < {base_amount * 0.95:.6f} (attempt {attempt + 1})")
+                            logger.debug(f"{exchange_marker} [{exchange_id.upper()}]    Balance not ready: {actual_available_amount:.6f} < {base_amount * 0.95:.6f} (attempt {attempt + 1})")
                     else:
-                        logger.debug(f"   🔵 [{exchange_id.upper()}] {base_crypto} not in balance yet (attempt {attempt + 1})")
+                        logger.debug(f"{exchange_marker} [{exchange_id.upper()}]    {base_crypto} not in balance yet (attempt {attempt + 1})")
                 except Exception as e:
-                    logger.debug(f"   🔵 [{exchange_id.upper()}] Balance check error: {e}")
+                    logger.debug(f"{exchange_marker} [{exchange_id.upper()}]    Balance check error: {e}")
             
             if not balance_verified:
-                logger.warning(f"   🔵 [{exchange_id.upper()}] ⚠️ Balance not updated after {max_balance_wait}s")
-                logger.warning(f"   🔵 [{exchange_id.upper()}] Available: {actual_available_amount:.6f} {base_crypto}, Needed: {base_amount:.6f}")
-                logger.warning(f"   🔵 [{exchange_id.upper()}] Proceeding with sell order anyway (may fail if balance truly insufficient)")
+                logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    ⚠️ Balance not updated after {max_balance_wait}s")
+                logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    Available: {actual_available_amount:.6f} {base_crypto}, Needed: {base_amount:.6f}")
+                logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    Proceeding with sell order anyway (may fail if balance truly insufficient)")
             else:
                 # Use actual available amount (may be slightly less due to fees)
                 if actual_available_amount < base_amount:
-                    logger.info(f"   🔵 [{exchange_id.upper()}] Adjusting sell amount: {base_amount:.6f} → {actual_available_amount:.6f} (fees/precision)")
+                    logger.info(f"{exchange_marker} [{exchange_id.upper()}]    Adjusting sell amount: {base_amount:.6f} → {actual_available_amount:.6f} (fees/precision)")
                     base_amount = actual_available_amount
             
             # Place limit sell order (maker fee) - use exchange manager
             sell_price_limit = opportunity.sell_price * 0.999  # Slightly below to ensure fill
             # 🔵 COINBASE / 🟢 GEMINI: Place sell order with comprehensive logging
-            exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
-            logger.info(f"   {exchange_marker} [{exchange_id.upper()}] 📝 Placing SELL limit order:")
-            logger.info(f"      Pair: {opportunity.sell_pair}")
-            logger.info(f"      Amount: {base_amount:.6f} {opportunity.base_crypto}")
-            logger.info(f"      Price: ${sell_price_limit:.6f} (target: ${opportunity.sell_price:.6f})")
-            logger.info(f"      Fee type: Maker (lower fee)")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]    📝 Placing SELL limit order:")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Pair: {opportunity.sell_pair}")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Amount: {base_amount:.6f} {opportunity.base_crypto}")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Price: ${sell_price_limit:.6f} (target: ${opportunity.sell_price:.6f})")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Fee type: Maker (lower fee)")
             
             try:
                 sell_order = await self.exchange_manager.create_order(
@@ -1551,7 +1556,7 @@ class IntraExchangeArbitrageEngine:
                 # We have crypto from buy, but couldn't sell - mark as partial
                 status = 'partial'
             else:
-                logger.info(f"   ✅ Sell order filled @ ${actual_sell_price:.6f}")
+                logger.info(f"{exchange_marker} [{exchange_id.upper()}]    ✅ Sell order filled @ ${actual_sell_price:.6f}")
             
             # Calculate actual profit
             if buy_order_status and buy_order_status.get('status') in ['closed', 'filled'] and \
