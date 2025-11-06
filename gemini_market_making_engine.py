@@ -517,20 +517,45 @@ class GeminiMarketMakingEngine:
             # Place buy order (if not over-inventoried)
             # 🔵 CRITICAL FIX: Ensure inventory_value is not None before comparison
             if inventory_value is not None and inventory_value < max_inventory:
-                # 🟢 CRITICAL: Check balance before placing buy order
+                # 🟢 CRITICAL: Check balance and dynamically size order
                 quote_currency = pair.split('/')[1]
                 quote_balance = await self.get_inventory_balance(quote_currency)
                 if quote_balance is None:
                     quote_balance = 0.0
                 
-                required_quote = order_amount * buy_price
-                # Add 5% buffer for fees and price movement
-                required_with_buffer = required_quote * 1.05
+                # Calculate maximum order amount based on available balance
+                # Reserve 5% buffer for fees and price movement
+                available_for_order = quote_balance / 1.05
+                max_order_value = available_for_order
+                max_order_amount = max_order_value / buy_price if buy_price > 0 else 0
                 
-                if quote_balance < required_with_buffer:
-                    logger.info(f"   🟢 [GEMINI] ⏭️ Skipping buy order for {pair} - insufficient {quote_currency} balance: ${quote_balance:.2f} < required ${required_with_buffer:.2f} (order: ${required_quote:.2f})")
+                # Use the smaller of: desired order_amount or max_order_amount based on balance
+                if max_order_amount > 0 and max_order_amount < order_amount:
+                    # Adjust order amount to fit available balance
+                    original_amount = order_amount
+                    order_amount = max_order_amount
+                    logger.info(f"   🟢 [GEMINI] {pair}: Adjusting order size to fit balance: {original_amount:.6f} → {order_amount:.6f} (Balance: ${quote_balance:.2f} {quote_currency})")
+                    
+                    # Re-check minimum order size after adjustment
+                    min_order_value = order_amount * buy_price
+                    if min_order_value < min_cost:
+                        logger.info(f"   🟢 [GEMINI] ⏭️ Skipping buy order for {pair} - adjusted order value ${min_order_value:.2f} < minimum ${min_cost:.2f}")
+                        order_amount = 0  # Skip order
+                    else:
+                        # Round to precision
+                        order_amount = round(order_amount, amount_precision)
+                        if order_amount <= 0:
+                            logger.info(f"   🟢 [GEMINI] ⏭️ Skipping buy order for {pair} - order amount rounded to 0")
+                            order_amount = 0  # Skip order
+                elif max_order_amount >= order_amount:
+                    # Have enough balance for full order
+                    logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE BUY ORDER... (Balance: ${quote_balance:.2f} {quote_currency}, Required: ${order_amount * buy_price:.2f})")
                 else:
-                    logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE BUY ORDER... (Balance: ${quote_balance:.2f} {quote_currency}, Required: ${required_quote:.2f})")
+                    # Not enough balance even for minimum order
+                    logger.info(f"   🟢 [GEMINI] ⏭️ Skipping buy order for {pair} - insufficient {quote_currency} balance: ${quote_balance:.2f} < minimum required ${min_cost:.2f}")
+                    order_amount = 0  # Skip order
+                
+                if order_amount > 0:
                     try:
                         # 🔵 CRITICAL FIX: Validate order parameters before creating order
                         if order_amount is None or order_amount <= 0:
@@ -542,34 +567,34 @@ class GeminiMarketMakingEngine:
                         
                         logger.debug(f"   🟢 [GEMINI] {pair}: Creating buy order - amount={order_amount:.6f}, price=${buy_price:.6f}")
                         buy_order = await self.exchange_manager.create_order(
-                        exchange_id='gemini',
-                        symbol=pair,
-                        order_type='limit',
-                        side='buy',
-                        amount=order_amount,
-                        price=buy_price
-                    )
-                    logger.debug(f"   🟢 [GEMINI] {pair}: Buy order response = {buy_order}")
-                    
-                    if buy_order and buy_order.get('id'):
-                        buy_order_id = buy_order.get('id')
-                        buy_mm_order = MarketMakingOrder(
-                            pair=pair,
+                            exchange_id='gemini',
+                            symbol=pair,
+                            order_type='limit',
                             side='buy',
-                            order_id=buy_order_id,
-                            price=buy_price,
                             amount=order_amount,
-                            status='open'
+                            price=buy_price
                         )
-                        self.active_orders[pair].append(buy_mm_order)
-                        orders_placed += 1
-                        logger.info(f"   🟢 [GEMINI] ✅✅✅ BUY ORDER PLACED SUCCESSFULLY: {pair} @ ${buy_price:.4f} for {order_amount:.6f} (${order_amount * buy_price:.2f}) | Order ID: {buy_order_id}")
-                    else:
-                        logger.warning(f"   🟢 [GEMINI] ⚠️ Buy order creation returned no ID: {buy_order}")
-                except Exception as e:
-                    logger.error(f"   🟢 [GEMINI] ❌ FAILED TO PLACE BUY ORDER for {pair}: {type(e).__name__}: {e}")
-                    import traceback
-                    logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
+                        logger.debug(f"   🟢 [GEMINI] {pair}: Buy order response = {buy_order}")
+                        
+                        if buy_order and buy_order.get('id'):
+                            buy_order_id = buy_order.get('id')
+                            buy_mm_order = MarketMakingOrder(
+                                pair=pair,
+                                side='buy',
+                                order_id=buy_order_id,
+                                price=buy_price,
+                                amount=order_amount,
+                                status='open'
+                            )
+                            self.active_orders[pair].append(buy_mm_order)
+                            orders_placed += 1
+                            logger.info(f"   🟢 [GEMINI] ✅✅✅ BUY ORDER PLACED SUCCESSFULLY: {pair} @ ${buy_price:.4f} for {order_amount:.6f} (${order_amount * buy_price:.2f}) | Order ID: {buy_order_id}")
+                        else:
+                            logger.warning(f"   🟢 [GEMINI] ⚠️ Buy order creation returned no ID: {buy_order}")
+                    except Exception as e:
+                        logger.error(f"   🟢 [GEMINI] ❌ FAILED TO PLACE BUY ORDER for {pair}: {type(e).__name__}: {e}")
+                        import traceback
+                        logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
             else:
                 inventory_value_str = f"${inventory_value:.2f}" if inventory_value is not None else "None"
                 logger.info(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping buy order - inventory {inventory_value_str} >= max ${max_inventory:.2f}")
