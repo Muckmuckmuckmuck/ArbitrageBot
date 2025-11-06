@@ -208,15 +208,33 @@ class CoinbaseMarketMakingEngine:
         try:
             logger.info(f"   🔵 [COINBASE] 🔍 PROCESSING {pair}...")
             
-            # Check volume
+            # Get current price first (needed for volume calculation)
+            current_price = await self.get_current_price(pair)
+            if current_price is None or current_price <= 0:
+                logger.warning(f"   🔵 [COINBASE] ⚠️ Skipping {pair} - invalid price: {current_price}")
+                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'invalid_price'}
+            
+            # Check volume (optional - major pairs like BTC/USD always have volume)
+            # Only skip if we can actually verify volume is too low
             try:
                 ticker = await self.exchange_manager.fetch_ticker('coinbase', pair)
-                volume_24h = ticker.get('quoteVolume', 0) or (ticker.get('volume', 0) * ticker.get('last', 0))
-                if volume_24h < 10000:  # Less than $10k volume
+                # Try multiple ways to get volume
+                volume_24h = ticker.get('quoteVolume') or ticker.get('quote_volume')
+                if not volume_24h:
+                    # Calculate from base volume
+                    base_volume = ticker.get('volume') or ticker.get('baseVolume')
+                    last_price = ticker.get('last') or ticker.get('close') or current_price
+                    if base_volume and last_price:
+                        volume_24h = base_volume * last_price
+                
+                # Only skip if we have volume data AND it's actually low
+                # Major pairs (BTC, ETH, etc.) always have volume, so don't skip if volume is None/0
+                if volume_24h and volume_24h > 0 and volume_24h < 10000:
                     logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - low volume: ${volume_24h:.0f}")
                     return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'low_volume'}
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"   🔵 [COINBASE] Volume check failed for {pair}: {e} - continuing anyway")
+                pass  # Continue if volume check fails - major pairs have volume
             
             # Get spread
             spread = await self.get_spread(pair)
@@ -224,12 +242,6 @@ class CoinbaseMarketMakingEngine:
                 spread_msg = f"{spread:.3f}%" if spread is not None else "None"
                 logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - spread {spread_msg} < minimum {self.min_spread_percent:.2f}%")
                 return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'spread_too_tight'}
-            
-            # Get current price
-            current_price = await self.get_current_price(pair)
-            if current_price is None or current_price <= 0:
-                logger.warning(f"   🔵 [COINBASE] ⚠️ Skipping {pair} - invalid price: {current_price}")
-                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'invalid_price'}
             
             # 🔵 DYNAMIC: Adjust grid spacing based on spread (50% of spread, min 0.15%, max 0.5%)
             dynamic_spacing = min(max(spread * 0.5, 0.15), 0.5)
@@ -241,8 +253,19 @@ class CoinbaseMarketMakingEngine:
             exchange = self.exchange_manager.get_exchange('coinbase')
             market_info = exchange.markets.get(pair, {})
             precision_data = market_info.get('precision', {})
-            amount_precision = int(precision_data.get('amount', 8)) if precision_data.get('amount') else 8
-            price_precision = int(precision_data.get('price', 8)) if precision_data.get('price') else 8
+            
+            # 🔵 CRITICAL: Ensure precision is never 0 (would cause rounding to $0.00)
+            amount_precision_val = precision_data.get('amount', 8)
+            if amount_precision_val:
+                amount_precision = max(int(amount_precision_val), 1)  # At least 1 decimal place
+            else:
+                amount_precision = 8  # Default to 8
+            
+            price_precision_val = precision_data.get('price', 8)
+            if price_precision_val:
+                price_precision = max(int(price_precision_val), 1)  # At least 1 decimal place
+            else:
+                price_precision = 8  # Default to 8
             
             limits = market_info.get('limits', {})
             min_amount = limits.get('amount', {}).get('min', 0) or 0
@@ -435,15 +458,33 @@ class CoinbaseMarketMakingEngine:
         try:
             logger.info("   🔵 [COINBASE] 🔄 FLATTENING POSITIONS (Take Profit)...")
             
+            exchange = self.exchange_manager.get_exchange('coinbase')
+            flattened_count = 0
+            
             for pair in self.available_pairs:
                 base_currency = pair.split('/')[0]
                 inventory = await self.get_inventory_balance(base_currency)
                 
-                if inventory > 0:
+                if inventory and inventory > 0:
                     current_price = await self.get_current_price(pair)
                     if current_price and current_price > 0:
+                        # Check if position is large enough to flatten (must meet minimum order size)
+                        market_info = exchange.markets.get(pair, {})
+                        limits = market_info.get('limits', {})
+                        min_cost = limits.get('cost', {}).get('min', 5.0) or 5.0
+                        
+                        position_value = inventory * current_price
+                        if position_value < min_cost:
+                            logger.debug(f"   🔵 [COINBASE] Skipping flatten {pair} - position value ${position_value:.2f} < minimum ${min_cost:.2f}")
+                            continue
+                        
                         sell_amount = inventory * 0.95  # 95% to leave buffer
                         sell_price = current_price * 0.995  # 0.5% below market to ensure fill
+                        
+                        # Ensure order meets minimum
+                        if sell_amount * sell_price < min_cost:
+                            logger.debug(f"   🔵 [COINBASE] Skipping flatten {pair} - order value ${sell_amount * sell_price:.2f} < minimum ${min_cost:.2f}")
+                            continue
                         
                         try:
                             sell_order = await self.exchange_manager.create_order(
@@ -455,6 +496,7 @@ class CoinbaseMarketMakingEngine:
                                 price=sell_price
                             )
                             logger.info(f"   🔵 [COINBASE] ✅ FLATTENED {pair}: Placed sell order for {sell_amount:.6f} {base_currency} @ ${sell_price:.4f}")
+                            flattened_count += 1
                         except Exception as e:
                             logger.warning(f"   🔵 [COINBASE] ⚠️ Failed to flatten {pair}: {e}")
             
@@ -462,7 +504,7 @@ class CoinbaseMarketMakingEngine:
             for pair in self.available_pairs:
                 await self.cancel_pair_orders(pair)
             
-            logger.info(f"   🔵 [COINBASE] ✅ Flattened positions, canceled all orders")
+            logger.info(f"   🔵 [COINBASE] ✅ Flattened {flattened_count} positions, canceled all orders")
             self.last_flatten_time = datetime.now()
         except Exception as e:
             logger.error(f"   🔵 [COINBASE] ❌ Error flattening positions: {e}")
