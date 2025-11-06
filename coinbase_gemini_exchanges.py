@@ -405,18 +405,20 @@ class CoinbaseGeminiExchangeManager:
         # ====================================================================
         # 🔵 COINBASE-SPECIFIC: Network parameter handling
         # ====================================================================
-        if exchange_id == EXCHANGE_COINBASE:
-            # 🔵 Add network if provided (required for ERC-20 tokens on Coinbase)
-            # Build params dict
-            fetch_params = {}
-            if params:
-                fetch_params.update(params)
-            
-            # Add network if provided (required for ERC-20 tokens on Coinbase)
-            if network:
-                fetch_params['network'] = network
-                logger.info(f"   Using network: {network}")
-            
+        # Build params dict
+        fetch_params = {}
+        if params:
+            fetch_params.update(params)
+        
+        # 🔵 Add network if provided (required for ERC-20 tokens on Coinbase)
+        if exchange_id == EXCHANGE_COINBASE and network:
+            fetch_params['network'] = network
+            logger.info(f"   Using network: {network}")
+        
+        # ====================================================================
+        # ⚪ COMMON: Fetch deposit address (works for both exchanges)
+        # ====================================================================
+        try:
             # CCXT fetch_deposit_address can be sync or async
             if fetch_params:
                 result = exchange.fetch_deposit_address(currency, fetch_params)
@@ -428,8 +430,8 @@ class CoinbaseGeminiExchangeManager:
             else:
                 address_info = result
             
-            # Check if address_info is None (Coinbase may return None if address needs to be generated)
-            if address_info is None:
+            # 🔵 Check if address_info is None (Coinbase may return None if address needs to be generated)
+            if address_info is None and exchange_id == EXCHANGE_COINBASE:
                 logger.warning(f"⚠️ {exchange_id} returned None for {currency} deposit address")
                 logger.warning(f"   This may mean:")
                 logger.warning(f"   1. Deposit address needs to be generated first (check Coinbase UI)")
@@ -449,11 +451,11 @@ class CoinbaseGeminiExchangeManager:
                 except Exception as fallback_error:
                     raise ValueError(f"Failed to get {currency} deposit address from {exchange_id} (with and without network parameter): {fallback_error}")
             
-            # Validate address_info is a dict
+            # ⚪ Validate address_info is a dict (works for both exchanges)
             if not isinstance(address_info, dict):
                 raise ValueError(f"{exchange_id} returned invalid deposit address format: {type(address_info)} (expected dict)")
             
-            # Check if address key exists
+            # ⚪ Check if address key exists (works for both exchanges)
             if 'address' not in address_info:
                 raise ValueError(f"{exchange_id} deposit address response missing 'address' key: {address_info}")
             
@@ -463,6 +465,7 @@ class CoinbaseGeminiExchangeManager:
             
             logger.info(f"✅ Deposit address for {currency} on {exchange_id}: {address[:10]}...")
             return address_info
+            
         except Exception as e:
             logger.error(f"Error fetching deposit address for {currency} on {exchange_id}: {e}")
             raise
@@ -491,7 +494,7 @@ class CoinbaseGeminiExchangeManager:
     async def _coinbase_exchange_withdraw(self, currency: str, amount: float,
                                          address: str, tag: Optional[str] = None,
                                          network: Optional[str] = None) -> Dict:
-        """Withdraw crypto using Coinbase Exchange API directly
+        """🔵 Withdraw crypto using Coinbase Exchange API directly
         
         Since CCXT uses api.coinbase.com for trading (which works), we should
         check if the same authentication works for Exchange API endpoints.
@@ -658,7 +661,10 @@ class CoinbaseGeminiExchangeManager:
                     network=network
                 )
             
-            # For Gemini, use CCXT (it uses the correct endpoint)
+            # ====================================================================
+            # 🟢 GEMINI-SPECIFIC: Use CCXT withdrawal
+            # ====================================================================
+            # 🟢 For Gemini, use CCXT (it uses the correct endpoint)
             exchange = self.get_exchange(exchange_id)
             
             # Build params dict
@@ -666,12 +672,12 @@ class CoinbaseGeminiExchangeManager:
             if params:
                 withdraw_params.update(params)
             
-            # Add network if provided
+            # ⚪ Add network if provided (works for both exchanges)
             if network:
                 withdraw_params['network'] = network
                 logger.info(f"   Network: {network}")
             
-            # Add tag to params
+            # ⚪ Add tag to params (works for both exchanges)
             if tag:
                 withdraw_params['tag'] = tag
                 logger.info(f"   Tag/Memo: {tag}")
