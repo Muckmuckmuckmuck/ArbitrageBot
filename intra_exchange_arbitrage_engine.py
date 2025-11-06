@@ -1278,8 +1278,11 @@ class IntraExchangeArbitrageEngine:
             # Check for convertible currencies (USD/USDC/USDT) first
             total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
             
-            # Check for BTC - if we have BTC and need EUR/GBP, convert it first
+            # Check for BTC - if we have BTC and need EUR/GBP, convert it first (PRIORITY)
             btc_balance = free_balance.get('BTC', 0)
+            btc_price = 0
+            btc_value_usd = 0
+            
             if buy_quote in ['EUR', 'GBP'] and btc_balance > 0:
                 # Get BTC value in USD
                 try:
@@ -1303,10 +1306,16 @@ class IntraExchangeArbitrageEngine:
                             # Re-check balance after conversion
                             balance = await self.exchange_manager.fetch_balance(exchange_id)
                             free_balance = balance.get('free', {})
+                            # Update BTC balance after conversion
+                            btc_balance = free_balance.get('BTC', 0)
                         else:
                             logger.warning(f"   ⚠️ BTC conversion failed, will try other methods")
                 except Exception as e:
                     logger.debug(f"   Error checking/converting BTC: {e}")
+                    # If we can't get price, estimate it
+                    if btc_price == 0:
+                        btc_price = 103000  # Approximate BTC price
+                        btc_value_usd = btc_balance * btc_price
             
             # OPTION 1: Check if we have the required quote currency directly
             buy_balance = free_balance.get(buy_quote, 0)
@@ -1382,7 +1391,8 @@ class IntraExchangeArbitrageEngine:
             logger.info(f"      Cash ({buy_quote}): {buy_balance:.2f} = ${cash_available_usd:.2f} USD equivalent")
             logger.info(f"      Convertible (USD/USDC/USDT): ${total_convertible:.2f}")
             if btc_balance > 0:
-                logger.info(f"      BTC: {btc_balance:.8f} = ${btc_balance * (btc_price if 'btc_price' in locals() else 43000):.2f} USD value")
+                btc_display_value = btc_balance * btc_price if btc_price > 0 else btc_balance * 103000
+                logger.info(f"      BTC: {btc_balance:.8f} = ${btc_display_value:.2f} USD value")
             logger.info(f"      Position ({base_crypto}): {base_crypto_balance:.8f} = ${crypto_value_usd:.2f} USD value")
             logger.info(f"      Total available: ${total_available_usd:.2f}")
             

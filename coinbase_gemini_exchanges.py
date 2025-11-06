@@ -291,13 +291,26 @@ class CoinbaseGeminiExchangeManager:
                                     max_wait = 30
                                     for _ in range(max_wait):
                                         await asyncio.sleep(1)
-                                        order_status = await self.fetch_order(exchange_id, order_id, pair_to_use)
-                                        status = order_status.get('status', 'unknown')
-                                        if status in ['closed', 'filled']:
-                                            logger.info(f"   ✅ BTC conversion successful: {btc_balance:.8f} BTC → {to_currency}")
+                                order_status = await self.fetch_order(exchange_id, order_id, pair_to_use)
+                                status = order_status.get('status', 'unknown')
+                                if status in ['closed', 'filled']:
+                                    # Verify we actually have the target currency
+                                    balance_check = await self.fetch_balance(exchange_id)
+                                    final_balance = balance_check.get('free', {}).get(to_currency, 0)
+                                    if final_balance > 0:
+                                        logger.info(f"   ✅ BTC conversion successful: {btc_balance:.8f} BTC → {final_balance:.2f} {to_currency}")
+                                        return True
+                                    else:
+                                        logger.warning(f"   ⚠️ Order filled but no {to_currency} in balance yet, waiting...")
+                                        await asyncio.sleep(2)
+                                        # Check once more
+                                        balance_check = await self.fetch_balance(exchange_id)
+                                        final_balance = balance_check.get('free', {}).get(to_currency, 0)
+                                        if final_balance > 0:
+                                            logger.info(f"   ✅ BTC conversion verified: {final_balance:.2f} {to_currency}")
                                             return True
-                                        elif status == 'canceled':
-                                            break
+                                elif status == 'canceled':
+                                    break
                                 
                                 logger.info(f"   ✅ BTC conversion order placed")
                                 return True
@@ -592,17 +605,25 @@ class CoinbaseGeminiExchangeManager:
                     
                     if status in ['closed', 'filled']:
                         # Calculate actual amount received
-                        filled = order_status.get('filled', 0)
+                        filled = float(order_status.get('filled', 0))
+                        cost = float(order_status.get('cost', 0))
+                        actual_price = float(order_status.get('price', limit_price))
+                        
                         if side == 'buy':
-                            # Bought BTC, received amount is in BTC
+                            # Buying to_curr with from_curr (e.g., buying BTC with USD)
+                            # filled is the amount of to_curr we received
                             actual_received = filled
                         else:
-                            # Sold USD, received amount is in BTC (calculated from price)
-                            # filled is in from_curr, we need to convert to to_curr
-                            actual_price = order_status.get('price', limit_price)
-                            actual_received = filled * actual_price if actual_price > 0 else 0
+                            # Selling from_curr to get to_curr (e.g., selling BTC to get EUR)
+                            # filled is amount of from_curr sold, cost is amount of to_curr received
+                            if cost > 0:
+                                actual_received = cost  # Cost is in to_currency
+                            elif actual_price > 0:
+                                actual_received = filled * actual_price  # Calculate from filled * price
+                            else:
+                                actual_received = filled * price  # Fallback to original price
                         
-                        logger.debug(f"   ✅ Bridge step filled: {filled:.8f} in {waited}s")
+                        logger.info(f"   ✅ Bridge step filled: {filled:.8f} {from_curr} → {actual_received:.8f} {to_curr} in {waited}s")
                         return (order_status, actual_received)
                     elif status == 'canceled':
                         logger.warning(f"   ⚠️ Bridge step order was canceled")
@@ -617,12 +638,19 @@ class CoinbaseGeminiExchangeManager:
                 status = order_status.get('status', 'unknown')
                 
                 if status in ['closed', 'filled']:
-                    filled = order_status.get('filled', 0)
+                    filled = float(order_status.get('filled', 0))
+                    cost = float(order_status.get('cost', 0))
+                    actual_price = float(order_status.get('price', limit_price))
+                    
                     if side == 'buy':
                         actual_received = filled
                     else:
-                        actual_price = order_status.get('price', limit_price)
-                        actual_received = filled * actual_price if actual_price > 0 else 0
+                        if cost > 0:
+                            actual_received = cost
+                        elif actual_price > 0:
+                            actual_received = filled * actual_price
+                        else:
+                            actual_received = filled * price
                     return (order_status, actual_received)
                 else:
                     # Cancel unfilled order
