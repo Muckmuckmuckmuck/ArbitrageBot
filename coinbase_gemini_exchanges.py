@@ -384,6 +384,12 @@ class CoinbaseGeminiExchangeManager:
                         logger.error(f"   Traceback: {traceback.format_exc()}")
         
         # Method: Bridge currency (USD/USDC/USDT → BTC → GBP/EUR)
+        # ONLY use bridge if from_currency is NOT BTC (we already checked BTC above)
+        if from_currency == 'BTC':
+            logger.error(f"   ❌ Cannot use bridge currency: Already have BTC, but direct conversion failed")
+            logger.error(f"   ⚠️ BTC conversion failed - check account manually")
+            return False
+        
         # MUST complete both steps to avoid getting stuck
         logger.info(f"   💱 Using bridge currency method: {from_currency} → BTC → {to_currency}")
         logger.info(f"   ⚠️ CRITICAL: Both steps must complete or funds will be stuck in BTC")
