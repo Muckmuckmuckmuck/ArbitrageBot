@@ -536,9 +536,24 @@ class IntraExchangeArbitrageEngine:
                     usd_ask2 = await self._normalize_price_to_usd(exchange_id, ask2, quote2)
                     usd_bid2 = await self._normalize_price_to_usd(exchange_id, bid2, quote2)
                     
-                    # 🔵 CRITICAL FIX: Calculate net profit for BOTH directions and choose the better one
-                    # Don't reject based on raw profit alone - calculate net profit with fees first
-                    # We need to check both directions because bid < ask is normal, but net profit might still be positive
+                    # 🔵 CRITICAL FIX: Only calculate net profit for directions where bid > ask (profitable)
+                    # For arbitrage: we need bid2 > ask1 (buy at ask1, sell at bid2) OR bid1 > ask2 (buy at ask2, sell at bid1)
+                    # If neither condition is met, skip immediately (no point calculating)
+                    
+                    # Check if either direction has potential (bid > ask)
+                    option1_profitable = usd_bid2 > usd_ask1  # Buy pair1, sell pair2
+                    option2_profitable = usd_bid1 > usd_ask2  # Buy pair2, sell pair1
+                    
+                    if not option1_profitable and not option2_profitable:
+                        # No profitable direction - skip immediately
+                        raw_profit1 = usd_bid2 - usd_ask1
+                        raw_profit2 = usd_bid1 - usd_ask2
+                        logger.debug(f"{exchange_marker} [{exchange_id.upper()}] ❌ {base_crypto}: {pair1} vs {pair2} | "
+                                   f"Raw Profit1: ${raw_profit1:.6f} | Raw Profit2: ${raw_profit2:.6f} | "
+                                   f"ASK1: ${usd_ask1:.6f} BID1: ${usd_bid1:.6f} | "
+                                   f"ASK2: ${usd_ask2:.6f} BID2: ${usd_bid2:.6f} | "
+                                   f"No profitable direction (bid <= ask for both)")
+                        continue
                     
                     # Get order book depths for both pairs (needed for profit calculation)
                     depth_pair1_buy = await self._calculate_order_book_depth(exchange_id, pair1, 'buy', trade_size_usd)
@@ -551,36 +566,43 @@ class IntraExchangeArbitrageEngine:
                     vol2 = await self._calculate_volatility(exchange_id, pair2)
                     volatility = (vol1 + vol2) / 2
                     
-                    # Option 1: Buy pair1, sell pair2
-                    spread_width1 = abs(usd_bid2 - usd_ask1)
-                    profit_data1 = calculator.calculate_net_profit(
-                        buy_price=usd_ask1,
-                        sell_price=usd_bid2,
-                        trade_size_usd=trade_size_usd,
-                        order_book_depth_buy=depth_pair1_buy,
-                        order_book_depth_sell=depth_pair2_sell,
-                        spread_width=spread_width1,
-                        volatility_24h=volatility,
-                        execution_latency_ms=self.execution_latency_ms
-                    )
+                    # Calculate net profit only for profitable directions
+                    profit_data1 = None
+                    profit_data2 = None
+                    net_profit1 = float('-inf')
+                    net_profit2 = float('-inf')
                     
-                    # Option 2: Buy pair2, sell pair1
-                    spread_width2 = abs(usd_bid1 - usd_ask2)
-                    profit_data2 = calculator.calculate_net_profit(
-                        buy_price=usd_ask2,
-                        sell_price=usd_bid1,
-                        trade_size_usd=trade_size_usd,
-                        order_book_depth_buy=depth_pair2_buy,
-                        order_book_depth_sell=depth_pair1_sell,
-                        spread_width=spread_width2,
-                        volatility_24h=volatility,
-                        execution_latency_ms=self.execution_latency_ms
-                    )
+                    if option1_profitable:
+                        # Option 1: Buy pair1, sell pair2 (bid2 > ask1)
+                        spread_width1 = usd_bid2 - usd_ask1  # Positive spread
+                        profit_data1 = calculator.calculate_net_profit(
+                            buy_price=usd_ask1,
+                            sell_price=usd_bid2,
+                            trade_size_usd=trade_size_usd,
+                            order_book_depth_buy=depth_pair1_buy,
+                            order_book_depth_sell=depth_pair2_sell,
+                            spread_width=spread_width1,
+                            volatility_24h=volatility,
+                            execution_latency_ms=self.execution_latency_ms
+                        )
+                        net_profit1 = profit_data1['net_profit']
+                    
+                    if option2_profitable:
+                        # Option 2: Buy pair2, sell pair1 (bid1 > ask2)
+                        spread_width2 = usd_bid1 - usd_ask2  # Positive spread
+                        profit_data2 = calculator.calculate_net_profit(
+                            buy_price=usd_ask2,
+                            sell_price=usd_bid1,
+                            trade_size_usd=trade_size_usd,
+                            order_book_depth_buy=depth_pair2_buy,
+                            order_book_depth_sell=depth_pair1_sell,
+                            spread_width=spread_width2,
+                            volatility_24h=volatility,
+                            execution_latency_ms=self.execution_latency_ms
+                        )
+                        net_profit2 = profit_data2['net_profit']
                     
                     # Choose the better option (higher net profit)
-                    net_profit1 = profit_data1['net_profit']
-                    net_profit2 = profit_data2['net_profit']
-                    
                     if net_profit1 > net_profit2 and net_profit1 > 0:
                         # Option 1 is better
                         buy_pair, buy_price = pair1, ask1
@@ -603,9 +625,11 @@ class IntraExchangeArbitrageEngine:
                         # No profitable opportunity after fees - log why
                         raw_profit1 = usd_bid2 - usd_ask1
                         raw_profit2 = usd_bid1 - usd_ask2
+                        net1_str = f"{net_profit1*100:.3f}%" if profit_data1 else "N/A (bid <= ask)"
+                        net2_str = f"{net_profit2*100:.3f}%" if profit_data2 else "N/A (bid <= ask)"
                         logger.info(f"{exchange_marker} [{exchange_id.upper()}] ❌ {base_crypto}: {pair1} vs {pair2} | "
-                                   f"Raw Profit1: ${raw_profit1:.6f} (Net: {net_profit1*100:.3f}%) | "
-                                   f"Raw Profit2: ${raw_profit2:.6f} (Net: {net_profit2*100:.3f}%) | "
+                                   f"Raw Profit1: ${raw_profit1:.6f} (Net: {net1_str}) | "
+                                   f"Raw Profit2: ${raw_profit2:.6f} (Net: {net2_str}) | "
                                    f"ASK1: ${usd_ask1:.6f} BID1: ${usd_bid1:.6f} | "
                                    f"ASK2: ${usd_ask2:.6f} BID2: ${usd_bid2:.6f} | "
                                    f"No profitable direction after fees")
