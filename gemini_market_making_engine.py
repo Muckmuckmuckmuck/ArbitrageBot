@@ -600,16 +600,23 @@ class GeminiMarketMakingEngine:
                 logger.info(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping buy order - inventory {inventory_value_str} >= max ${max_inventory:.2f}")
             
             # Place sell order (if we have inventory)
-            # 🔵 CRITICAL FIX: Ensure inventory is not None before comparison
-            if inventory is not None and inventory > order_amount * 0.5:  # Only sell if we have at least 50% of order size
-                logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE SELL ORDER...")
-                try:
-                    sell_amount = min(order_amount, inventory)
-                    
-                    # 🔵 CRITICAL FIX: Validate sell order parameters
-                    if sell_amount is None or sell_amount <= 0:
-                        logger.error(f"   🟢 [GEMINI] ❌ Invalid sell_amount: {sell_amount}")
-                        raise ValueError(f"Invalid sell_amount: {sell_amount}")
+            # 🔵 CRITICAL FIX: Use actual inventory, not order_amount (which might be 0 if buy was skipped)
+            # Only place sell order if we have sufficient inventory
+            if inventory is not None and inventory > 0:
+                # Calculate sell amount based on available inventory, not order_amount
+                # Use a reasonable sell amount (e.g., 50% of inventory or minimum order size)
+                min_sell_amount = min(inventory * 0.5, inventory)  # Sell up to 50% of inventory
+                
+                # Check if we have enough for minimum order
+                if min_sell_amount * sell_price >= min_cost:
+                    logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE SELL ORDER... (Inventory: {inventory:.6f})")
+                    try:
+                        sell_amount = min(min_sell_amount, inventory)
+                        
+                        # 🔵 CRITICAL FIX: Validate sell order parameters
+                        if sell_amount is None or sell_amount <= 0:
+                            logger.error(f"   🟢 [GEMINI] ❌ Invalid sell_amount: {sell_amount}")
+                            raise ValueError(f"Invalid sell_amount: {sell_amount}")
                     if sell_price is None or sell_price <= 0:
                         logger.error(f"   🟢 [GEMINI] ❌ Invalid sell_price: {sell_price}")
                         raise ValueError(f"Invalid sell_price: {sell_price}")
@@ -645,7 +652,10 @@ class GeminiMarketMakingEngine:
                     import traceback
                     logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
             else:
-                logger.info(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping sell order - inventory {inventory:.6f} < 50% of order size {order_amount * 0.5:.6f}")
+                if inventory is None or inventory <= 0:
+                    logger.debug(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping sell order - no inventory")
+                else:
+                    logger.debug(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping sell order - inventory {inventory:.6f} too small for minimum order")
             
             # Check for filled orders
             # 🔵 CRITICAL FIX: Use correct method name
@@ -780,10 +790,15 @@ class GeminiMarketMakingEngine:
                             
                             if mm_order.side == 'buy':
                                 # Bought at lower price - profit when we sell
-                                logger.info(f"   🟢 [GEMINI] ✅ BUY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
+                                logger.info(f"   🟢 [GEMINI] ✅✅✅ BUY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
                                 
                                 # 🟢 CRITICAL: Immediately place sell order for FULL amount bought
-                                await self._place_sell_order_for_filled_buy(pair, filled, price)
+                                try:
+                                    await self._place_sell_order_for_filled_buy(pair, filled, price)
+                                except Exception as e:
+                                    logger.error(f"   🟢 [GEMINI] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
+                                    import traceback
+                                    logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
                             else:
                                 # Sold at higher price - realized profit
                                 spread_profit = (price - mm_order.price) * filled if mm_order.side == 'sell' else 0
