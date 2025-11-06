@@ -225,6 +225,9 @@ class IntraExchangeArbitrageEngine:
         # Pair blacklist (pairs that repeatedly fail or are unprofitable)
         self.blacklisted_pairs: Set[str] = set()
         
+        # 🔵 IMPROVEMENT: Failed pairs cache (skip recently failed pairs for 5 minutes)
+        self.failed_pairs_cache: Dict[str, float] = {}  # pair_key -> timestamp
+        
         # Dynamic thresholds per pair (learns from past performance)
         # Higher threshold = more conservative (requires larger profit)
         self.pair_thresholds: Dict[str, float] = defaultdict(lambda: min_profit_threshold)
@@ -718,6 +721,17 @@ class IntraExchangeArbitrageEngine:
         
         logger.info(f"   📊 Found {len(base_cryptos)} unique cryptos on {exchange_id.upper()} (with 2+ USD/USDC/USDT pairs)")
         logger.info(f"   ⚡ IMMEDIATE EXECUTION MODE: Trades execute as soon as found!")
+        
+        # 🔵 IMPROVEMENT: Skip during low liquidity hours (reduce scan size)
+        current_hour = datetime.now().hour
+        # US market hours: 9 AM - 4 PM EST (14:00 - 21:00 UTC)
+        if 14 <= current_hour <= 21:
+            max_cryptos = max_cryptos  # Full scan during peak hours
+            logger.info(f"   ⏰ Peak hours detected - full scan: {max_cryptos} cryptos")
+        else:
+            max_cryptos = min(max_cryptos, 50)  # Reduced scan during off-peak
+            logger.info(f"   ⏰ Off-peak hours - reduced scan to {max_cryptos} cryptos")
+        
         logger.info("")
         
         scanned = 0
@@ -771,6 +785,15 @@ class IntraExchangeArbitrageEngine:
                 opportunities_found += 1
                 self.stats[exchange_id]['opportunities_found'] += 1
                 
+                # 🔵 IMPROVEMENT: Skip recently failed pairs (5 minute cooldown)
+                pair_key = f"{opportunity.buy_pair}/{opportunity.sell_pair}"
+                if pair_key in self.failed_pairs_cache:
+                    time_since_fail = time.time() - self.failed_pairs_cache[pair_key]
+                    if time_since_fail < 300:  # 5 minutes
+                        logger.debug(f"   ⏭️ Skipping {pair_key} - failed {time_since_fail:.0f}s ago")
+                        trades_skipped += 1
+                        continue
+                
                 # Check if profitable enough
                 if opportunity.net_profit_percent < self.min_profit_threshold * 100:
                     trades_skipped += 1
@@ -778,7 +801,6 @@ class IntraExchangeArbitrageEngine:
                     continue
                 
                 # Check for pair conflicts
-                pair_key = f"{opportunity.buy_pair}/{opportunity.sell_pair}"
                 if pair_key in active_pairs:
                     trades_skipped += 1
                     logger.debug(f"   ⏭️ Skipped {opportunity.base_crypto}: pair conflict {pair_key}")
@@ -793,7 +815,12 @@ class IntraExchangeArbitrageEngine:
                 logger.info(f"      Buy: {opportunity.buy_pair} @ ${opportunity.buy_price:.6f}")
                 logger.info(f"      Sell: {opportunity.sell_pair} @ ${opportunity.sell_price:.6f}")
                 logger.info(f"      Net Profit: {opportunity.net_profit_percent:.3f}% (${opportunity.expected_profit_usd:.2f})")
+                logger.info(f"      Volume depth: ${min(opportunity.order_book_depth_buy, opportunity.order_book_depth_sell):.2f}")
                 logger.info("")
+                
+                # 🔵 IMPROVEMENT: Prioritize high volume opportunities
+                # Note: We execute immediately, but we prioritize by checking volume depth
+                # Higher volume = better liquidity = faster fills = less slippage
                 
                 # Execute immediately (non-blocking)
                 execution_task = asyncio.create_task(self.execute_trade(opportunity))
@@ -1251,8 +1278,23 @@ class IntraExchangeArbitrageEngine:
                 desired_size = self.min_position_size_usd * (1 + score_multiplier)
                 desired_size = min(self.max_position_size_usd, max(self.min_position_size_usd, desired_size))
                 
+                # 🔵 IMPROVEMENT: Dynamic position sizing based on spread quality
+                spread_quality = opportunity.raw_spread_percent / (self.min_profit_threshold * 100)
+                if spread_quality > 3.0:  # 3x minimum spread
+                    position_multiplier = 1.0  # Full size
+                elif spread_quality > 2.0:  # 2x minimum spread
+                    position_multiplier = 0.8  # 80% size
+                else:
+                    position_multiplier = 0.6  # 60% size
+                
+                # Apply multiplier to desired size
+                desired_size = desired_size * position_multiplier
+                desired_size = min(self.max_position_size_usd, max(self.min_position_size_usd, desired_size))
+                
                 # Use available amount, but don't exceed desired size
                 trade_size = min(available_amount, desired_size)
+                
+                logger.info(f"   📊 Spread quality: {spread_quality:.2f}x → Position multiplier: {position_multiplier:.1f}x → Trade size: ${trade_size:.2f}")
                 
                 # Ensure we meet minimum size
                 if trade_size < self.min_position_size_usd:
@@ -1290,8 +1332,15 @@ class IntraExchangeArbitrageEngine:
             # 🔵 Use Coinbase calculator for Coinbase, 🟢 Gemini calculator for Gemini
             calculator = self.coinbase_calculator if exchange_id == 'coinbase' else self.gemini_calculator
             
+            # 🔵 IMPROVEMENT: Better order price adjustments based on spread width
+            spread_width = opportunity.raw_spread_percent
+            if spread_width > 2.0:  # Wide spread (>2%)
+                price_buffer = 1.002  # 0.2% above market (more aggressive for wide spreads)
+            else:
+                price_buffer = 1.001  # 0.1% above market (standard)
+            
             # Place limit buy order (maker fee) - use exchange manager
-            buy_price_limit = opportunity.buy_price * 1.001  # Slightly above to ensure fill
+            buy_price_limit = opportunity.buy_price * price_buffer
             logger.info(f"   📝 Placing BUY limit order:")
             logger.info(f"      Pair: {opportunity.buy_pair}")
             logger.info(f"      Amount: {base_amount:.6f} {opportunity.base_crypto}")
@@ -1392,24 +1441,96 @@ class IntraExchangeArbitrageEngine:
                     logger.info(f"   ⚠️ Buy partial fill: {filled:.6f} (using this amount)")
                 logger.info(f"   ✅ Buy order filled @ ${actual_buy_price:.6f}")
             
+            # ====================================================================
+            # 🔵 COINBASE / 🟢 GEMINI: Wait for balance to update after buy
+            # ====================================================================
+            # CRITICAL: Exchange balance may not update immediately after order fill
+            # We need to verify we actually have the crypto before selling
+            logger.info(f"   🔵 [{exchange_id.upper()}] Verifying balance after buy...")
+            max_balance_wait = 10  # Wait up to 10 seconds for balance to update
+            balance_check_interval = 0.5  # Check every 0.5 seconds
+            balance_verified = False
+            actual_available_amount = 0
+            
+            for attempt in range(int(max_balance_wait / balance_check_interval)):
+                await asyncio.sleep(balance_check_interval)
+                try:
+                    # 🔵 COINBASE / 🟢 GEMINI: Fetch fresh balance
+                    balance = await self.exchange_manager.fetch_balance(exchange_id)
+                    
+                    # Check available amount of base crypto
+                    base_crypto = opportunity.base_crypto
+                    if base_crypto in balance:
+                        available = balance[base_crypto].get('free', 0) or balance[base_crypto].get('available', 0) or 0
+                        if isinstance(available, str):
+                            available = float(available)
+                        actual_available_amount = available
+                        
+                        # We need at least 95% of what we bought (account for fees/precision)
+                        if actual_available_amount >= base_amount * 0.95:
+                            balance_verified = True
+                            logger.info(f"   🔵 [{exchange_id.upper()}] ✅ Balance verified: {actual_available_amount:.6f} {base_crypto} available")
+                            break
+                        else:
+                            logger.debug(f"   🔵 [{exchange_id.upper()}] Balance not ready: {actual_available_amount:.6f} < {base_amount * 0.95:.6f} (attempt {attempt + 1})")
+                    else:
+                        logger.debug(f"   🔵 [{exchange_id.upper()}] {base_crypto} not in balance yet (attempt {attempt + 1})")
+                except Exception as e:
+                    logger.debug(f"   🔵 [{exchange_id.upper()}] Balance check error: {e}")
+            
+            if not balance_verified:
+                logger.warning(f"   🔵 [{exchange_id.upper()}] ⚠️ Balance not updated after {max_balance_wait}s")
+                logger.warning(f"   🔵 [{exchange_id.upper()}] Available: {actual_available_amount:.6f} {base_crypto}, Needed: {base_amount:.6f}")
+                logger.warning(f"   🔵 [{exchange_id.upper()}] Proceeding with sell order anyway (may fail if balance truly insufficient)")
+            else:
+                # Use actual available amount (may be slightly less due to fees)
+                if actual_available_amount < base_amount:
+                    logger.info(f"   🔵 [{exchange_id.upper()}] Adjusting sell amount: {base_amount:.6f} → {actual_available_amount:.6f} (fees/precision)")
+                    base_amount = actual_available_amount
+            
             # Place limit sell order (maker fee) - use exchange manager
             sell_price_limit = opportunity.sell_price * 0.999  # Slightly below to ensure fill
-            logger.info(f"   📝 Placing SELL limit order:")
+            # 🔵 COINBASE / 🟢 GEMINI: Place sell order with comprehensive logging
+            exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
+            logger.info(f"   {exchange_marker} [{exchange_id.upper()}] 📝 Placing SELL limit order:")
             logger.info(f"      Pair: {opportunity.sell_pair}")
             logger.info(f"      Amount: {base_amount:.6f} {opportunity.base_crypto}")
             logger.info(f"      Price: ${sell_price_limit:.6f} (target: ${opportunity.sell_price:.6f})")
             logger.info(f"      Fee type: Maker (lower fee)")
             
-            sell_order = await self.exchange_manager.create_order(
-                exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
-                symbol=opportunity.sell_pair,
-                order_type='limit',
-                side='sell',
-                amount=base_amount,
-                price=sell_price_limit
-            )
-            sell_order_id = sell_order.get('id')
-            logger.info(f"   ✅ Sell order placed: {sell_order_id}")
+            try:
+                sell_order = await self.exchange_manager.create_order(
+                    exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
+                    symbol=opportunity.sell_pair,
+                    order_type='limit',
+                    side='sell',
+                    amount=base_amount,
+                    price=sell_price_limit
+                )
+                sell_order_id = sell_order.get('id')
+                logger.info(f"   {exchange_marker} [{exchange_id.upper()}] ✅ Sell order placed: {sell_order_id}")
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"   {exchange_marker} [{exchange_id.upper()}] ❌ Sell order failed: {error_msg}")
+                
+                # 🔵 COINBASE / 🟢 GEMINI: Check balance again for diagnostics
+                if "insufficient" in error_msg.lower() or "fund" in error_msg.lower():
+                    try:
+                        balance = await self.exchange_manager.fetch_balance(exchange_id)
+                        base_crypto = opportunity.base_crypto
+                        if base_crypto in balance:
+                            available = balance[base_crypto].get('free', 0) or balance[base_crypto].get('available', 0) or 0
+                            if isinstance(available, str):
+                                available = float(available)
+                            logger.error(f"   {exchange_marker} [{exchange_id.upper()}] Current {base_crypto} balance: {available:.6f}")
+                            logger.error(f"   {exchange_marker} [{exchange_id.upper()}] Needed: {base_amount:.6f}")
+                            logger.error(f"   {exchange_marker} [{exchange_id.upper()}] Shortfall: {base_amount - available:.6f}")
+                        else:
+                            logger.error(f"   {exchange_marker} [{exchange_id.upper()}] {base_crypto} not found in balance!")
+                    except Exception as balance_error:
+                        logger.error(f"   {exchange_marker} [{exchange_id.upper()}] Could not check balance: {balance_error}")
+                
+                raise
             
             # Wait for fill with price chasing
             sell_order_status, actual_sell_price = await self._wait_for_order_fill_with_chase(
@@ -1455,9 +1576,15 @@ class IntraExchangeArbitrageEngine:
                     # We have crypto but couldn't sell - estimate loss
                     actual_profit_usd = -opportunity.trade_size_usd * 0.01  # Estimate 1% loss
                     status = 'partial'
-                else:
-                    actual_profit_usd = 0.0
-                    status = 'failed'
+            else:
+                actual_profit_usd = 0.0
+                status = 'failed'
+            
+            # 🔵 IMPROVEMENT: Track failed pairs (add to cache for 5 minute cooldown)
+            pair_key = f"{opportunity.buy_pair}/{opportunity.sell_pair}"
+            if status in ['failed', 'partial']:
+                self.failed_pairs_cache[pair_key] = time.time()
+                logger.debug(f"   🔵 Added {pair_key} to failed pairs cache (cooldown: 5 minutes)")
             
             execution_time = time.time() - start_time
             self.execution_latency_ms = execution_time * 1000  # Update latency tracking

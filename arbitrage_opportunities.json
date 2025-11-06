@@ -1,0 +1,11 @@
+{
+  "scan_timestamp": "2025-11-04T21:06:00.354741",
+  "scan_stats": {
+    "total_pairs_scanned": 338,
+    "opportunities_found": 0,
+    "coinbase_opportunities": 0,
+    "gemini_opportunities": 0,
+    "scan_duration_seconds": 150.19238305091858
+  },
+  "opportunities": []
+}

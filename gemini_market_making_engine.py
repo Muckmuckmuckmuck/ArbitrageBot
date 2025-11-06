@@ -94,6 +94,9 @@ class GeminiMarketMakingEngine:
         self.stats: Dict[str, MarketMakingStats] = {}
         self.available_pairs: List[str] = []  # Will be set during initialization
         
+        # 🟢 IMPROVEMENT: Track fill rates for pairs (focus on pairs that actually fill)
+        self.pair_fill_rates: Dict[str, float] = {}  # pair -> fill_rate (0-1)
+        
         # Running state
         self.running = False
         self.last_flatten_time = datetime.now()
@@ -138,6 +141,8 @@ class GeminiMarketMakingEngine:
         self.stats = {}
         for pair in available_pairs:
             self.stats[pair] = MarketMakingStats(pair=pair)
+            # 🟢 IMPROVEMENT: Initialize fill rates (default 0.5 = neutral)
+            self.pair_fill_rates[pair] = 0.5
         
         logger.info(f"   ✅ Available pairs: {len(available_pairs)}/{len(TOP_GEMINI_PAIRS)}")
         if len(available_pairs) < len(TOP_GEMINI_PAIRS):
@@ -186,22 +191,44 @@ class GeminiMarketMakingEngine:
     async def place_market_making_orders(self, pair: str) -> bool:
         """Place buy and sell limit orders for market making"""
         try:
-            # Check if spread is wide enough
+            # 🟢 IMPROVEMENT: Skip low volume pairs
+            try:
+                ticker = await self.exchange_manager.fetch_ticker('gemini', pair)
+                volume_24h = ticker.get('quoteVolume', 0) or (ticker.get('volume', 0) * ticker.get('last', 0))
+                if volume_24h < 10000:  # Less than $10k volume
+                    logger.debug(f"   🟢 [GEMINI] Skipping {pair} - low volume: ${volume_24h:.0f}")
+                    return False
+            except:
+                pass  # Continue if volume check fails
+            
+            # 🟢 IMPROVEMENT: Dynamic grid spacing based on spread
             spread = await self.get_spread(pair)
             if spread is None or spread < self.min_spread_percent:
+                logger.debug(f"   🟢 [GEMINI] Skipping {pair} - spread {spread:.3f}% < minimum {self.min_spread_percent:.2f}%")
                 return False  # Spread too tight
             
             # Get current price
             current_price = await self.get_current_price(pair)
             if current_price is None or current_price <= 0:
+                logger.debug(f"   🟢 [GEMINI] Skipping {pair} - invalid price")
                 return False
+            
+            # 🟢 IMPROVEMENT: Use 50% of current spread as grid spacing (max 0.5%, min 0.15%)
+            dynamic_spacing = min(max(spread * 0.5, 0.15), 0.5)
+            logger.debug(f"   🟢 [GEMINI] {pair}: Spread {spread:.3f}% → Dynamic spacing {dynamic_spacing:.3f}%")
             
             # Cancel existing orders for this pair first
             await self.cancel_pair_orders(pair)
             
-            # Calculate order sizes
+            # 🟢 IMPROVEMENT: Adjust order size based on spread
             base_currency = pair.split('/')[0]
-            order_amount = (self.capital_per_pair * self.order_size_percent) / current_price
+            if spread:
+                # Scale order size: wider spread = larger orders (max 2x, min 0.5x)
+                spread_multiplier = min(max(spread / self.min_spread_percent, 0.5), 2.0)
+                order_amount = (self.capital_per_pair * self.order_size_percent * spread_multiplier) / current_price
+                logger.debug(f"   🟢 [GEMINI] {pair}: Spread {spread:.3f}% → Order size multiplier {spread_multiplier:.2f}x")
+            else:
+                order_amount = (self.capital_per_pair * self.order_size_percent) / current_price
             
             # Get market info for precision requirements
             exchange = self.exchange_manager.get_exchange('gemini')
@@ -220,9 +247,13 @@ class GeminiMarketMakingEngine:
                 logger.debug(f"   ⚠️ Order amount too small after rounding: {order_amount}")
                 return False
             
-            # Calculate grid prices
-            buy_price = current_price * (1 - self.grid_spacing_percent / 100)
-            sell_price = current_price * (1 + self.grid_spacing_percent / 100)
+            # Calculate grid prices (use dynamic spacing if available)
+            if spread:
+                buy_price = current_price * (1 - dynamic_spacing / 100)
+                sell_price = current_price * (1 + dynamic_spacing / 100)
+            else:
+                buy_price = current_price * (1 - self.grid_spacing_percent / 100)
+                sell_price = current_price * (1 + self.grid_spacing_percent / 100)
             
             # Round prices to exchange precision
             buy_price = round(buy_price, price_precision)
@@ -260,7 +291,7 @@ class GeminiMarketMakingEngine:
                             status='open'
                         )
                         self.active_orders[pair].append(buy_mm_order)
-                        logger.debug(f"   ✅ Placed buy order: {pair} @ ${buy_price:.4f} for {order_amount:.6f}")
+                        logger.info(f"   🟢 [GEMINI] ✅ BUY ORDER PLACED: {pair} @ ${buy_price:.4f} for {order_amount:.6f} (${order_amount * buy_price:.2f})")
                 except Exception as e:
                     logger.debug(f"   ⚠️ Failed to place buy order for {pair}: {e}")
             
@@ -285,7 +316,7 @@ class GeminiMarketMakingEngine:
                             status='open'
                         )
                         self.active_orders[pair].append(sell_mm_order)
-                        logger.debug(f"   ✅ Placed sell order: {pair} @ ${sell_price:.4f} for {min(order_amount, inventory):.6f}")
+                        logger.info(f"   🟢 [GEMINI] ✅ SELL ORDER PLACED: {pair} @ ${sell_price:.4f} for {min(order_amount, inventory):.6f} (${min(order_amount, inventory) * sell_price:.2f})")
                 except Exception as e:
                     logger.debug(f"   ⚠️ Failed to place sell order for {pair}: {e}")
             
@@ -319,10 +350,16 @@ class GeminiMarketMakingEngine:
         except Exception as e:
             logger.debug(f"   Error canceling orders for {pair}: {e}")
     
-    async def check_and_update_orders(self, pair: str):
-        """Check order status and update if needed"""
+    async def check_and_update_orders(self, pair: str) -> int:
+        """Check order status and update if needed. Returns count of filled orders."""
+        filled_count = 0
         try:
-            orders_to_check = self.active_orders[pair].copy()
+            orders_to_check = self.active_orders.get(pair, []).copy()
+            if not orders_to_check:
+                return 0
+                
+            logger.debug(f"   🟢 [GEMINI] Checking {len(orders_to_check)} orders for {pair}")
+            
             for mm_order in orders_to_check:
                 if mm_order.order_id and mm_order.status == 'open':
                     try:
@@ -338,6 +375,11 @@ class GeminiMarketMakingEngine:
                             mm_order.filled_at = datetime.now()
                             self.stats[pair].filled_orders += 1
                             self.stats[pair].total_orders += 1
+                            filled_count += 1
+                            
+                            # 🟢 IMPROVEMENT: Update fill rate (exponential moving average)
+                            current_fill_rate = self.pair_fill_rates.get(pair, 0.5)
+                            self.pair_fill_rates[pair] = current_fill_rate * 0.9 + 0.1  # 10% weight to new fill
                             
                             # Calculate profit (simplified - actual calculation depends on inventory)
                             filled = float(order_status.get('filled', 0))
@@ -346,25 +388,35 @@ class GeminiMarketMakingEngine:
                             
                             if mm_order.side == 'buy':
                                 # Bought at lower price - profit when we sell
-                                logger.info(f"   ✅ Buy filled: {pair} @ ${price:.4f} for {filled:.6f}")
+                                logger.info(f"   🟢 [GEMINI] ✅ BUY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
                             else:
                                 # Sold at higher price - realized profit
                                 spread_profit = (price - mm_order.price) * filled if mm_order.side == 'sell' else 0
-                                logger.info(f"   ✅ Sell filled: {pair} @ ${price:.4f} for {filled:.6f} (profit: ${spread_profit:.2f})")
+                                logger.info(f"   🟢 [GEMINI] ✅ SELL FILLED: {pair} @ ${price:.4f} for {filled:.6f} | Profit: ${spread_profit:.2f}")
                                 self.stats[pair].total_profit_usd += spread_profit
                         
                         elif status == 'canceled':
                             mm_order.status = 'canceled'
+                            logger.debug(f"   🟢 [GEMINI] Order {mm_order.order_id} canceled for {pair}")
                     except Exception as e:
-                        logger.debug(f"   Error checking order {mm_order.order_id}: {e}")
+                        logger.debug(f"   🟢 [GEMINI] Error checking order {mm_order.order_id}: {e}")
         except Exception as e:
-            logger.debug(f"   Error checking orders for {pair}: {e}")
+            logger.debug(f"   🟢 [GEMINI] Error checking orders for {pair}: {e}")
+        
+        return filled_count
     
     async def flatten_positions(self):
         """Flatten all positions (take profit)"""
         try:
-            logger.info("   🔄 Flattening positions...")
+            logger.info("   🟢 [GEMINI] 🔄 FLATTENING POSITIONS (Take Profit)...")
             pairs_to_process = self.available_pairs if self.available_pairs else TOP_GEMINI_PAIRS
+            
+            # 🟢 IMPROVEMENT: Check if spread is too tight before flattening
+            flattened_count = 0
+            for pair in pairs_to_process:
+                spread = await self.get_spread(pair)
+                if spread and spread < self.min_spread_percent * 0.5:
+                    logger.info(f"   🟢 [GEMINI] Spread too tight on {pair} ({spread:.3f}%) - flattening early")
             for pair in pairs_to_process:
                 base_currency = pair.split('/')[0]
                 inventory = await self.get_inventory_balance(base_currency)
@@ -387,15 +439,16 @@ class GeminiMarketMakingEngine:
                                 amount=sell_amount,
                                 price=sell_price
                             )
-                            logger.info(f"   ✅ Flattened {pair}: Placed sell order for {sell_amount:.6f} {base_currency} @ ${sell_price:.4f}")
+                            logger.info(f"   🟢 [GEMINI] ✅ FLATTENED {pair}: Placed sell order for {sell_amount:.6f} {base_currency} @ ${sell_price:.4f} (${sell_amount * sell_price:.2f})")
+                            flattened_count += 1
                         except Exception as e:
                             logger.warning(f"   ⚠️ Failed to flatten {pair}: {e}")
             
             # Cancel all orders
-            pairs_to_process = self.available_pairs if self.available_pairs else TOP_GEMINI_PAIRS
             for pair in pairs_to_process:
                 await self.cancel_pair_orders(pair)
             
+            logger.info(f"   🟢 [GEMINI] ✅ Flattened {flattened_count} positions, canceled all orders")
             self.last_flatten_time = datetime.now()
             
         except Exception as e:
@@ -404,33 +457,53 @@ class GeminiMarketMakingEngine:
     async def run_market_making_loop(self):
         """Main market-making loop"""
         logger.info("=" * 80)
-        logger.info("🚀 STARTING GEMINI MARKET-MAKING ENGINE")
+        logger.info("🟢 🚀 STARTING GEMINI MARKET-MAKING ENGINE")
         logger.info("=" * 80)
-        logger.info(f"   Strategy: Passive Market Making")
+        logger.info(f"   🟢 Strategy: Passive Market Making")
         pairs_to_show = len(self.available_pairs) if self.available_pairs else len(TOP_GEMINI_PAIRS)
-        logger.info(f"   Pairs: {pairs_to_show}")
-        logger.info(f"   Update interval: {self.requote_interval_seconds}s")
-        logger.info(f"   Take profit interval: {self.take_profit_interval_minutes} minutes")
+        logger.info(f"   🟢 Pairs: {pairs_to_show}")
+        logger.info(f"   🟢 Update interval: {self.requote_interval_seconds}s")
+        logger.info(f"   🟢 Take profit interval: {self.take_profit_interval_minutes} minutes")
         logger.info("=" * 80)
         
         self.running = True
+        cycle_count = 0
         
         while self.running:
             try:
+                cycle_count += 1
+                logger.info("")
+                logger.info(f"🟢 [GEMINI] MARKET-MAKING CYCLE #{cycle_count} - {datetime.now().strftime('%H:%M:%S')}")
+                logger.info("=" * 80)
+                
                 # Check if time to flatten (take profit)
                 time_since_flatten = (datetime.now() - self.last_flatten_time).total_seconds() / 60
                 if time_since_flatten >= self.take_profit_interval_minutes:
+                    logger.info(f"   🟢 [GEMINI] Time to take profit ({time_since_flatten:.1f} min >= {self.take_profit_interval_minutes} min)")
                     await self.flatten_positions()
+                else:
+                    logger.info(f"   🟢 [GEMINI] Time until flatten: {self.take_profit_interval_minutes - time_since_flatten:.1f} minutes")
                 
                 # Process each pair (with rate limiting)
                 # Gemini rate limit: 10 req/sec, so we process 10 pairs max per second
                 pairs_per_batch = 10  # Process 10 pairs per second to stay under rate limit
                 
-                # Use available pairs (filtered during initialization)
+                # 🟢 IMPROVEMENT: Sort pairs by fill rate (focus on pairs that actually fill)
                 pairs_to_process = self.available_pairs if self.available_pairs else TOP_GEMINI_PAIRS
+                pairs_to_process = sorted(
+                    pairs_to_process,
+                    key=lambda p: self.pair_fill_rates.get(p, 0.5),
+                    reverse=True
+                )
+                
+                logger.info(f"   🟢 [GEMINI] Processing {len(pairs_to_process)} pairs in batches of {pairs_per_batch}")
+                
+                total_orders_placed = 0
+                total_orders_filled = 0
                 
                 for i in range(0, len(pairs_to_process), pairs_per_batch):
                     batch = pairs_to_process[i:i+pairs_per_batch]
+                    logger.info(f"   🟢 [GEMINI] Processing batch {i//pairs_per_batch + 1}: {', '.join(batch)}")
                     
                     # Process batch concurrently
                     tasks = []
@@ -438,30 +511,61 @@ class GeminiMarketMakingEngine:
                         tasks.append(self._process_pair_safely(pair))
                     
                     # Wait for batch to complete
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    
+                    # Count results
+                    for result in results:
+                        if isinstance(result, dict):
+                            total_orders_placed += result.get('orders_placed', 0)
+                            total_orders_filled += result.get('orders_filled', 0)
                     
                     # Wait 1 second between batches to respect rate limit
                     if i + pairs_per_batch < len(pairs_to_process):
                         await asyncio.sleep(1)
                 
+                # Summary stats
+                total_profit = sum(s.total_profit_usd for s in self.stats.values())
+                total_orders = sum(s.total_orders for s in self.stats.values())
+                total_filled = sum(s.filled_orders for s in self.stats.values())
+                
+                logger.info("")
+                logger.info(f"   🟢 [GEMINI] CYCLE SUMMARY:")
+                logger.info(f"      Orders placed this cycle: {total_orders_placed}")
+                logger.info(f"      Orders filled this cycle: {total_orders_filled}")
+                logger.info(f"      Total profit (all-time): ${total_profit:.2f}")
+                logger.info(f"      Total orders (all-time): {total_orders}")
+                logger.info(f"      Total filled (all-time): {total_filled}")
+                logger.info(f"      Win rate: {(total_filled / total_orders * 100) if total_orders > 0 else 0:.1f}%")
+                logger.info("=" * 80)
+                
                 # Wait before next update cycle
                 await asyncio.sleep(self.requote_interval_seconds)
                 
             except Exception as e:
-                logger.error(f"   ❌ Error in market-making loop: {e}")
+                logger.error(f"   🟢 [GEMINI] ❌ Error in market-making loop: {e}")
+                import traceback
+                logger.error(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
                 await asyncio.sleep(self.requote_interval_seconds)
     
     async def _process_pair_safely(self, pair: str):
         """Process a single pair with error handling"""
+        orders_placed = 0
+        orders_filled = 0
         try:
             # Check and update existing orders
-            await self.check_and_update_orders(pair)
+            filled_count = await self.check_and_update_orders(pair)
+            orders_filled = filled_count
             
             # Place new orders if needed
-            await self.place_market_making_orders(pair)
+            placed = await self.place_market_making_orders(pair)
+            if placed:
+                orders_placed = 1
+            
+            return {'orders_placed': orders_placed, 'orders_filled': orders_filled}
         except Exception as e:
-            logger.debug(f"   Error processing {pair}: {e}")
+            logger.debug(f"   🟢 [GEMINI] Error processing {pair}: {e}")
             # Don't raise - continue with other pairs
+            return {'orders_placed': 0, 'orders_filled': 0}
     
     def stop(self):
         """Stop the market-making engine"""
