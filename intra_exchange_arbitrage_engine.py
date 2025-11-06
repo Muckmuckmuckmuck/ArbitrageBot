@@ -1178,7 +1178,37 @@ class IntraExchangeArbitrageEngine:
         if required_currency in ['EUR', 'GBP']:
             logger.info(f"   💱 Need {required_amount:.2f} {required_currency}, have {available:.2f}")
             
-            # Find convertible currencies we have
+            # FIRST: Check if we have stuck BTC from a previous failed conversion
+            btc_balance = free_balance.get('BTC', 0)
+            if btc_balance > 0:
+                # Get BTC value in USD
+                try:
+                    btc_ticker = await self.exchange_manager.fetch_ticker(exchange_id, 'BTC/USD')
+                    btc_price = btc_ticker.get('last') or btc_ticker.get('bid', 0)
+                    btc_value_usd = btc_balance * btc_price if btc_price > 0 else 0
+                    
+                    if btc_value_usd >= required_amount * 0.5:
+                        logger.info(f"   💰 Found {btc_balance:.8f} BTC (${btc_value_usd:.2f}) - converting to {required_currency}")
+                        
+                        # Convert BTC directly to required currency
+                        success = await self.exchange_manager.convert_currency(
+                            exchange_id=exchange_id,
+                            from_currency='BTC',
+                            to_currency=required_currency,
+                            amount=btc_balance * 0.95  # Use 95% to leave buffer
+                        )
+                        
+                        if success:
+                            logger.info(f"   ✅ Stuck BTC converted to {required_currency}!")
+                            # Re-check balance after conversion
+                            balance = await self.exchange_manager.fetch_balance(exchange_id)
+                            new_available = balance.get('free', {}).get(required_currency, 0)
+                            if new_available >= required_amount * 1.1:
+                                return True
+                except Exception as e:
+                    logger.debug(f"   Error checking BTC: {e}")
+            
+            # SECOND: Try converting from USD/USDC/USDT
             convertible_currencies = ['USD', 'USDC', 'USDT']
             for from_currency in convertible_currencies:
                 from_balance = free_balance.get(from_currency, 0)
