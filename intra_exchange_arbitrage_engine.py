@@ -455,8 +455,11 @@ class IntraExchangeArbitrageEngine:
         pairs = await self._get_all_pairs_for_crypto(exchange_id, base_crypto)
         
         if len(pairs) < 2:
-            logger.debug(f"{exchange_marker} [{exchange_id.upper()}] {base_crypto}: Only {len(pairs)} pair(s) found (need 2+ for arbitrage)")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⏭️ {base_crypto}: Only {len(pairs)} pair(s) found (need 2+ for arbitrage) | Pairs: {[p[0] for p in pairs]}")
             return None  # Need at least 2 pairs to arbitrage
+        
+        # Log that we're scanning this crypto
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}] 🔍 Scanning {base_crypto}: {len(pairs)} pairs available: {[p[0] for p in pairs]}")
         
         calculator = self.coinbase_calculator if exchange_id == 'coinbase' else self.gemini_calculator
         
@@ -513,16 +516,26 @@ class IntraExchangeArbitrageEngine:
                         buy_pair, buy_price = pair1, ask1
                         sell_pair, sell_price = pair2, bid2
                         buy_quote, sell_quote = quote1, quote2
+                        direction = f"{pair1} → {pair2}"
                     elif profit2 > 0:
                         buy_pair, buy_price = pair2, ask2
                         sell_pair, sell_price = pair1, bid1
                         buy_quote, sell_quote = quote2, quote1
+                        direction = f"{pair2} → {pair1}"
                     else:
-                        # No profitable opportunity
+                        # No profitable opportunity - log why
+                        logger.info(f"{exchange_marker} [{exchange_id.upper()}] ❌ {base_crypto}: {pair1} vs {pair2} | "
+                                   f"Profit1: ${profit1:.6f} | Profit2: ${profit2:.6f} | "
+                                   f"ASK1: ${usd_ask1:.6f} BID1: ${usd_bid1:.6f} | "
+                                   f"ASK2: ${usd_ask2:.6f} BID2: ${usd_bid2:.6f} | "
+                                   f"No profitable direction")
                         continue
                     
                     # Sanity check: prices shouldn't differ by more than 10x
                     if max(buy_price, sell_price) / min(buy_price, sell_price) > 10:
+                        logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⚠️ {base_crypto}: {buy_pair} vs {sell_pair} | "
+                                   f"Price difference too large ({max(buy_price, sell_price):.6f} vs {min(buy_price, sell_price):.6f}) | "
+                                   f"Likely conversion error - skipping")
                         continue  # Likely conversion error
                     
                     # Calculate order book depth
@@ -585,6 +598,31 @@ class IntraExchangeArbitrageEngine:
                     pair_key = f"{buy_pair}/{sell_pair}"
                     threshold = self.pair_thresholds[pair_key]
                     
+                    # 🔵 COMPREHENSIVE LOGGING: Log ALL cryptos and their spreads (even if not profitable)
+                    raw_spread_pct = profit_data['raw_spread'] * 100
+                    net_profit_pct = net_profit * 100
+                    deficit = threshold - net_profit if net_profit < threshold else 0
+                    
+                    if net_profit >= threshold:
+                        # Profitable opportunity
+                        logger.info(f"{exchange_marker} [{exchange_id.upper()}] ✅ {base_crypto}: "
+                                   f"Buy {buy_pair} @ ${usd_buy_price:.6f} | "
+                                   f"Sell {sell_pair} @ ${usd_sell_price:.6f} | "
+                                   f"Raw Spread: {raw_spread_pct:.3f}% | "
+                                   f"Net Profit: {net_profit_pct:.3f}% | "
+                                   f"Threshold: {threshold*100:.3f}% | "
+                                   f"Expected: ${profit_data['expected_profit_usd']:.2f}")
+                    else:
+                        # Not profitable - but still log it
+                        logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⚠️ {base_crypto}: "
+                                   f"Buy {buy_pair} @ ${usd_buy_price:.6f} | "
+                                   f"Sell {sell_pair} @ ${usd_sell_price:.6f} | "
+                                   f"Raw Spread: {raw_spread_pct:.3f}% | "
+                                   f"Net Profit: {net_profit_pct:.3f}% | "
+                                   f"Threshold: {threshold*100:.3f}% | "
+                                   f"Deficit: {deficit*100:.3f}% | "
+                                   f"Reason: Spread too small or fees too high")
+                    
                     if net_profit >= threshold:
                         # Calculate opportunity score
                         score = calculator.calculate_opportunity_score(
@@ -594,14 +632,8 @@ class IntraExchangeArbitrageEngine:
                             volatility_24h=volatility
                         )
                         
-                        # LOG PROFITABLE OPPORTUNITY FOUND
-                        exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
-                        logger.info(f"{exchange_marker} [{exchange_id.upper()}] ✅ PROFITABLE: {base_crypto} | "
-                                   f"Buy: {buy_pair} @ ${usd_buy_price:.6f} (ASK) | "
-                                   f"Sell: {sell_pair} @ ${usd_sell_price:.6f} (BID) | "
-                                   f"Spread: {profit_data['raw_spread']*100:.3f}% | "
-                                   f"Net Profit: {net_profit*100:.3f}% | "
-                                   f"Expected: ${profit_data['expected_profit_usd']:.2f}")
+                        # Additional detailed log for profitable opportunities (already logged above)
+                        pass
                         
                         if score > best_score:
                             opportunity = TradeOpportunity(
