@@ -1565,6 +1565,7 @@ class IntraExchangeArbitrageEngine:
                 if total_slippage > self.max_slippage_percent:
                     logger.warning(f"   ⚠️ Excessive slippage: {total_slippage*100:.2f}% > {self.max_slippage_percent*100:.2f}%")
                     status = 'partial'
+                    actual_profit_usd = -opportunity.trade_size_usd * 0.01  # Estimate loss due to slippage
                 else:
                     actual_profit_usd = (actual_sell_price - actual_buy_price) * base_amount - (
                         opportunity.trade_size_usd * (calculator.maker_fee + calculator.maker_fee)
@@ -1576,9 +1577,10 @@ class IntraExchangeArbitrageEngine:
                     # We have crypto but couldn't sell - estimate loss
                     actual_profit_usd = -opportunity.trade_size_usd * 0.01  # Estimate 1% loss
                     status = 'partial'
-            else:
-                actual_profit_usd = 0.0
-                status = 'failed'
+                else:
+                    # Buy order didn't fill either
+                    actual_profit_usd = 0.0
+                    status = 'failed'
             
             # 🔵 IMPROVEMENT: Track failed pairs (add to cache for 5 minute cooldown)
             pair_key = f"{opportunity.buy_pair}/{opportunity.sell_pair}"
