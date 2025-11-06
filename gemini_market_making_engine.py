@@ -290,6 +290,88 @@ class GeminiMarketMakingEngine:
             logger.debug(f"   Error fetching balance: {e}")
             return 0.0
     
+    async def sell_all_inventory(self):
+        """Check ALL inventory and place sell orders for any crypto we have"""
+        try:
+            balance = await self.exchange_manager.fetch_balance('gemini')
+            free_balance = balance.get('free', {})
+            exchange = self.exchange_manager.get_exchange('gemini')
+            
+            # Check all currencies (not just trading pairs)
+            for currency, amount in free_balance.items():
+                # Skip quote currencies (cash)
+                if currency in ['USD', 'USDT', 'USDC', 'GUSD'] or amount <= 0:
+                    continue
+                
+                # Try to find a trading pair for this currency
+                for quote in ['USD', 'USDC', 'GUSD']:
+                    pair = f"{currency}/{quote}"
+                    if pair in exchange.markets:
+                        market_info = exchange.markets[pair]
+                        if not market_info.get('active', True):
+                            continue
+                        
+                        # Get current price
+                        ticker = await self.exchange_manager.fetch_ticker('gemini', pair)
+                        if not ticker:
+                            continue
+                        
+                        ask = ticker.get('ask', 0) or 0
+                        if ask <= 0:
+                            continue
+                        
+                        # Check if we already have an open sell order for this pair
+                        existing_orders = self.active_orders.get(pair, [])
+                        open_sell_orders = [o for o in existing_orders if o.side == 'sell' and o.status == 'open']
+                        if open_sell_orders:
+                            logger.debug(f"   🟢 [GEMINI] {pair}: Already have open sell order, skipping")
+                            break
+                        
+                        # Calculate sell amount (use all available inventory)
+                        sell_amount = amount
+                        sell_price = ask * 0.999  # Slightly below ask to get filled quickly
+                        
+                        # Get market limits
+                        limits = market_info.get('limits', {})
+                        min_cost = limits.get('cost', {}).get('min', 1.0) or 1.0
+                        
+                        # Check minimum order size
+                        order_value = sell_amount * sell_price
+                        if order_value < min_cost:
+                            logger.debug(f"   🟢 [GEMINI] {pair}: Inventory value ${order_value:.2f} < minimum ${min_cost:.2f}, skipping")
+                            break
+                        
+                        # Place sell order
+                        try:
+                            logger.info(f"   🟢 [GEMINI] 💰 SELLING INVENTORY: {pair} - {sell_amount:.6f} {currency} @ ${sell_price:.6f} (${order_value:.2f})")
+                            sell_order = await self.exchange_manager.create_order(
+                                exchange_id='gemini',
+                                symbol=pair,
+                                order_type='limit',
+                                side='sell',
+                                amount=sell_amount,
+                                price=sell_price
+                            )
+                            
+                            if sell_order and sell_order.get('id'):
+                                sell_order_id = sell_order.get('id')
+                                sell_mm_order = MarketMakingOrder(
+                                    pair=pair,
+                                    side='sell',
+                                    order_id=sell_order_id,
+                                    price=sell_price,
+                                    amount=sell_amount,
+                                    status='open'
+                                )
+                                self.active_orders[pair].append(sell_mm_order)
+                                logger.info(f"   🟢 [GEMINI] ✅✅✅ INVENTORY SELL ORDER PLACED: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} | Order ID: {sell_order_id}")
+                        except Exception as e:
+                            logger.error(f"   🟢 [GEMINI] ❌ Failed to sell inventory {pair}: {type(e).__name__}: {e}")
+                        
+                        break  # Found a working pair, move to next currency
+        except Exception as e:
+            logger.error(f"   🟢 [GEMINI] ❌ Error selling all inventory: {type(e).__name__}: {e}")
+    
     async def place_market_making_orders(self, pair: str) -> dict:
         """Place buy and sell limit orders for market making
         
@@ -383,7 +465,9 @@ class GeminiMarketMakingEngine:
             # Get minimum order size from market info
             limits = market_info.get('limits', {})
             min_amount = limits.get('amount', {}).get('min', 0) or 0
-            min_cost = limits.get('cost', {}).get('min', 5.0) or 5.0  # Default $5 minimum
+            # 🟢 FLEXIBLE: Use exchange minimum or $1.00 (whichever is lower) to allow smaller orders
+            exchange_min_cost = limits.get('cost', {}).get('min', 0) or 0
+            min_cost = max(exchange_min_cost, 1.0) if exchange_min_cost > 0 else 1.0  # At least $1.00, use exchange min if higher
             
             # 🟢 IMPROVEMENT: Adjust order size based on spread
             base_currency = pair.split('/')[0]
@@ -1058,6 +1142,9 @@ class GeminiMarketMakingEngine:
                 )
                 
                 logger.info(f"   🟢 [GEMINI] Processing {len(pairs_to_process)} pairs in batches of {pairs_per_batch}")
+                
+                # 🟢 CRITICAL: Check and sell ALL inventory first (even if not in trading pairs)
+                await self.sell_all_inventory()
                 
                 total_orders_placed = 0
                 total_orders_filled = 0
