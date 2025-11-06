@@ -340,6 +340,13 @@ class GeminiMarketMakingEngine:
             
             # Check inventory limits
             inventory = await self.get_inventory_balance(base_currency)
+            # 🔵 CRITICAL FIX: Handle None values from balance fetch failures
+            if inventory is None:
+                inventory = 0.0
+            if current_price is None or current_price <= 0:
+                logger.warning(f"   🟢 [GEMINI] ⚠️ Skipping {pair} - invalid current_price: {current_price}")
+                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'invalid_price'}
+            
             inventory_value = inventory * current_price
             max_inventory = self.capital_per_pair * self.max_inventory_percent
             
@@ -347,7 +354,8 @@ class GeminiMarketMakingEngine:
             logger.info(f"   🟢 [GEMINI] {pair}: Buy price = ${buy_price:.6f}, Sell price = ${sell_price:.6f}, Amount = {order_amount:.6f}")
             
             # Place buy order (if not over-inventoried)
-            if inventory_value < max_inventory:
+            # 🔵 CRITICAL FIX: Ensure inventory_value is not None before comparison
+            if inventory_value is not None and inventory_value < max_inventory:
                 logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE BUY ORDER...")
                 try:
                     logger.debug(f"   🟢 [GEMINI] {pair}: Creating buy order - amount={order_amount:.6f}, price=${buy_price:.6f}")
@@ -384,7 +392,8 @@ class GeminiMarketMakingEngine:
                 logger.info(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping buy order - inventory ${inventory_value:.2f} >= max ${max_inventory:.2f}")
             
             # Place sell order (if we have inventory)
-            if inventory > order_amount * 0.5:  # Only sell if we have at least 50% of order size
+            # 🔵 CRITICAL FIX: Ensure inventory is not None before comparison
+            if inventory is not None and inventory > order_amount * 0.5:  # Only sell if we have at least 50% of order size
                 logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE SELL ORDER...")
                 try:
                     sell_amount = min(order_amount, inventory)
@@ -422,7 +431,8 @@ class GeminiMarketMakingEngine:
                 logger.info(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping sell order - inventory {inventory:.6f} < 50% of order size {order_amount * 0.5:.6f}")
             
             # Check for filled orders
-            orders_filled = await self.check_order_status(pair)
+            # 🔵 CRITICAL FIX: Use correct method name
+            orders_filled = await self.check_and_update_orders(pair)
             
             if orders_placed > 0:
                 logger.info(f"   🟢 [GEMINI] ✅ {pair}: Successfully placed {orders_placed} order(s), {orders_filled} filled")
