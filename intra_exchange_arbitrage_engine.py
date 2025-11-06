@@ -536,54 +536,87 @@ class IntraExchangeArbitrageEngine:
                     usd_ask2 = await self._normalize_price_to_usd(exchange_id, ask2, quote2)
                     usd_bid2 = await self._normalize_price_to_usd(exchange_id, bid2, quote2)
                     
-                    # Determine best buy/sell combination
-                    # Option 1: Buy pair1, sell pair2
-                    profit1 = usd_bid2 - usd_ask1
-                    # Option 2: Buy pair2, sell pair1
-                    profit2 = usd_bid1 - usd_ask2
+                    # 🔵 CRITICAL FIX: Calculate net profit for BOTH directions and choose the better one
+                    # Don't reject based on raw profit alone - calculate net profit with fees first
+                    # We need to check both directions because bid < ask is normal, but net profit might still be positive
                     
-                    # Choose the better option (higher profit)
-                    if profit1 > profit2 and profit1 > 0:
-                        buy_pair, buy_price = pair1, ask1
-                        sell_pair, sell_price = pair2, bid2
-                        buy_quote, sell_quote = quote1, quote2
-                        direction = f"{pair1} → {pair2}"
-                    elif profit2 > 0:
-                        buy_pair, buy_price = pair2, ask2
-                        sell_pair, sell_price = pair1, bid1
-                        buy_quote, sell_quote = quote2, quote1
-                        direction = f"{pair2} → {pair1}"
-                    else:
-                        # No profitable opportunity - log why
-                        logger.info(f"{exchange_marker} [{exchange_id.upper()}] ❌ {base_crypto}: {pair1} vs {pair2} | "
-                                   f"Profit1: ${profit1:.6f} | Profit2: ${profit2:.6f} | "
-                                   f"ASK1: ${usd_ask1:.6f} BID1: ${usd_bid1:.6f} | "
-                                   f"ASK2: ${usd_ask2:.6f} BID2: ${usd_bid2:.6f} | "
-                                   f"No profitable direction")
-                        continue
-                    
-                    # Sanity check: prices shouldn't differ by more than 10x
-                    if max(buy_price, sell_price) / min(buy_price, sell_price) > 10:
-                        logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⚠️ {base_crypto}: {buy_pair} vs {sell_pair} | "
-                                   f"Price difference too large ({max(buy_price, sell_price):.6f} vs {min(buy_price, sell_price):.6f}) | "
-                                   f"Likely conversion error - skipping")
-                        continue  # Likely conversion error
-                    
-                    # Calculate order book depth
-                    depth_buy = await self._calculate_order_book_depth(exchange_id, buy_pair, 'buy', trade_size_usd)
-                    depth_sell = await self._calculate_order_book_depth(exchange_id, sell_pair, 'sell', trade_size_usd)
+                    # Get order book depths for both pairs (needed for profit calculation)
+                    depth_pair1_buy = await self._calculate_order_book_depth(exchange_id, pair1, 'buy', trade_size_usd)
+                    depth_pair1_sell = await self._calculate_order_book_depth(exchange_id, pair1, 'sell', trade_size_usd)
+                    depth_pair2_buy = await self._calculate_order_book_depth(exchange_id, pair2, 'buy', trade_size_usd)
+                    depth_pair2_sell = await self._calculate_order_book_depth(exchange_id, pair2, 'sell', trade_size_usd)
                     
                     # Calculate volatility (use average of both pairs)
                     vol1 = await self._calculate_volatility(exchange_id, pair1)
                     vol2 = await self._calculate_volatility(exchange_id, pair2)
                     volatility = (vol1 + vol2) / 2
                     
-                    # Normalize buy/sell prices to USD for calculation
-                    usd_buy_price = await self._normalize_price_to_usd(exchange_id, buy_price, buy_quote)
-                    usd_sell_price = await self._normalize_price_to_usd(exchange_id, sell_price, sell_quote)
+                    # Option 1: Buy pair1, sell pair2
+                    spread_width1 = abs(usd_bid2 - usd_ask1)
+                    profit_data1 = calculator.calculate_net_profit(
+                        buy_price=usd_ask1,
+                        sell_price=usd_bid2,
+                        trade_size_usd=trade_size_usd,
+                        order_book_depth_buy=depth_pair1_buy,
+                        order_book_depth_sell=depth_pair2_sell,
+                        spread_width=spread_width1,
+                        volatility_24h=volatility,
+                        execution_latency_ms=self.execution_latency_ms
+                    )
                     
-                    # Calculate spread width
-                    spread_width = abs(usd_sell_price - usd_buy_price)
+                    # Option 2: Buy pair2, sell pair1
+                    spread_width2 = abs(usd_bid1 - usd_ask2)
+                    profit_data2 = calculator.calculate_net_profit(
+                        buy_price=usd_ask2,
+                        sell_price=usd_bid1,
+                        trade_size_usd=trade_size_usd,
+                        order_book_depth_buy=depth_pair2_buy,
+                        order_book_depth_sell=depth_pair1_sell,
+                        spread_width=spread_width2,
+                        volatility_24h=volatility,
+                        execution_latency_ms=self.execution_latency_ms
+                    )
+                    
+                    # Choose the better option (higher net profit)
+                    net_profit1 = profit_data1['net_profit']
+                    net_profit2 = profit_data2['net_profit']
+                    
+                    if net_profit1 > net_profit2 and net_profit1 > 0:
+                        # Option 1 is better
+                        buy_pair, buy_price = pair1, ask1
+                        sell_pair, sell_price = pair2, bid2
+                        buy_quote, sell_quote = quote1, quote2
+                        usd_buy_price, usd_sell_price = usd_ask1, usd_bid2
+                        depth_buy, depth_sell = depth_pair1_buy, depth_pair2_sell
+                        profit_data = profit_data1
+                        direction = f"{pair1} → {pair2}"
+                    elif net_profit2 > 0:
+                        # Option 2 is better
+                        buy_pair, buy_price = pair2, ask2
+                        sell_pair, sell_price = pair1, bid1
+                        buy_quote, sell_quote = quote2, quote1
+                        usd_buy_price, usd_sell_price = usd_ask2, usd_bid1
+                        depth_buy, depth_sell = depth_pair2_buy, depth_pair1_sell
+                        profit_data = profit_data2
+                        direction = f"{pair2} → {pair1}"
+                    else:
+                        # No profitable opportunity after fees - log why
+                        raw_profit1 = usd_bid2 - usd_ask1
+                        raw_profit2 = usd_bid1 - usd_ask2
+                        logger.info(f"{exchange_marker} [{exchange_id.upper()}] ❌ {base_crypto}: {pair1} vs {pair2} | "
+                                   f"Raw Profit1: ${raw_profit1:.6f} (Net: {net_profit1*100:.3f}%) | "
+                                   f"Raw Profit2: ${raw_profit2:.6f} (Net: {net_profit2*100:.3f}%) | "
+                                   f"ASK1: ${usd_ask1:.6f} BID1: ${usd_bid1:.6f} | "
+                                   f"ASK2: ${usd_ask2:.6f} BID2: ${usd_bid2:.6f} | "
+                                   f"No profitable direction after fees")
+                        continue
+                    
+                    # Sanity check: prices shouldn't differ by more than 10x
+                    if max(usd_buy_price, usd_sell_price) / min(usd_buy_price, usd_sell_price) > 10:
+                        logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⚠️ {base_crypto}: {buy_pair} vs {sell_pair} | "
+                                   f"Price difference too large ({max(usd_buy_price, usd_sell_price):.6f} vs {min(usd_buy_price, usd_sell_price):.6f}) | "
+                                   f"Likely conversion error - skipping")
+                        continue  # Likely conversion error
                     
                     # 🔵 CRITICAL FIX: Ensure sell_price > buy_price (if not, reverse the trade)
                     # If we're getting negative spreads, it means we should reverse the direction
@@ -597,22 +630,19 @@ class IntraExchangeArbitrageEngine:
                         usd_buy_price, usd_sell_price = usd_sell_price, usd_buy_price
                         # Also swap order book depths
                         depth_buy, depth_sell = depth_sell, depth_buy
+                        # Recalculate profit data with reversed prices
+                        spread_width = abs(usd_sell_price - usd_buy_price)
+                        profit_data = calculator.calculate_net_profit(
+                            buy_price=usd_buy_price,
+                            sell_price=usd_sell_price,
+                            trade_size_usd=trade_size_usd,
+                            order_book_depth_buy=depth_buy,
+                            order_book_depth_sell=depth_sell,
+                            spread_width=spread_width,
+                            volatility_24h=volatility,
+                            execution_latency_ms=self.execution_latency_ms
+                        )
                         logger.debug(f"   ✅ Reversed: Now buying {buy_pair} @ ${usd_buy_price:.6f}, selling {sell_pair} @ ${usd_sell_price:.6f}")
-                    
-                    # Recalculate spread width after potential reversal
-                    spread_width = abs(usd_sell_price - usd_buy_price)
-                    
-                    # Calculate profitability
-                    profit_data = calculator.calculate_net_profit(
-                        buy_price=usd_buy_price,
-                        sell_price=usd_sell_price,
-                        trade_size_usd=trade_size_usd,
-                        order_book_depth_buy=depth_buy,
-                        order_book_depth_sell=depth_sell,
-                        spread_width=spread_width,
-                        volatility_24h=volatility,
-                        execution_latency_ms=self.execution_latency_ms
-                    )
                     
                     # 🔵 CRITICAL FIX: Double-check that raw_spread is positive
                     # If it's still negative after reversal, skip this opportunity
