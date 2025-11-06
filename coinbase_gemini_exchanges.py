@@ -120,7 +120,9 @@ class CoinbaseGeminiExchangeManager:
             exchange_id: EXCHANGE_COINBASE or EXCHANGE_GEMINI
         """
         exchange = self.get_exchange(exchange_id)
+        exchange_marker = "🔵" if exchange_id == EXCHANGE_COINBASE else "🟢"
         try:
+            logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] Fetching balance...")
             # CCXT fetch_balance can be sync or async depending on version
             result = exchange.fetch_balance()
             # Check if it's a coroutine (async) or direct result (sync)
@@ -128,9 +130,10 @@ class CoinbaseGeminiExchangeManager:
                 balance = await result
             else:
                 balance = result
+            logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] Balance fetched successfully")
             return balance
         except Exception as e:
-            logger.error(f"Error fetching balance from {exchange_id}: {e}")
+            logger.error(f"   {exchange_marker} [{exchange_id.upper()}] Error fetching balance: {e}")
             raise
     
     async def fetch_ticker(self, exchange_id: str, symbol: str) -> Dict:
@@ -141,7 +144,9 @@ class CoinbaseGeminiExchangeManager:
             exchange_id: EXCHANGE_COINBASE or EXCHANGE_GEMINI
         """
         exchange = self.get_exchange(exchange_id)
+        exchange_marker = "🔵" if exchange_id == EXCHANGE_COINBASE else "🟢"
         try:
+            logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] Fetching ticker for {symbol}...")
             # CCXT fetch_ticker can be sync or async depending on version
             result = exchange.fetch_ticker(symbol)
             # Check if it's a coroutine (async) or direct result (sync)
@@ -149,9 +154,10 @@ class CoinbaseGeminiExchangeManager:
                 ticker = await result
             else:
                 ticker = result
+            logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] Ticker fetched for {symbol}: ${ticker.get('last', 0):.8f}")
             return ticker
         except Exception as e:
-            logger.error(f"Error fetching ticker {symbol} from {exchange_id}: {e}")
+            logger.error(f"   {exchange_marker} [{exchange_id.upper()}] Error fetching ticker {symbol}: {e}")
             raise
     
     async def fetch_order_book(self, exchange_id: str, symbol: str, limit: int = 20) -> Dict:
@@ -223,12 +229,28 @@ class CoinbaseGeminiExchangeManager:
         market_info = exchange.markets.get(symbol, {})
         if market_info:
             precision = market_info.get('precision', {})
-            # CCXT precision can be int (decimal places) or float (step size)
-            # Convert to int for round() function
-            amount_precision_val = precision.get('amount', 8)
-            price_precision_val = precision.get('price', 8)
-            amount_precision = int(amount_precision_val) if amount_precision_val else 8
-            price_precision = int(price_precision_val) if price_precision_val else 8
+            
+            # 🔵 COINBASE and 🟢 GEMINI: Handle precision correctly
+            # CCXT precision can be:
+            # - int: decimal places (e.g., 2 = 2 decimal places)
+            # - float: step size (e.g., 0.01 = step of 0.01)
+            # - None/0: use default
+            amount_precision_val = precision.get('amount')
+            price_precision_val = precision.get('price')
+            
+            # Convert to int for decimal places, but ensure minimum precision
+            # ⚠️ CRITICAL: Never use 0 precision for prices (would round $0.059 to $0.00)
+            if amount_precision_val is not None and amount_precision_val != 0:
+                amount_precision = int(amount_precision_val)
+            else:
+                amount_precision = 8  # Default to 8 decimal places
+            
+            if price_precision_val is not None and price_precision_val != 0:
+                price_precision = int(price_precision_val)
+            else:
+                # 🔵 COINBASE: Default to 8 decimal places for prices
+                # 🟢 GEMINI: Default to 8 decimal places for prices
+                price_precision = 8  # Never use 0 - would break prices like $0.059960
             
             # Store original values for logging and validation
             original_amount = amount
@@ -239,10 +261,16 @@ class CoinbaseGeminiExchangeManager:
                 order_value_before_rounding = amount * price
             
             # Round amount and price to exchange precision
-            # ⚠️ CRITICAL: Rounding can cause values to become 0 if precision is too high
-            amount = round(amount, amount_precision) if amount_precision >= 0 else amount
+            # ⚠️ CRITICAL: Ensure precision is valid (>= 0 and reasonable)
+            amount = round(amount, amount_precision) if amount_precision > 0 else amount
             if price is not None:
-                price = round(price, price_precision) if price_precision >= 0 else price
+                # 🔵 COINBASE / 🟢 GEMINI: Never round price to 0 decimal places
+                price = round(price, price_precision) if price_precision > 0 else price
+                
+                # Safety check: if price becomes 0 after rounding, use original
+                if price == 0 and original_price > 0:
+                    logger.warning(f"   ⚠️ [{exchange_id.upper()}] Price rounded to 0! Using original: ${original_price:.8f}")
+                    price = original_price
             
             # Validate minimum order size AFTER rounding
             if price is not None:
@@ -252,11 +280,10 @@ class CoinbaseGeminiExchangeManager:
                 
                 # 🔵 COINBASE and 🟢 GEMINI have different minimums - log for debugging
                 if min_order_value < min_cost:
-                    logger.error(f"   ❌ Order validation failed for {symbol}:")
-                    # Store original values for logging
-                    original_amount = amount / (10 ** -amount_precision) if amount_precision < 0 else amount
-                    original_price = order_value_before_rounding / original_amount if original_amount > 0 else price
-                    
+                    # 🔵 COINBASE / 🟢 GEMINI: Comprehensive logging with exchange marker
+                    logger.error(f"   ❌ [{exchange_id.upper()}] Order validation failed for {symbol}:")
+                    logger.error(f"      Exchange: {exchange_id.upper()}")
+                    logger.error(f"      Symbol: {symbol}")
                     logger.error(f"      Amount before rounding: {original_amount:.8f}")
                     logger.error(f"      Amount after rounding: {amount:.8f} (precision: {amount_precision})")
                     logger.error(f"      Price before rounding: ${original_price:.8f}")
@@ -267,10 +294,11 @@ class CoinbaseGeminiExchangeManager:
                     
                     # If rounding caused the issue, warn and suggest fix
                     if order_value_before_rounding >= min_cost and min_order_value < min_cost:
-                        logger.error(f"   ⚠️ Rounding caused order value to drop below minimum!")
+                        logger.error(f"   ⚠️ [{exchange_id.upper()}] Rounding caused order value to drop below minimum!")
                         logger.error(f"   💡 Consider increasing order size or using different precision")
+                        logger.error(f"   💡 Price precision: {price_precision}, Amount precision: {amount_precision}")
                     
-                    raise ValueError(f"Order value ${min_order_value:.2f} < minimum ${min_cost:.2f} for {symbol}")
+                    raise ValueError(f"[{exchange_id.upper()}] Order value ${min_order_value:.2f} < minimum ${min_cost:.2f} for {symbol}")
         else:
             # If no market info, still validate if price is provided
             if price is not None:
@@ -282,6 +310,14 @@ class CoinbaseGeminiExchangeManager:
         # ====================================================================
         # ⚪ COMMON: Order creation (works for both exchanges)
         # ====================================================================
+        # 🔵 COINBASE / 🟢 GEMINI: Create order with comprehensive logging
+        exchange_marker = "🔵" if exchange_id == EXCHANGE_COINBASE else "🟢"
+        logger.info(f"   {exchange_marker} [{exchange_id.upper()}] Creating {side} order:")
+        logger.info(f"      Symbol: {symbol}")
+        logger.info(f"      Type: {order_type}")
+        logger.info(f"      Amount: {amount:.8f}")
+        logger.info(f"      Price: ${price:.8f}" if price else "      Price: MARKET")
+        
         # ⚪ Simple direct call - exactly like BTC script that worked
         try:
             if order_params:
@@ -306,6 +342,8 @@ class CoinbaseGeminiExchangeManager:
             if hasattr(order, '__await__'):
                 order = await order
             
+            order_id = order.get('id', 'unknown')
+            logger.info(f"   {exchange_marker} [{exchange_id.upper()}] ✅ Order created: {order_id}")
             return order
             
         except Exception as e:
