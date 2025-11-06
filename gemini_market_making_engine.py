@@ -101,22 +101,109 @@ class GeminiMarketMakingEngine:
         self.running = False
         self.last_flatten_time = datetime.now()
         
+    async def discover_suitable_pairs(
+        self,
+        min_volume_usd: float = 10000.0,  # $10k minimum 24h volume (lower for Gemini)
+        max_pairs: int = 50,  # Top 50 pairs
+    ) -> List[Tuple[str, float, float, float]]:
+        """
+        Dynamically discover all suitable pairs for market making
+        Returns: List of (pair, volume_24h, spread, score) tuples, sorted by score
+        """
+        logger.info("   🟢 [GEMINI] 🔍 DISCOVERING SUITABLE PAIRS...")
+        exchange = self.exchange_manager.get_exchange('gemini')
+        suitable_pairs = []
+        
+        # Scan all markets
+        for symbol, market_info in exchange.markets.items():
+            try:
+                # Filter: Active spot markets only, USD/USDC/GUSD quote
+                if not market_info.get('active', True) and market_info.get('type') != 'spot':
+                    continue
+                if market_info.get('future', False) or market_info.get('swap', False):
+                    continue
+                if ':' in symbol:  # Skip futures contracts
+                    continue
+                
+                quote = market_info.get('quote', '').strip().upper()
+                if quote not in ['USD', 'USDC', 'GUSD']:
+                    continue
+                
+                # Get ticker data (volume, spread)
+                try:
+                    ticker = await self.exchange_manager.fetch_ticker('gemini', symbol)
+                    
+                    # Get volume
+                    volume_24h = ticker.get('quoteVolume') or ticker.get('quote_volume')
+                    if not volume_24h:
+                        base_volume = ticker.get('volume') or ticker.get('baseVolume')
+                        last_price = ticker.get('last') or ticker.get('close')
+                        if base_volume and last_price:
+                            volume_24h = base_volume * last_price
+                    
+                    if not volume_24h or volume_24h < min_volume_usd:
+                        continue
+                    
+                    # Get spread
+                    bid = ticker.get('bid', 0) or 0
+                    ask = ticker.get('ask', 0) or 0
+                    if bid <= 0 or ask <= 0:
+                        continue
+                    
+                    mid = (bid + ask) / 2
+                    if mid <= 0:
+                        continue
+                    
+                    spread = ((ask - bid) / mid) * 100
+                    
+                    # Calculate suitability score
+                    # Higher volume = better, wider spread = better (up to a point)
+                    volume_score = min(volume_24h / 500000.0, 1.0)  # Normalize to $500k (lower for Gemini)
+                    spread_score = min(spread / 1.0, 1.0)  # Normalize to 1% spread
+                    score = (volume_score * 0.6) + (spread_score * 0.4)  # 60% volume, 40% spread
+                    
+                    suitable_pairs.append((symbol, volume_24h, spread, score))
+                    
+                except Exception as e:
+                    logger.debug(f"   🟢 [GEMINI] Error analyzing {symbol}: {e}")
+                    continue
+                    
+            except Exception as e:
+                logger.debug(f"   🟢 [GEMINI] Error processing {symbol}: {e}")
+                continue
+        
+        # Sort by score (best first)
+        suitable_pairs.sort(key=lambda x: x[3], reverse=True)
+        
+        # Return top N pairs
+        top_pairs = suitable_pairs[:max_pairs]
+        logger.info(f"   🟢 [GEMINI] Found {len(suitable_pairs)} suitable pairs, selecting top {len(top_pairs)}")
+        
+        return top_pairs
+    
     async def initialize(self):
         """Initialize the market-making engine"""
         logger.info("=" * 80)
         logger.info("🚀 INITIALIZING GEMINI MARKET-MAKING ENGINE")
         logger.info("=" * 80)
-        logger.info(f"   Total pairs to check: {len(TOP_GEMINI_PAIRS)}")
         logger.info(f"   Capital per pair: ${self.capital_per_pair:.2f}")
         logger.info(f"   Grid spacing: {self.grid_spacing_percent:.2f}%")
         logger.info(f"   Order size: {self.order_size_percent*100:.1f}% of capital")
         logger.info(f"   Min spread: {self.min_spread_percent:.2f}%")
         logger.info("=" * 80)
         
-        # Verify Gemini has these pairs and filter out non-existent ones
-        # 🟢 GEMINI: Check pairs with USD, USDC, or GUSD (Gemini uses multiple quote currencies)
+        # 🟢 DYNAMIC: Discover all suitable pairs
+        discovered_pairs = await self.discover_suitable_pairs(
+            min_volume_usd=10000.0,  # $10k minimum volume (lower for Gemini)
+            max_pairs=50  # Top 50 pairs
+        )
+        
+        # Combine with hardcoded top pairs (prioritize them)
         exchange = self.exchange_manager.get_exchange('gemini')
         available_pairs = []
+        pair_set = set()
+        
+        # First, add hardcoded top pairs if they exist
         for pair in TOP_GEMINI_PAIRS:
             base_crypto = pair.split('/')[0]
             # Try USD, USDC, and GUSD variants
@@ -124,29 +211,30 @@ class GeminiMarketMakingEngine:
                 test_pair = f"{base_crypto}/{quote}"
                 if test_pair in exchange.markets:
                     market_info = exchange.markets[test_pair]
-                    # 🟢 Gemini may not set 'active' flag - check if market exists
-                    active = market_info.get('active', True)  # Default to True if not set
-                    if active or market_info.get('type') == 'spot':  # Accept if spot market
-                        available_pairs.append(test_pair)
-                        logger.info(f"   ✅ Found {test_pair} on Gemini (using {quote} quote)")
-                        break  # Found a working pair for this crypto
-            else:
-                # No working pair found for this crypto
-                logger.warning(f"   ⚠️ {pair} and variants not found/active on Gemini")
+                    active = market_info.get('active', True)
+                    if active or market_info.get('type') == 'spot':
+                        if test_pair not in pair_set:
+                            available_pairs.append(test_pair)
+                            pair_set.add(test_pair)
+                            logger.info(f"   ✅ Top pair: {test_pair}")
+                        break
         
-        # Store available pairs in instance variable (don't modify global)
+        # Then add discovered pairs (avoid duplicates)
+        for pair, volume, spread, score in discovered_pairs:
+            if pair not in pair_set:
+                available_pairs.append(pair)
+                pair_set.add(pair)
+                logger.info(f"   ✅ Discovered: {pair} | Volume: ${volume:,.0f} | Spread: {spread:.3f}% | Score: {score:.3f}")
+        
         self.available_pairs = available_pairs
         
         # Initialize stats for available pairs only
         self.stats = {}
         for pair in available_pairs:
             self.stats[pair] = MarketMakingStats(pair=pair)
-            # 🟢 IMPROVEMENT: Initialize fill rates (default 0.5 = neutral)
-            self.pair_fill_rates[pair] = 0.5
+            self.pair_fill_rates[pair] = 0.5  # Default neutral fill rate
         
-        logger.info(f"   ✅ Available pairs: {len(available_pairs)}/{len(TOP_GEMINI_PAIRS)}")
-        if len(available_pairs) < len(TOP_GEMINI_PAIRS):
-            logger.warning(f"   ⚠️ Some pairs not available on Gemini - using {len(available_pairs)} pairs")
+        logger.info(f"   ✅ Total available pairs: {len(available_pairs)}")
         if len(available_pairs) == 0:
             logger.error(f"   ❌ No pairs available on Gemini! Market making will not work.")
         logger.info("=" * 80)

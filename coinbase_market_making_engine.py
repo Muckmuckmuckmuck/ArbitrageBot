@@ -113,30 +113,123 @@ class CoinbaseMarketMakingEngine:
         self.running = False
         self.last_flatten_time = datetime.now()
         
+    async def discover_suitable_pairs(
+        self,
+        min_volume_usd: float = 50000.0,  # $50k minimum 24h volume
+        max_pairs: int = 50,  # Top 50 pairs
+    ) -> List[Tuple[str, float, float, float]]:
+        """
+        Dynamically discover all suitable pairs for market making
+        Returns: List of (pair, volume_24h, spread, score) tuples, sorted by score
+        """
+        logger.info("   🔵 [COINBASE] 🔍 DISCOVERING SUITABLE PAIRS...")
+        exchange = self.exchange_manager.get_exchange('coinbase')
+        suitable_pairs = []
+        
+        # Scan all markets
+        for symbol, market_info in exchange.markets.items():
+            try:
+                # Filter: Active spot markets only, USD/USDC/USDT quote
+                if not market_info.get('active', True):
+                    continue
+                if market_info.get('future', False) or market_info.get('swap', False):
+                    continue
+                if ':' in symbol:  # Skip futures contracts
+                    continue
+                
+                quote = market_info.get('quote', '').strip().upper()
+                if quote not in ['USD', 'USDC', 'USDT']:
+                    continue
+                
+                # Get ticker data (volume, spread)
+                try:
+                    ticker = await self.exchange_manager.fetch_ticker('coinbase', symbol)
+                    
+                    # Get volume
+                    volume_24h = ticker.get('quoteVolume') or ticker.get('quote_volume')
+                    if not volume_24h:
+                        base_volume = ticker.get('volume') or ticker.get('baseVolume')
+                        last_price = ticker.get('last') or ticker.get('close')
+                        if base_volume and last_price:
+                            volume_24h = base_volume * last_price
+                    
+                    if not volume_24h or volume_24h < min_volume_usd:
+                        continue
+                    
+                    # Get spread
+                    bid = ticker.get('bid', 0) or 0
+                    ask = ticker.get('ask', 0) or 0
+                    if bid <= 0 or ask <= 0:
+                        continue
+                    
+                    mid = (bid + ask) / 2
+                    if mid <= 0:
+                        continue
+                    
+                    spread = ((ask - bid) / mid) * 100
+                    
+                    # Calculate suitability score
+                    # Higher volume = better, wider spread = better (up to a point)
+                    volume_score = min(volume_24h / 1000000.0, 1.0)  # Normalize to $1M
+                    spread_score = min(spread / 2.0, 1.0)  # Normalize to 2% spread
+                    score = (volume_score * 0.6) + (spread_score * 0.4)  # 60% volume, 40% spread
+                    
+                    suitable_pairs.append((symbol, volume_24h, spread, score))
+                    
+                except Exception as e:
+                    logger.debug(f"   🔵 [COINBASE] Error analyzing {symbol}: {e}")
+                    continue
+                    
+            except Exception as e:
+                logger.debug(f"   🔵 [COINBASE] Error processing {symbol}: {e}")
+                continue
+        
+        # Sort by score (best first)
+        suitable_pairs.sort(key=lambda x: x[3], reverse=True)
+        
+        # Return top N pairs
+        top_pairs = suitable_pairs[:max_pairs]
+        logger.info(f"   🔵 [COINBASE] Found {len(suitable_pairs)} suitable pairs, selecting top {len(top_pairs)}")
+        
+        return top_pairs
+    
     async def initialize(self):
         """Initialize the market-making engine"""
         logger.info("=" * 80)
         logger.info("🚀 INITIALIZING COINBASE MARKET-MAKING ENGINE")
         logger.info("=" * 80)
-        logger.info(f"   Total pairs to check: {len(TOP_COINBASE_PAIRS)}")
         logger.info(f"   Capital per pair: ${self.capital_per_pair:.2f}")
         logger.info(f"   Grid spacing: {self.grid_spacing_percent:.2f}%")
         logger.info(f"   Order size: {self.order_size_percent*100:.1f}% of capital")
         logger.info(f"   Min spread: {self.min_spread_percent:.2f}%")
         logger.info("=" * 80)
         
-        # Verify Coinbase has these pairs
+        # 🔵 DYNAMIC: Discover all suitable pairs
+        discovered_pairs = await self.discover_suitable_pairs(
+            min_volume_usd=50000.0,  # $50k minimum volume
+            max_pairs=50  # Top 50 pairs
+        )
+        
+        # Combine with hardcoded top pairs (prioritize them)
         exchange = self.exchange_manager.get_exchange('coinbase')
         available_pairs = []
+        pair_set = set()
+        
+        # First, add hardcoded top pairs if they exist
         for pair in TOP_COINBASE_PAIRS:
             if pair in exchange.markets:
                 market_info = exchange.markets[pair]
-                active = market_info.get('active', True)
-                if active and not market_info.get('future', False) and ':' not in pair:
+                if market_info.get('active', True) and not market_info.get('future', False) and ':' not in pair:
                     available_pairs.append(pair)
-                    logger.info(f"   ✅ Found {pair} on Coinbase")
-            else:
-                logger.warning(f"   ⚠️ {pair} not found on Coinbase")
+                    pair_set.add(pair)
+                    logger.info(f"   ✅ Top pair: {pair}")
+        
+        # Then add discovered pairs (avoid duplicates)
+        for pair, volume, spread, score in discovered_pairs:
+            if pair not in pair_set:
+                available_pairs.append(pair)
+                pair_set.add(pair)
+                logger.info(f"   ✅ Discovered: {pair} | Volume: ${volume:,.0f} | Spread: {spread:.3f}% | Score: {score:.3f}")
         
         self.available_pairs = available_pairs
         
@@ -145,8 +238,9 @@ class CoinbaseMarketMakingEngine:
         for pair in available_pairs:
             self.stats[pair] = MarketMakingStats(pair=pair)
             self.pair_fill_rates[pair] = 0.5  # Default neutral fill rate
+            self.pair_performance[pair] = {'total_profit': 0.0, 'trades': 0}
         
-        logger.info(f"   ✅ Available pairs: {len(available_pairs)}/{len(TOP_COINBASE_PAIRS)}")
+        logger.info(f"   ✅ Total available pairs: {len(available_pairs)}")
         if len(available_pairs) == 0:
             logger.error(f"   ❌ No pairs available on Coinbase! Market making will not work.")
         logger.info("=" * 80)
