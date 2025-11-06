@@ -1396,22 +1396,35 @@ class IntraExchangeArbitrageEngine:
             
             # Place limit buy order (maker fee) - use exchange manager
             buy_price_limit = opportunity.buy_price * price_buffer
-            logger.info(f"{exchange_marker} [{exchange_id.upper()}]    📝 Placing BUY limit order:")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]    📝 ATTEMPTING TO PLACE BUY ORDER...")
             logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Pair: {opportunity.buy_pair}")
             logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Amount: {base_amount:.6f} {opportunity.base_crypto}")
             logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Price: ${buy_price_limit:.6f} (target: ${opportunity.buy_price:.6f})")
             logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Fee type: Maker (lower fee)")
+            logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Creating buy order - amount={base_amount:.6f}, price=${buy_price_limit:.6f}")
             
-            buy_order = await self.exchange_manager.create_order(
-                exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
-                symbol=opportunity.buy_pair,
-                order_type='limit',
-                side='buy',
-                amount=base_amount,
-                price=buy_price_limit
-            )
-            buy_order_id = buy_order.get('id')
-            logger.info(f"{exchange_marker} [{exchange_id.upper()}]    ✅ Buy order placed: {buy_order_id}")
+            try:
+                buy_order = await self.exchange_manager.create_order(
+                    exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
+                    symbol=opportunity.buy_pair,
+                    order_type='limit',
+                    side='buy',
+                    amount=base_amount,
+                    price=buy_price_limit
+                )
+                logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Buy order response = {buy_order}")
+                
+                buy_order_id = buy_order.get('id') if buy_order else None
+                if buy_order_id:
+                    logger.info(f"{exchange_marker} [{exchange_id.upper()}]    ✅✅✅ BUY ORDER PLACED SUCCESSFULLY: Order ID: {buy_order_id}")
+                else:
+                    logger.error(f"{exchange_marker} [{exchange_id.upper()}]    ❌❌❌ BUY ORDER FAILED: No order ID returned! Response: {buy_order}")
+                    raise ValueError(f"Buy order creation returned no ID: {buy_order}")
+            except Exception as e:
+                logger.error(f"{exchange_marker} [{exchange_id.upper()}]    ❌❌❌ FAILED TO PLACE BUY ORDER: {type(e).__name__}: {e}")
+                import traceback
+                logger.error(f"{exchange_marker} [{exchange_id.upper()}]    Traceback: {traceback.format_exc()}")
+                raise
             
             # Wait for fill with price chasing
             buy_order_status, actual_buy_price = await self._wait_for_order_fill_with_chase(
@@ -1546,11 +1559,12 @@ class IntraExchangeArbitrageEngine:
             # Place limit sell order (maker fee) - use exchange manager
             sell_price_limit = opportunity.sell_price * 0.999  # Slightly below to ensure fill
             # 🔵 COINBASE / 🟢 GEMINI: Place sell order with comprehensive logging
-            logger.info(f"{exchange_marker} [{exchange_id.upper()}]    📝 Placing SELL limit order:")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]    📝 ATTEMPTING TO PLACE SELL ORDER...")
             logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Pair: {opportunity.sell_pair}")
             logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Amount: {base_amount:.6f} {opportunity.base_crypto}")
             logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Price: ${sell_price_limit:.6f} (target: ${opportunity.sell_price:.6f})")
             logger.info(f"{exchange_marker} [{exchange_id.upper()}]       Fee type: Maker (lower fee)")
+            logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Creating sell order - amount={base_amount:.6f}, price=${sell_price_limit:.6f}")
             
             try:
                 sell_order = await self.exchange_manager.create_order(
@@ -1561,11 +1575,19 @@ class IntraExchangeArbitrageEngine:
                     amount=base_amount,
                     price=sell_price_limit
                 )
-                sell_order_id = sell_order.get('id')
-                logger.info(f"   {exchange_marker} [{exchange_id.upper()}] ✅ Sell order placed: {sell_order_id}")
+                logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Sell order response = {sell_order}")
+                
+                sell_order_id = sell_order.get('id') if sell_order else None
+                if sell_order_id:
+                    logger.info(f"{exchange_marker} [{exchange_id.upper()}]    ✅✅✅ SELL ORDER PLACED SUCCESSFULLY: Order ID: {sell_order_id}")
+                else:
+                    logger.error(f"{exchange_marker} [{exchange_id.upper()}]    ❌❌❌ SELL ORDER FAILED: No order ID returned! Response: {sell_order}")
+                    raise ValueError(f"Sell order creation returned no ID: {sell_order}")
             except Exception as e:
                 error_msg = str(e)
-                logger.error(f"   {exchange_marker} [{exchange_id.upper()}] ❌ Sell order failed: {error_msg}")
+                logger.error(f"{exchange_marker} [{exchange_id.upper()}]    ❌❌❌ FAILED TO PLACE SELL ORDER: {type(e).__name__}: {error_msg}")
+                import traceback
+                logger.error(f"{exchange_marker} [{exchange_id.upper()}]    Traceback: {traceback.format_exc()}")
                 
                 # 🔵 COINBASE / 🟢 GEMINI: Check balance again for diagnostics
                 if "insufficient" in error_msg.lower() or "fund" in error_msg.lower():
