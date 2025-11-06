@@ -194,21 +194,39 @@ class IntraExchangeArbitrageEngine:
     Works separately on Coinbase and Gemini (no mixing)
     """
     
-    def __init__(self, min_profit_threshold: float = 0.002, max_position_size_usd: float = 100.0):
+    def __init__(self, min_profit_threshold: float = 0.001, max_position_size_usd: float = 100.0):
         """
         Initialize the trading engine
         
         Args:
-            min_profit_threshold: Minimum net profit % to enter trade (default 0.2%)
+            min_profit_threshold: Minimum net profit % to enter trade (default 0.1%)
             max_position_size_usd: Maximum position size per trade (default $100)
         """
         self.exchange_manager = CoinbaseGeminiExchangeManager()
-        self.min_profit_threshold = min_profit_threshold
-        self.max_position_size_usd = max_position_size_usd
         
         # Exchange-specific trackers (NEVER MIXED)
         self.coinbase_calculator = ProfitabilityCalculator('coinbase')
         self.gemini_calculator = ProfitabilityCalculator('gemini')
+        
+        # 🔵 CRITICAL: Calculate minimum threshold based on fees to ensure profitability
+        # Minimum threshold = fees + small buffer (0.05%) to account for slippage/latency
+        coinbase_min_fees = (self.coinbase_calculator.maker_fee * 2)  # Buy + Sell
+        gemini_min_fees = (self.gemini_calculator.maker_fee * 2)  # Buy + Sell
+        
+        # Use the higher of: user threshold or (fees + 0.05% buffer)
+        # This ensures we always make profit after fees
+        coinbase_min_threshold = max(min_profit_threshold, coinbase_min_fees + 0.0005)
+        gemini_min_threshold = max(min_profit_threshold, gemini_min_fees + 0.0005)
+        
+        # Store exchange-specific minimum thresholds
+        self.exchange_min_thresholds = {
+            'coinbase': coinbase_min_threshold,
+            'gemini': gemini_min_threshold
+        }
+        
+        # Use the lower threshold as base (more aggressive)
+        self.min_profit_threshold = min_profit_threshold
+        self.max_position_size_usd = max_position_size_usd
         
         # Statistics
         self.stats = {
@@ -238,7 +256,11 @@ class IntraExchangeArbitrageEngine:
         
         # Dynamic thresholds per pair (learns from past performance)
         # Higher threshold = more conservative (requires larger profit)
-        self.pair_thresholds: Dict[str, float] = defaultdict(lambda: min_profit_threshold)
+        # Default to exchange-specific minimum (ensures profitability after fees)
+        def get_default_threshold():
+            # This will be set per exchange when checking opportunities
+            return min_profit_threshold
+        self.pair_thresholds: Dict[str, float] = defaultdict(get_default_threshold)
         
         # Trade history for learning (track last N trades per pair)
         self.trade_history: Dict[str, List[float]] = defaultdict(list)
@@ -274,6 +296,15 @@ class IntraExchangeArbitrageEngine:
         logger.info("🚀 INITIALIZING INTRA-EXCHANGE ARBITRAGE ENGINE")
         logger.info("=" * 80)
         await self.exchange_manager.initialize()
+        
+        # Log exchange-specific thresholds
+        logger.info("")
+        logger.info("💰 Profit Thresholds (ensures profit after fees):")
+        logger.info(f"   🔵 Coinbase: {self.exchange_min_thresholds['coinbase']*100:.3f}% (fees: {self.coinbase_calculator.maker_fee*2*100:.2f}% + 0.05% buffer)")
+        logger.info(f"   🟢 Gemini: {self.exchange_min_thresholds['gemini']*100:.3f}% (fees: {self.gemini_calculator.maker_fee*2*100:.2f}% + 0.05% buffer)")
+        logger.info(f"   Base threshold: {self.min_profit_threshold*100:.3f}%")
+        logger.info("")
+        
         logger.info("✅ Engine initialized")
     
     def _get_exchange_id(self, exchange_obj) -> str:
@@ -596,7 +627,21 @@ class IntraExchangeArbitrageEngine:
                     # Check if profitable
                     net_profit = profit_data['net_profit']
                     pair_key = f"{buy_pair}/{sell_pair}"
-                    threshold = self.pair_thresholds[pair_key]
+                    
+                    # 🔵 CRITICAL: Use exchange-specific minimum threshold (ensures profit after fees)
+                    # If pair doesn't have a learned threshold, use exchange minimum
+                    if pair_key not in self.pair_thresholds or self.pair_thresholds[pair_key] == self.min_profit_threshold:
+                        # Use exchange-specific minimum (fees + buffer)
+                        threshold = self.exchange_min_thresholds.get(exchange_id, self.min_profit_threshold)
+                        self.pair_thresholds[pair_key] = threshold
+                    else:
+                        threshold = self.pair_thresholds[pair_key]
+                    
+                    # 🔵 DOUBLE-CHECK: Ensure net_profit is positive (profitable after all costs)
+                    # This is a safety check - net_profit already accounts for fees, slippage, latency
+                    if net_profit <= 0:
+                        logger.debug(f"   ⚠️ Skipping {base_crypto}: Net profit {net_profit*100:.3f}% <= 0% (not profitable after fees)")
+                        continue
                     
                     # 🔵 COMPREHENSIVE LOGGING: Log ALL cryptos and their spreads (even if not profitable)
                     raw_spread_pct = profit_data['raw_spread'] * 100

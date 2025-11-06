@@ -60,7 +60,7 @@ class DualStrategyBot:
         logger.info("\n📊 Initializing Coinbase Intra-Exchange Arbitrage Engine...")
         # Note: IntraExchangeArbitrageEngine creates its own exchange_manager internally
         self.arbitrage_engine = IntraExchangeArbitrageEngine(
-            min_profit_threshold=0.002,  # 0.2% minimum
+            min_profit_threshold=0.0005,  # 0.05% minimum (will auto-adjust to fees + buffer)
             max_position_size_usd=50.0    # $50 max per trade
         )
         await self.arbitrage_engine.initialize()
