@@ -53,6 +53,7 @@ class MarketMakingOrder:
     status: str = 'pending'  # 'pending', 'open', 'filled', 'canceled'
     created_at: datetime = field(default_factory=datetime.now)
     filled_at: Optional[datetime] = None
+    filled_amount: float = 0.0  # Track partial fills - amount that has been filled so far
 
 @dataclass
 class MarketMakingStats:
