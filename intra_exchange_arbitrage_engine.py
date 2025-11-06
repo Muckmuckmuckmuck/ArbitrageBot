@@ -1410,7 +1410,7 @@ class IntraExchangeArbitrageEngine:
                 if trade_size < opportunity.trade_size_usd:
                     logger.info(f"   💡 Adjusted trade size: ${trade_size:.2f} (available) vs ${opportunity.trade_size_usd:.2f} (desired)")
                 else:
-                logger.info(f"   📊 Fixed sizing: ${trade_size:.2f} position")
+                    logger.info(f"   📊 Fixed sizing: ${trade_size:.2f} position")
             
             base_amount = trade_size / opportunity.buy_price
             logger.info(f"   💵 Trade size: ${trade_size:.2f} → {base_amount:.6f} {opportunity.base_crypto}")
@@ -1436,14 +1436,14 @@ class IntraExchangeArbitrageEngine:
             logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Creating buy order - amount={base_amount:.6f}, price=${buy_price_limit:.6f}")
             
             try:
-            buy_order = await self.exchange_manager.create_order(
-                exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
-                symbol=opportunity.buy_pair,
-                order_type='limit',
-                side='buy',
-                amount=base_amount,
-                price=buy_price_limit
-            )
+                buy_order = await self.exchange_manager.create_order(
+                    exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
+                    symbol=opportunity.buy_pair,
+                    order_type='limit',
+                    side='buy',
+                    amount=base_amount,
+                    price=buy_price_limit
+                )
                 logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Buy order response = {buy_order}")
                 
                 buy_order_id = buy_order.get('id') if buy_order else None
@@ -1599,14 +1599,14 @@ class IntraExchangeArbitrageEngine:
             logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Creating sell order - amount={base_amount:.6f}, price=${sell_price_limit:.6f}")
             
             try:
-            sell_order = await self.exchange_manager.create_order(
-                exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
-                symbol=opportunity.sell_pair,
-                order_type='limit',
-                side='sell',
-                amount=base_amount,
-                price=sell_price_limit
-            )
+                sell_order = await self.exchange_manager.create_order(
+                    exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
+                    symbol=opportunity.sell_pair,
+                    order_type='limit',
+                    side='sell',
+                    amount=base_amount,
+                    price=sell_price_limit
+                )
                 logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Sell order response = {sell_order}")
                 
                 sell_order_id = sell_order.get('id') if sell_order else None
@@ -1857,19 +1857,19 @@ class IntraExchangeArbitrageEngine:
                 logger.info(f"      Opportunities found: {coinbase_results.get('opportunities_found', 0)}")
                 logger.info(f"      Trades executed: {coinbase_results.get('trades_executed', 0)}")
                 logger.info(f"      Trades skipped: {coinbase_results.get('trades_skipped', 0)}")
-                                logger.info(f"")
+                logger.info(f"")
                 logger.info(f"   ✅ GEMINI:")
                 logger.info(f"      Opportunities found: {gemini_results.get('opportunities_found', 0)}")
                 logger.info(f"      Trades executed: {gemini_results.get('trades_executed', 0)}")
                 logger.info(f"      Trades skipped: {gemini_results.get('trades_skipped', 0)}")
-                                logger.info(f"")
+                logger.info(f"")
                 logger.info(f"   📈 TOTAL:")
                 total_found = coinbase_results.get('opportunities_found', 0) + gemini_results.get('opportunities_found', 0)
                 total_executed = coinbase_results.get('trades_executed', 0) + gemini_results.get('trades_executed', 0)
                 logger.info(f"      Opportunities found: {total_found}")
                 logger.info(f"      Trades executed: {total_executed}")
                 logger.info("=" * 80)
-                    logger.info("")
+                logger.info("")
                 
                 # Print statistics
                 self._print_statistics()
