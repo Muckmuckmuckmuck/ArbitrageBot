@@ -603,25 +603,36 @@ class IntraExchangeArbitrageEngine:
                     net_profit_pct = net_profit * 100
                     deficit = threshold - net_profit if net_profit < threshold else 0
                     
+                    # Detailed fee breakdown for debugging
+                    fees_total_pct = profit_data['fees_total'] * 100
+                    slippage_total_pct = profit_data['slippage_total'] * 100
+                    latency_risk_pct = profit_data['latency_risk'] * 100
+                    
                     if net_profit >= threshold:
                         # Profitable opportunity
                         logger.info(f"{exchange_marker} [{exchange_id.upper()}] ✅ {base_crypto}: "
                                    f"Buy {buy_pair} @ ${usd_buy_price:.6f} | "
                                    f"Sell {sell_pair} @ ${usd_sell_price:.6f} | "
                                    f"Raw Spread: {raw_spread_pct:.3f}% | "
+                                   f"Fees: {fees_total_pct:.3f}% | "
+                                   f"Slippage: {slippage_total_pct:.3f}% | "
+                                   f"Latency: {latency_risk_pct:.3f}% | "
                                    f"Net Profit: {net_profit_pct:.3f}% | "
                                    f"Threshold: {threshold*100:.3f}% | "
                                    f"Expected: ${profit_data['expected_profit_usd']:.2f}")
                     else:
-                        # Not profitable - but still log it
+                        # Not profitable - log detailed breakdown
                         logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⚠️ {base_crypto}: "
                                    f"Buy {buy_pair} @ ${usd_buy_price:.6f} | "
                                    f"Sell {sell_pair} @ ${usd_sell_price:.6f} | "
                                    f"Raw Spread: {raw_spread_pct:.3f}% | "
+                                   f"Fees: {fees_total_pct:.3f}% | "
+                                   f"Slippage: {slippage_total_pct:.3f}% | "
+                                   f"Latency: {latency_risk_pct:.3f}% | "
                                    f"Net Profit: {net_profit_pct:.3f}% | "
                                    f"Threshold: {threshold*100:.3f}% | "
                                    f"Deficit: {deficit*100:.3f}% | "
-                                   f"Reason: Spread too small or fees too high")
+                                   f"Reason: Spread {raw_spread_pct:.3f}% < Fees {fees_total_pct:.3f}% + Costs")
                     
                     if net_profit >= threshold:
                         # Calculate opportunity score

@@ -611,8 +611,11 @@ class GeminiMarketMakingEngine:
         logger.info(f"   🟢 Strategy: Passive Market Making")
         pairs_to_show = len(self.available_pairs) if self.available_pairs else len(TOP_GEMINI_PAIRS)
         logger.info(f"   🟢 Pairs: {pairs_to_show}")
+        logger.info(f"   🟢 Available pairs: {self.available_pairs if self.available_pairs else 'Not initialized'}")
         logger.info(f"   🟢 Update interval: {self.requote_interval_seconds}s")
         logger.info(f"   🟢 Take profit interval: {self.take_profit_interval_minutes} minutes")
+        logger.info(f"   🟢 Capital per pair: ${self.capital_per_pair:.2f}")
+        logger.info(f"   🟢 Order size: {self.order_size_percent*100:.1f}% of capital = ${self.capital_per_pair * self.order_size_percent:.2f} per order")
         logger.info("=" * 80)
         
         self.running = True
