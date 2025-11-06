@@ -927,7 +927,7 @@ class IntraExchangeArbitrageEngine:
         Re-check spread right before execution
         Opportunities disappear fast - this prevents bad trades
         """
-            exchange_id = opportunity.exchange
+        exchange_id = opportunity.exchange
         exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
         
         try:
