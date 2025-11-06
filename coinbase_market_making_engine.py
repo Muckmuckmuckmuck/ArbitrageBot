@@ -642,6 +642,9 @@ class CoinbaseMarketMakingEngine:
                             
                             if mm_order.side == 'buy':
                                 logger.info(f"   🔵 [COINBASE] ✅ BUY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
+                                
+                                # 🔵 CRITICAL: Immediately place sell order for FULL amount bought
+                                await self._place_sell_order_for_filled_buy(pair, filled, price)
                             else:
                                 spread_profit = (price - mm_order.price) * filled if mm_order.side == 'sell' else 0
                                 logger.info(f"   🔵 [COINBASE] ✅ SELL FILLED: {pair} @ ${price:.4f} for {filled:.6f} | Profit: ${spread_profit:.2f}")
@@ -657,6 +660,108 @@ class CoinbaseMarketMakingEngine:
             pass
         
         return filled_count
+    
+    async def _place_sell_order_for_filled_buy(self, pair: str, filled_amount: float, buy_price: float):
+        """
+        Place a sell order immediately after a buy order fills
+        This ensures we sell the complete amount we bought
+        """
+        try:
+            base_currency = pair.split('/')[0]
+            
+            # Wait a moment for balance to update
+            await asyncio.sleep(0.5)
+            
+            # Get current inventory to verify we have the crypto
+            inventory = await self.get_inventory_balance(base_currency)
+            if inventory is None:
+                inventory = 0.0
+            
+            # Use the actual filled amount (or available inventory if less)
+            sell_amount = min(filled_amount, inventory)
+            
+            if sell_amount <= 0:
+                logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: No inventory available to sell after buy fill (filled: {filled_amount}, inventory: {inventory})")
+                return
+            
+            # Get current market price for sell order
+            ticker = await self.exchange_manager.fetch_ticker('coinbase', pair)
+            current_ask = ticker.get('ask', 0) or 0
+            current_bid = ticker.get('bid', 0) or 0
+            
+            if current_ask <= 0:
+                # Fallback to buy_price with markup
+                sell_price = buy_price * 1.01  # 1% markup
+                logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: No ask price, using buy_price * 1.01 = ${sell_price:.6f}")
+            else:
+                # Place sell order slightly above ask to get filled quickly
+                spread = await self.get_spread(pair)
+                if spread and spread > 0:
+                    # Use 50% of spread as markup
+                    markup = min(max(spread * 0.5, 0.15), 0.5) / 100
+                else:
+                    markup = 0.002  # Default 0.2% markup
+                
+                sell_price = current_ask * (1 + markup)
+            
+            # Get market info for precision
+            exchange = self.exchange_manager.get_exchange('coinbase')
+            market_info = exchange.markets.get(pair, {})
+            precision_data = market_info.get('precision', {})
+            
+            amount_precision = max(int(precision_data.get('amount', 8)), 1)
+            price_precision = max(int(precision_data.get('price', 8)), 2)
+            
+            # Round amounts to exchange precision
+            sell_amount = round(sell_amount, amount_precision)
+            
+            # Check minimum order size
+            min_cost = market_info.get('limits', {}).get('cost', {}).get('min', 1.0)
+            min_amount = market_info.get('limits', {}).get('amount', {}).get('min', 0.0)
+            
+            if sell_amount * sell_price < min_cost:
+                logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: Sell order value ${sell_amount * sell_price:.2f} < minimum ${min_cost:.2f}, skipping")
+                return
+            
+            if sell_amount < min_amount:
+                logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: Sell amount {sell_amount:.6f} < minimum {min_amount:.6f}, skipping")
+                return
+            
+            # Place the sell order
+            logger.info(f"   🔵 [COINBASE] 📝 PLACING SELL ORDER for filled buy: {pair} @ ${sell_price:.6f} for {sell_amount:.6f} (${sell_amount * sell_price:.2f})")
+            
+            sell_order = await self.exchange_manager.create_order(
+                exchange_id='coinbase',
+                symbol=pair,
+                order_type='limit',
+                side='sell',
+                amount=sell_amount,
+                price=sell_price
+            )
+            
+            sell_order_id = sell_order.get('id')
+            if sell_order_id:
+                # Track the order
+                from datetime import datetime
+                mm_order = MarketMakingOrder(
+                    pair=pair,
+                    side='sell',
+                    price=sell_price,
+                    amount=sell_amount,
+                    order_id=sell_order_id,
+                    status='open',
+                    created_at=datetime.now()
+                )
+                self.active_orders[pair].append(mm_order)
+                
+                logger.info(f"   🔵 [COINBASE] ✅✅✅ SELL ORDER PLACED for filled buy: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} | Order ID: {sell_order_id}")
+            else:
+                logger.error(f"   🔵 [COINBASE] ❌ Failed to place sell order for filled buy: No order ID returned")
+                
+        except Exception as e:
+            logger.error(f"   🔵 [COINBASE] ❌ ERROR placing sell order for filled buy on {pair}: {type(e).__name__}: {e}")
+            import traceback
+            logger.debug(f"   🔵 [COINBASE] Traceback: {traceback.format_exc()}")
     
     async def flatten_positions(self):
         """Flatten all positions (take profit)"""
