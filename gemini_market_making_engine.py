@@ -343,8 +343,17 @@ class GeminiMarketMakingEngine:
             # CCXT precision can be int (decimal places) or float (step size)
             # Convert to int for round() function
             precision_data = market_info.get('precision', {})
-            amount_precision = int(precision_data.get('amount', 8)) if precision_data.get('amount') else 8
-            price_precision = int(precision_data.get('price', 8)) if precision_data.get('price') else 8
+            amount_precision_val = precision_data.get('amount', 8)
+            if amount_precision_val:
+                amount_precision = max(int(amount_precision_val), 1)  # At least 1 decimal place
+            else:
+                amount_precision = 8  # Default to 8
+            
+            price_precision_val = precision_data.get('price', 8)
+            if price_precision_val:
+                price_precision = max(int(price_precision_val), 1)  # At least 1 decimal place
+            else:
+                price_precision = 8  # Default to 8
             
             # Get minimum order size from market info
             limits = market_info.get('limits', {})
@@ -397,13 +406,32 @@ class GeminiMarketMakingEngine:
                 order_value_usd = order_amount * current_price
                 logger.debug(f"   🟢 [GEMINI] {pair}: Adjusted order amount to minimum {min_amount}")
             
-            # Calculate grid prices (use dynamic spacing if available)
-            if spread:
-                buy_price = current_price * (1 - dynamic_spacing / 100)
-                sell_price = current_price * (1 + dynamic_spacing / 100)
+            # 🟢 CRITICAL: Get actual bid/ask for more accurate pricing
+            ticker = await self.exchange_manager.fetch_ticker('gemini', pair)
+            bid = ticker.get('bid', 0) or 0
+            ask = ticker.get('ask', 0) or 0
+            
+            # Use bid/ask if available, otherwise use current_price with spacing
+            if bid > 0 and ask > 0:
+                # Place buy order slightly below bid (to get filled)
+                # Place sell order slightly above ask (to get filled)
+                buy_price = bid * (1 - dynamic_spacing / 100) if spread else bid * (1 - self.grid_spacing_percent / 100)
+                sell_price = ask * (1 + dynamic_spacing / 100) if spread else ask * (1 + self.grid_spacing_percent / 100)
+                
+                # Ensure sell_price > buy_price
+                if sell_price <= buy_price:
+                    # If they're too close, use spacing from mid price
+                    mid_price = (bid + ask) / 2
+                    buy_price = mid_price * (1 - dynamic_spacing / 100) if spread else mid_price * (1 - self.grid_spacing_percent / 100)
+                    sell_price = mid_price * (1 + dynamic_spacing / 100) if spread else mid_price * (1 + self.grid_spacing_percent / 100)
             else:
-                buy_price = current_price * (1 - self.grid_spacing_percent / 100)
-                sell_price = current_price * (1 + self.grid_spacing_percent / 100)
+                # Fallback to current_price with spacing
+                if spread:
+                    buy_price = current_price * (1 - dynamic_spacing / 100)
+                    sell_price = current_price * (1 + dynamic_spacing / 100)
+                else:
+                    buy_price = current_price * (1 - self.grid_spacing_percent / 100)
+                    sell_price = current_price * (1 + self.grid_spacing_percent / 100)
             
             # 🔵 CRITICAL FIX: Validate prices are not None before rounding
             if buy_price is None or sell_price is None or buy_price <= 0 or sell_price <= 0:

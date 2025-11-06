@@ -410,7 +410,8 @@ class CoinbaseGeminiExchangeManager:
             order_id = order_result.get('id') if order_result else None
             if order_id:
                 logger.info(f"   {exchange_marker} [{exchange_id.upper()}] ✅✅✅ ORDER CREATED SUCCESSFULLY: ID={order_id}")
-                logger.info(f"   {exchange_marker} [{exchange_id.upper()}] Order details: {symbol} {side} {amount:.8f} @ ${price:.8f if price else 'MARKET'}")
+                price_str = f"${price:.8f}" if price else "MARKET"
+                logger.info(f"   {exchange_marker} [{exchange_id.upper()}] Order details: {symbol} {side} {amount:.8f} @ {price_str}")
             else:
                 logger.warning(f"   {exchange_marker} [{exchange_id.upper()}] ⚠️ Order created but no ID returned: {order_result}")
             

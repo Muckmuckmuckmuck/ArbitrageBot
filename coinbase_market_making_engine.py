@@ -357,7 +357,7 @@ class CoinbaseMarketMakingEngine:
             
             price_precision_val = precision_data.get('price', 8)
             if price_precision_val:
-                price_precision = max(int(price_precision_val), 1)  # At least 1 decimal place
+                price_precision = max(int(price_precision_val), 2)  # At least 2 decimal places for prices
             else:
                 price_precision = 8  # Default to 8
             
@@ -390,9 +390,28 @@ class CoinbaseMarketMakingEngine:
                     logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - order amount too small after rounding")
                     return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_amount_too_small'}
             
-            # Calculate buy and sell prices
-            buy_price = current_price * (1 - dynamic_spacing / 100)
-            sell_price = current_price * (1 + dynamic_spacing / 100)
+            # 🔵 CRITICAL: Get actual bid/ask for more accurate pricing
+            ticker = await self.exchange_manager.fetch_ticker('coinbase', pair)
+            bid = ticker.get('bid', 0) or 0
+            ask = ticker.get('ask', 0) or 0
+            
+            # Use bid/ask if available, otherwise use current_price with spacing
+            if bid > 0 and ask > 0:
+                # Place buy order slightly below bid (to get filled)
+                # Place sell order slightly above ask (to get filled)
+                buy_price = bid * (1 - dynamic_spacing / 100)
+                sell_price = ask * (1 + dynamic_spacing / 100)
+                
+                # Ensure sell_price > buy_price
+                if sell_price <= buy_price:
+                    # If they're too close, use spacing from mid price
+                    mid_price = (bid + ask) / 2
+                    buy_price = mid_price * (1 - dynamic_spacing / 100)
+                    sell_price = mid_price * (1 + dynamic_spacing / 100)
+            else:
+                # Fallback to current_price with spacing
+                buy_price = current_price * (1 - dynamic_spacing / 100)
+                sell_price = current_price * (1 + dynamic_spacing / 100)
             
             buy_price = round(buy_price, price_precision)
             sell_price = round(sell_price, price_precision)
