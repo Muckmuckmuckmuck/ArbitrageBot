@@ -114,7 +114,15 @@ class ProfitabilityCalculator:
         """
         
         # 1. Raw Spread
-        raw_spread = (sell_price - buy_price) / buy_price
+        # 🔵 CRITICAL: Ensure sell_price > buy_price for positive spread
+        # If not, this indicates a calculation error or reversed prices
+        if sell_price <= buy_price:
+            # This should never happen if called correctly, but log a warning
+            logger.warning(f"   ⚠️ Invalid price order in spread calculation: sell ${sell_price:.6f} <= buy ${buy_price:.6f}")
+            # Return negative spread to indicate error
+            raw_spread = (sell_price - buy_price) / buy_price
+        else:
+            raw_spread = (sell_price - buy_price) / buy_price
         
         # 2. Trading Fees (using maker fees for limit orders)
         fees_total = self.maker_fee + self.maker_fee  # Buy + Sell
@@ -533,6 +541,23 @@ class IntraExchangeArbitrageEngine:
                     # Calculate spread width
                     spread_width = abs(usd_sell_price - usd_buy_price)
                     
+                    # 🔵 CRITICAL FIX: Ensure sell_price > buy_price (if not, reverse the trade)
+                    # If we're getting negative spreads, it means we should reverse the direction
+                    if usd_sell_price <= usd_buy_price:
+                        # Reverse the trade: what we thought was buy should be sell, and vice versa
+                        logger.debug(f"   🔄 Reversing trade direction: sell ${usd_sell_price:.6f} <= buy ${usd_buy_price:.6f}")
+                        # Swap buy and sell
+                        buy_pair, sell_pair = sell_pair, buy_pair
+                        buy_price, sell_price = sell_price, buy_price
+                        buy_quote, sell_quote = sell_quote, buy_quote
+                        usd_buy_price, usd_sell_price = usd_sell_price, usd_buy_price
+                        # Also swap order book depths
+                        depth_buy, depth_sell = depth_sell, depth_buy
+                        logger.debug(f"   ✅ Reversed: Now buying {buy_pair} @ ${usd_buy_price:.6f}, selling {sell_pair} @ ${usd_sell_price:.6f}")
+                    
+                    # Recalculate spread width after potential reversal
+                    spread_width = abs(usd_sell_price - usd_buy_price)
+                    
                     # Calculate profitability
                     profit_data = calculator.calculate_net_profit(
                         buy_price=usd_buy_price,
@@ -544,6 +569,12 @@ class IntraExchangeArbitrageEngine:
                         volatility_24h=volatility,
                         execution_latency_ms=self.execution_latency_ms
                     )
+                    
+                    # 🔵 CRITICAL FIX: Double-check that raw_spread is positive
+                    # If it's still negative after reversal, skip this opportunity
+                    if profit_data['raw_spread'] < 0:
+                        logger.warning(f"   ⚠️ Skipping {base_crypto}: Negative raw spread {profit_data['raw_spread']*100:.3f}% even after reversal check")
+                        continue
                     
                     # No conversion costs needed - only USD/USDC/USDT pairs
                     # These are interchangeable at 1:1 rate
