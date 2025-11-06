@@ -66,7 +66,7 @@ class DualStrategyBot:
                 capital_per_pair=50.0,  # $50 per pair
                 grid_spacing_percent=0.20,  # 0.20% base spacing (dynamically adjusted)
                 order_size_percent=0.10,  # 10% of capital per order = $5 per order
-                min_spread_percent=0.30,  # 🔵 0.30% minimum - Market spread check (actual profit = spread captured - 0.80% fees)
+                min_spread_percent=1.00,  # 🔵 1.00% minimum - Ensures profitability (0.80% fees + 0.20% profit buffer)
                 max_inventory_percent=0.25,  # Max 25% in one asset
                 requote_interval_seconds=15,  # Update every 15s
                 stop_loss_percent=0.02,  # -2% stop loss
