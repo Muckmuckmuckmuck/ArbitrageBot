@@ -1408,6 +1408,12 @@ class IntraExchangeArbitrageEngine:
                 # If we have convertible currency but conversion failed, log it
                 if total_convertible >= self.min_position_size_usd * 0.5 and buy_quote in ['EUR', 'GBP']:
                     logger.warning(f"   ⚠️ Have ${total_convertible:.2f} convertible but conversion to {buy_quote} failed or insufficient")
+                    logger.warning(f"   💡 Try converting manually or wait for next conversion attempt")
+                
+                # If we have BTC but conversion failed, log it
+                if btc_balance > 0 and btc_value_usd >= self.min_position_size_usd * 0.5:
+                    logger.warning(f"   ⚠️ Have {btc_balance:.8f} BTC (${btc_value_usd:.2f}) but conversion to {buy_quote} failed")
+                    logger.warning(f"   💡 BTC conversion will be retried on next trade attempt")
                 
                 return False, 0
             
@@ -1417,9 +1423,10 @@ class IntraExchangeArbitrageEngine:
             return True, actual_position_size
             
         except Exception as e:
-            logger.warning(f"   ⚠️ Could not check balance: {e}")
+            logger.error(f"   ❌ Error checking balance: {e}")
             import traceback
-            logger.debug(f"   Traceback: {traceback.format_exc()}")
+            logger.error(f"   Traceback: {traceback.format_exc()}")
+            # Return False with 0 amount - don't proceed with trade if we can't verify balance
             return False, 0
     
     async def execute_trade(self, opportunity: TradeOpportunity) -> TradeExecution:

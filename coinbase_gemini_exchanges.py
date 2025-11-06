@@ -465,15 +465,28 @@ class CoinbaseGeminiExchangeManager:
             btc_amount = step1_result[1]  # Actual amount received
             
             if btc_amount <= 0:
-                logger.warning(f"   ⚠️ Invalid BTC amount received: {btc_amount}")
+                logger.warning(f"   ⚠️ Invalid BTC amount from step 1: {btc_amount}")
                 # Try to verify actual BTC balance
                 balance = await self.fetch_balance(exchange_id)
                 actual_btc = balance.get('free', {}).get('BTC', 0)
                 if actual_btc > 0:
-                    logger.info(f"   💡 Found {actual_btc:.8f} BTC in account - using it")
+                    logger.info(f"   💡 Found {actual_btc:.8f} BTC in account - using it for step 2")
                     btc_amount = actual_btc * 0.95  # Use 95% to leave buffer
                 else:
                     logger.error(f"   ❌ Step 1 failed and no BTC found in account")
+                    logger.error(f"   💡 Check if step 1 order actually filled")
+                    return False
+            
+            # Safety check: ensure BTC amount is reasonable
+            if btc_amount > 1000:  # Unrealistically high
+                logger.error(f"   ❌ BTC amount seems incorrect: {btc_amount:.8f}")
+                # Re-check balance
+                balance = await self.fetch_balance(exchange_id)
+                actual_btc = balance.get('free', {}).get('BTC', 0)
+                if actual_btc > 0:
+                    btc_amount = actual_btc * 0.95
+                    logger.info(f"   💡 Using actual balance: {btc_amount:.8f} BTC")
+                else:
                     return False
             
             logger.info(f"   ✅ Step 1 complete: Have {btc_amount:.8f} {bridge_currency}")
@@ -572,7 +585,14 @@ class CoinbaseGeminiExchangeManager:
                 return (None, 0.0)
             
             # Use 0.5% buffer for slippage (higher than normal due to BTC volatility)
+            # For sells, use 0.995 to ensure we get filled (sell at slightly lower price)
+            # For buys, use 1.005 to ensure we get filled (buy at slightly higher price)
             limit_price = price * (1.005 if side == 'buy' else 0.995)
+            
+            # Safety check: ensure price is valid
+            if limit_price <= 0 or not isinstance(limit_price, (int, float)):
+                logger.error(f"   ❌ Invalid limit price calculated: {limit_price}")
+                return (None, 0.0)
             
             order = await self.create_order(
                 exchange_id=exchange_id,
