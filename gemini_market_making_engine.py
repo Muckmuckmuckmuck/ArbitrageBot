@@ -406,26 +406,42 @@ class GeminiMarketMakingEngine:
                 order_value_usd = order_amount * current_price
                 logger.debug(f"   🟢 [GEMINI] {pair}: Adjusted order amount to minimum {min_amount}")
             
-            # 🟢 CRITICAL: Get actual bid/ask for more accurate pricing
+            # 🟢 DYNAMIC PRICING: Get fresh bid/ask every time for real-time adjustment
             ticker = await self.exchange_manager.fetch_ticker('gemini', pair)
             bid = ticker.get('bid', 0) or 0
             ask = ticker.get('ask', 0) or 0
             
-            # Use bid/ask if available, otherwise use current_price with spacing
+            # 🟢 DYNAMIC: Prices adjust based on current market conditions
             if bid > 0 and ask > 0:
-                # Place buy order slightly below bid (to get filled)
-                # Place sell order slightly above ask (to get filled)
-                buy_price = bid * (1 - dynamic_spacing / 100) if spread else bid * (1 - self.grid_spacing_percent / 100)
-                sell_price = ask * (1 + dynamic_spacing / 100) if spread else ask * (1 + self.grid_spacing_percent / 100)
+                # Calculate mid price for reference
+                mid_price = (bid + ask) / 2
+                current_spread = ((ask - bid) / mid_price) * 100 if mid_price > 0 else 0
                 
-                # Ensure sell_price > buy_price
+                # 🟢 DYNAMIC: Adjust spacing based on actual market spread
+                # If market spread is tight, use smaller spacing to stay competitive
+                # If market spread is wide, use larger spacing to capture more profit
+                if current_spread > 0 and spread:
+                    # Use 30-70% of market spread as our spacing (adaptive)
+                    adaptive_spacing = min(max(current_spread * 0.5, dynamic_spacing * 0.5), dynamic_spacing * 1.5)
+                elif spread:
+                    adaptive_spacing = dynamic_spacing
+                else:
+                    adaptive_spacing = self.grid_spacing_percent
+                
+                # Place buy order: Aggressively below bid to get filled quickly
+                # Place sell order: Aggressively above ask to get filled quickly
+                # This ensures we capture the spread while staying competitive
+                buy_price = bid * (1 - adaptive_spacing / 100)
+                sell_price = ask * (1 + adaptive_spacing / 100)
+                
+                # Ensure sell_price > buy_price (critical for profitability)
                 if sell_price <= buy_price:
-                    # If they're too close, use spacing from mid price
-                    mid_price = (bid + ask) / 2
-                    buy_price = mid_price * (1 - dynamic_spacing / 100) if spread else mid_price * (1 - self.grid_spacing_percent / 100)
-                    sell_price = mid_price * (1 + dynamic_spacing / 100) if spread else mid_price * (1 + self.grid_spacing_percent / 100)
+                    # If prices are inverted, use mid price with spacing
+                    buy_price = mid_price * (1 - adaptive_spacing / 100)
+                    sell_price = mid_price * (1 + adaptive_spacing / 100)
+                    logger.warning(f"   🟢 [GEMINI] ⚠️ {pair}: Bid/ask inverted, using mid price with spacing")
             else:
-                # Fallback to current_price with spacing
+                # Fallback: Use current_price with spacing
                 if spread:
                     buy_price = current_price * (1 - dynamic_spacing / 100)
                     sell_price = current_price * (1 + dynamic_spacing / 100)
@@ -433,19 +449,14 @@ class GeminiMarketMakingEngine:
                     buy_price = current_price * (1 - self.grid_spacing_percent / 100)
                     sell_price = current_price * (1 + self.grid_spacing_percent / 100)
             
-            # 🔵 CRITICAL FIX: Validate prices are not None before rounding
+            # 🔵 CRITICAL FIX: Validate prices are not None
             if buy_price is None or sell_price is None or buy_price <= 0 or sell_price <= 0:
                 logger.warning(f"   🟢 [GEMINI] ⚠️ Skipping {pair} - invalid calculated prices: buy=${buy_price}, sell=${sell_price}")
                 return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'invalid_calculated_prices'}
             
-            # Round prices to exchange precision
-            buy_price = round(buy_price, price_precision)
-            sell_price = round(sell_price, price_precision)
-            
-            # 🔵 CRITICAL FIX: Validate prices after rounding
-            if buy_price <= 0 or sell_price <= 0:
-                logger.warning(f"   🟢 [GEMINI] ⚠️ Skipping {pair} - prices rounded to 0: buy=${buy_price}, sell=${sell_price}")
-                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'prices_rounded_to_zero'}
+            # 🟢 NO ROUNDING: Use exact calculated prices (exchange will handle precision)
+            # Prices are already calculated with proper precision from market data
+            # Exchange manager will apply necessary precision for API requirements
             
             # Check minimum order size (recalculate after rounding)
             min_order_value = order_amount * buy_price

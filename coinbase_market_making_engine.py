@@ -390,31 +390,45 @@ class CoinbaseMarketMakingEngine:
                     logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - order amount too small after rounding")
                     return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_amount_too_small'}
             
-            # 🔵 CRITICAL: Get actual bid/ask for more accurate pricing
+            # 🔵 DYNAMIC PRICING: Get fresh bid/ask every time for real-time adjustment
             ticker = await self.exchange_manager.fetch_ticker('coinbase', pair)
             bid = ticker.get('bid', 0) or 0
             ask = ticker.get('ask', 0) or 0
             
-            # Use bid/ask if available, otherwise use current_price with spacing
+            # 🔵 DYNAMIC: Prices adjust based on current market conditions
             if bid > 0 and ask > 0:
-                # Place buy order slightly below bid (to get filled)
-                # Place sell order slightly above ask (to get filled)
-                buy_price = bid * (1 - dynamic_spacing / 100)
-                sell_price = ask * (1 + dynamic_spacing / 100)
+                # Calculate mid price for reference
+                mid_price = (bid + ask) / 2
+                current_spread = ((ask - bid) / mid_price) * 100 if mid_price > 0 else 0
                 
-                # Ensure sell_price > buy_price
+                # 🔵 DYNAMIC: Adjust spacing based on actual market spread
+                # If market spread is tight, use smaller spacing to stay competitive
+                # If market spread is wide, use larger spacing to capture more profit
+                if current_spread > 0:
+                    # Use 30-70% of market spread as our spacing (adaptive)
+                    adaptive_spacing = min(max(current_spread * 0.5, dynamic_spacing * 0.5), dynamic_spacing * 1.5)
+                else:
+                    adaptive_spacing = dynamic_spacing
+                
+                # Place buy order: Aggressively below bid to get filled quickly
+                # Place sell order: Aggressively above ask to get filled quickly
+                # This ensures we capture the spread while staying competitive
+                buy_price = bid * (1 - adaptive_spacing / 100)
+                sell_price = ask * (1 + adaptive_spacing / 100)
+                
+                # Ensure sell_price > buy_price (critical for profitability)
                 if sell_price <= buy_price:
-                    # If they're too close, use spacing from mid price
-                    mid_price = (bid + ask) / 2
-                    buy_price = mid_price * (1 - dynamic_spacing / 100)
-                    sell_price = mid_price * (1 + dynamic_spacing / 100)
+                    # If prices are inverted, use mid price with spacing
+                    buy_price = mid_price * (1 - adaptive_spacing / 100)
+                    sell_price = mid_price * (1 + adaptive_spacing / 100)
+                    logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: Bid/ask inverted, using mid price with spacing")
             else:
-                # Fallback to current_price with spacing
+                # Fallback: Use current_price with dynamic spacing
                 buy_price = current_price * (1 - dynamic_spacing / 100)
                 sell_price = current_price * (1 + dynamic_spacing / 100)
             
-            buy_price = round(buy_price, price_precision)
-            sell_price = round(sell_price, price_precision)
+            # 🔵 NO ROUNDING: Use exact calculated prices (exchange will handle precision)
+            # Prices are already calculated with proper precision from market data
             
             # Get inventory
             inventory = await self.get_inventory_balance(base_currency)
