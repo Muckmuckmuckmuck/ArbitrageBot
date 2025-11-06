@@ -111,17 +111,25 @@ class GeminiMarketMakingEngine:
         logger.info("=" * 80)
         
         # Verify Gemini has these pairs and filter out non-existent ones
+        # 🟢 GEMINI: Check pairs with USD, USDC, or GUSD (Gemini uses multiple quote currencies)
         exchange = self.exchange_manager.get_exchange('gemini')
         available_pairs = []
         for pair in TOP_GEMINI_PAIRS:
-            if pair in exchange.markets:
-                market_info = exchange.markets[pair]
-                if market_info.get('active', True):
-                    available_pairs.append(pair)
-                else:
-                    logger.warning(f"   ⚠️ {pair} is not active on Gemini")
+            base_crypto = pair.split('/')[0]
+            # Try USD, USDC, and GUSD variants
+            for quote in ['USD', 'USDC', 'GUSD']:
+                test_pair = f"{base_crypto}/{quote}"
+                if test_pair in exchange.markets:
+                    market_info = exchange.markets[test_pair]
+                    # 🟢 Gemini may not set 'active' flag - check if market exists
+                    active = market_info.get('active', True)  # Default to True if not set
+                    if active or market_info.get('type') == 'spot':  # Accept if spot market
+                        available_pairs.append(test_pair)
+                        logger.info(f"   ✅ Found {test_pair} on Gemini (using {quote} quote)")
+                        break  # Found a working pair for this crypto
             else:
-                logger.warning(f"   ⚠️ {pair} not found on Gemini - will be skipped")
+                # No working pair found for this crypto
+                logger.warning(f"   ⚠️ {pair} and variants not found/active on Gemini")
         
         # Store available pairs in instance variable (don't modify global)
         self.available_pairs = available_pairs

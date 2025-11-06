@@ -230,18 +230,54 @@ class CoinbaseGeminiExchangeManager:
             amount_precision = int(amount_precision_val) if amount_precision_val else 8
             price_precision = int(price_precision_val) if price_precision_val else 8
             
-            # Round amount and price to exchange precision
-            amount = round(amount, amount_precision)
+            # Store original values for logging and validation
+            original_amount = amount
+            original_price = price
+            
+            # Calculate order value BEFORE rounding (for validation)
             if price is not None:
-                price = round(price, price_precision)
-        
-        # Validate minimum order size
-        if price is not None:
-            min_order_value = amount * price
-            # Check market minimums (typically $5-10)
-            min_cost = market_info.get('limits', {}).get('cost', {}).get('min', 5.0)
-            if min_order_value < min_cost:
-                raise ValueError(f"Order value ${min_order_value:.2f} < minimum ${min_cost:.2f} for {symbol}")
+                order_value_before_rounding = amount * price
+            
+            # Round amount and price to exchange precision
+            # ⚠️ CRITICAL: Rounding can cause values to become 0 if precision is too high
+            amount = round(amount, amount_precision) if amount_precision >= 0 else amount
+            if price is not None:
+                price = round(price, price_precision) if price_precision >= 0 else price
+            
+            # Validate minimum order size AFTER rounding
+            if price is not None:
+                min_order_value = amount * price
+                # Check market minimums (typically $5-10 for most exchanges)
+                min_cost = market_info.get('limits', {}).get('cost', {}).get('min', 5.0)
+                
+                # 🔵 COINBASE and 🟢 GEMINI have different minimums - log for debugging
+                if min_order_value < min_cost:
+                    logger.error(f"   ❌ Order validation failed for {symbol}:")
+                    # Store original values for logging
+                    original_amount = amount / (10 ** -amount_precision) if amount_precision < 0 else amount
+                    original_price = order_value_before_rounding / original_amount if original_amount > 0 else price
+                    
+                    logger.error(f"      Amount before rounding: {original_amount:.8f}")
+                    logger.error(f"      Amount after rounding: {amount:.8f} (precision: {amount_precision})")
+                    logger.error(f"      Price before rounding: ${original_price:.8f}")
+                    logger.error(f"      Price after rounding: ${price:.8f} (precision: {price_precision})")
+                    logger.error(f"      Order value before rounding: ${order_value_before_rounding:.2f}")
+                    logger.error(f"      Order value after rounding: ${min_order_value:.2f}")
+                    logger.error(f"      Required minimum: ${min_cost:.2f}")
+                    
+                    # If rounding caused the issue, warn and suggest fix
+                    if order_value_before_rounding >= min_cost and min_order_value < min_cost:
+                        logger.error(f"   ⚠️ Rounding caused order value to drop below minimum!")
+                        logger.error(f"   💡 Consider increasing order size or using different precision")
+                    
+                    raise ValueError(f"Order value ${min_order_value:.2f} < minimum ${min_cost:.2f} for {symbol}")
+        else:
+            # If no market info, still validate if price is provided
+            if price is not None:
+                min_order_value = amount * price
+                if min_order_value < 5.0:  # Default minimum
+                    logger.error(f"   ❌ Order validation failed (no market info): ${min_order_value:.2f} < $5.00")
+                    raise ValueError(f"Order value ${min_order_value:.2f} < minimum $5.00 for {symbol}")
         
         # ====================================================================
         # ⚪ COMMON: Order creation (works for both exchanges)
