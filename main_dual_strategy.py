@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """
-Dual Strategy Trading Bot
-Runs two independent strategies concurrently:
+Dual Market Making Bot
+Runs market making on both exchanges concurrently:
 
-🔵 COINBASE: Intra-Exchange Arbitrage (USD/USDC/USDT pairs)
-   - Strategy: Buy on one pair, sell on another (same exchange)
-   - Pairs: USD/USDC/USDT quote currencies only
-   - Execution: Immediate mode (trades execute as soon as found)
+🔵 COINBASE: Market Making (Top pairs)
+   - Strategy: Passive market making with dynamic grid orders
+   - Pairs: BTC/USD, ETH/USD, SOL/USD, etc. (high liquidity pairs)
+   - Execution: Continuous loop with 15s updates
+   - Dynamic: Adjusts order size and spacing based on spread and performance
 
-🟢 GEMINI: Market Making (Top 10 pairs)
-   - Strategy: Passive market making with grid orders
+🟢 GEMINI: Market Making (Top pairs)
+   - Strategy: Passive market making with dynamic grid orders
    - Pairs: ARB/USD, OP/USD, LINK/USD, etc. (filtered by availability)
    - Execution: Continuous loop with 15s updates
+   - Dynamic: Adjusts order size and spacing based on spread and performance
 
 Both strategies run concurrently on Railway with independent loops.
+Both systems dynamically adjust order sizes, grid spacing, and focus on profitable pairs.
 """
 
 import asyncio
@@ -21,7 +24,7 @@ import logging
 import signal
 import sys
 from coinbase_gemini_exchanges import CoinbaseGeminiExchangeManager
-from intra_exchange_arbitrage_engine import IntraExchangeArbitrageEngine
+from coinbase_market_making_engine import CoinbaseMarketMakingEngine
 from gemini_market_making_engine import GeminiMarketMakingEngine
 
 logging.basicConfig(
@@ -31,22 +34,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class DualStrategyBot:
-    """Manages both strategies running concurrently"""
+    """Manages both market making strategies running concurrently"""
     
     def __init__(self):
         self.exchange_manager = None
-        self.arbitrage_engine = None
-        self.market_making_engine = None
+        self.coinbase_market_making_engine = None
+        self.gemini_market_making_engine = None
         self.running = False
         self.shutdown_event = asyncio.Event()
         
     async def initialize(self):
-        """Initialize both strategies"""
+        """Initialize both market making strategies"""
         logger.info("=" * 80)
-        logger.info("🚀 INITIALIZING DUAL STRATEGY BOT")
+        logger.info("🚀 INITIALIZING DUAL MARKET MAKING BOT")
         logger.info("=" * 80)
-        logger.info("   Strategy 1: Coinbase Intra-Exchange Arbitrage")
-        logger.info("   Strategy 2: Gemini Market Making")
+        logger.info("   Strategy 1: 🔵 Coinbase Market Making")
+        logger.info("   Strategy 2: 🟢 Gemini Market Making")
         logger.info("=" * 80)
         
         # Initialize exchange manager
@@ -54,118 +57,112 @@ class DualStrategyBot:
         await self.exchange_manager.initialize()
         
         # ====================================================================
-        # 🔵 COINBASE STRATEGY: Intra-Exchange Arbitrage
+        # 🔵 COINBASE STRATEGY: Market Making
         # ====================================================================
-        # Initialize Coinbase arbitrage engine
-        logger.info("\n📊 Initializing Coinbase Intra-Exchange Arbitrage Engine...")
-        # Note: IntraExchangeArbitrageEngine creates its own exchange_manager internally
-        self.arbitrage_engine = IntraExchangeArbitrageEngine(
-            min_profit_threshold=0.0005,  # 0.05% minimum (will auto-adjust to fees + buffer)
-            max_position_size_usd=50.0    # $50 max per trade
-        )
-        await self.arbitrage_engine.initialize()
+        logger.info("\n📊 Initializing Coinbase Market-Making Engine...")
+        try:
+            self.coinbase_market_making_engine = CoinbaseMarketMakingEngine(
+                exchange_manager=self.exchange_manager,
+                capital_per_pair=50.0,  # $50 per pair
+                grid_spacing_percent=0.20,  # 0.20% base spacing (dynamically adjusted)
+                order_size_percent=0.10,  # 10% of capital per order = $5 per order
+                min_spread_percent=0.12,  # Skip if spread < 0.12% (ensures profit after 0.80% fees)
+                max_inventory_percent=0.25,  # Max 25% in one asset
+                requote_interval_seconds=15,  # Update every 15s
+                stop_loss_percent=0.02,  # -2% stop loss
+                take_profit_interval_minutes=60,  # Flatten every hour
+            )
+            await self.coinbase_market_making_engine.initialize()
+            logger.info("   ✅ Coinbase Market-Making Engine initialized successfully")
+        except Exception as e:
+            logger.error(f"   ❌ Failed to initialize Coinbase Market-Making Engine: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise
         
         # ====================================================================
         # 🟢 GEMINI STRATEGY: Market Making (OPTIONAL - only if Gemini is available)
         # ====================================================================
-        self.market_making_engine = None  # Initialize to None
+        self.gemini_market_making_engine = None
         if self.exchange_manager.is_exchange_available('gemini'):
-            # Initialize Gemini market-making engine
             logger.info("\n📊 Initializing Gemini Market-Making Engine...")
             try:
-                self.market_making_engine = GeminiMarketMakingEngine(
+                self.gemini_market_making_engine = GeminiMarketMakingEngine(
                     exchange_manager=self.exchange_manager,
-                    capital_per_pair=50.0,  # $50 per pair (increased from $10 to allow meaningful orders)
-                    grid_spacing_percent=0.20,  # 0.20% spacing
-                    order_size_percent=0.10,  # 10% of capital per order (increased from 1% to $5 per order)
-                    min_spread_percent=0.12,  # Skip if spread < 0.12%
+                    capital_per_pair=50.0,  # $50 per pair
+                    grid_spacing_percent=0.20,  # 0.20% base spacing (dynamically adjusted)
+                    order_size_percent=0.10,  # 10% of capital per order = $5 per order
+                    min_spread_percent=0.12,  # Skip if spread < 0.12% (ensures profit after 0.20% fees)
                     max_inventory_percent=0.25,  # Max 25% in one asset
                     requote_interval_seconds=15,  # Update every 15s
                     stop_loss_percent=0.02,  # -2% stop loss
                     take_profit_interval_minutes=60,  # Flatten every hour
                 )
-                await self.market_making_engine.initialize()
+                await self.gemini_market_making_engine.initialize()
                 logger.info("   ✅ Gemini Market-Making Engine initialized successfully")
             except Exception as e:
                 logger.warning(f"   ⚠️ Failed to initialize Gemini Market-Making Engine: {e}")
-                logger.warning(f"   💡 Bot will continue with Coinbase arbitrage only")
-                self.market_making_engine = None
+                logger.warning(f"   💡 Bot will continue with Coinbase market making only")
+                self.gemini_market_making_engine = None
         else:
             logger.warning("\n⚠️ Gemini exchange not available - skipping Market-Making Engine initialization")
-            logger.warning("   💡 Bot will run with Coinbase arbitrage only")
+            logger.warning("   💡 Bot will run with Coinbase market making only")
         
-        if self.market_making_engine:
-            logger.info("\n✅ Both strategies initialized successfully!")
+        if self.gemini_market_making_engine:
+            logger.info("\n✅ Both market making strategies initialized successfully!")
         else:
-            logger.info("\n✅ Coinbase arbitrage strategy initialized successfully!")
+            logger.info("\n✅ Coinbase market making strategy initialized successfully!")
         logger.info("=" * 80)
     
     # ========================================================================
-    # 🔵 COINBASE STRATEGY: Intra-Exchange Arbitrage Loop
+    # 🔵 COINBASE STRATEGY: Market Making Loop
     # ========================================================================
-    async def run_arbitrage_strategy(self):
-        """🔵 Run Coinbase intra-exchange arbitrage strategy"""
-        logger.info("\n🚀 Starting Coinbase Intra-Exchange Arbitrage Strategy...")
+    async def run_coinbase_market_making(self):
+        """🔵 Run Coinbase market-making strategy"""
+        logger.info("\n🚀 Starting Coinbase Market-Making Strategy...")
         
-        while self.running:
-            try:
-                # Scan and execute on Coinbase
-                result = await self.arbitrage_engine.scan_and_execute_immediately(
-                    exchange_id='coinbase',
-                    max_cryptos=200
-                )
-                
-                # Log summary
-                logger.info(f"\n📊 Coinbase Arbitrage Summary:")
-                logger.info(f"   Opportunities found: {result.get('opportunities_found', 0)}")
-                logger.info(f"   Trades executed: {result.get('trades_executed', 0)}")
-                logger.info(f"   Trades skipped: {result.get('trades_skipped', 0)}")
-                
-                # Wait before next scan
-                await asyncio.sleep(60)  # Scan every 60 seconds
-                
-            except asyncio.CancelledError:
-                logger.info("   🛑 Arbitrage strategy cancelled")
-                break
-            except Exception as e:
-                logger.error(f"❌ Error in arbitrage strategy: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
-                await asyncio.sleep(60)
+        try:
+            await self.coinbase_market_making_engine.run_market_making_loop()
+        except asyncio.CancelledError:
+            logger.info("   🛑 Coinbase market-making strategy cancelled")
+        except Exception as e:
+            logger.error(f"❌ Error in Coinbase market-making strategy: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     # ========================================================================
     # 🟢 GEMINI STRATEGY: Market Making Loop
     # ========================================================================
-    async def run_market_making_strategy(self):
+    async def run_gemini_market_making(self):
         """🟢 Run Gemini market-making strategy"""
-        if not self.market_making_engine:
-            logger.warning("   ⚠️ Market-making strategy skipped - Gemini not available")
+        if not self.gemini_market_making_engine:
+            logger.warning("   ⚠️ Gemini market-making strategy skipped - Gemini not available")
             return
         
         logger.info("\n🚀 Starting Gemini Market-Making Strategy...")
         
         try:
-            await self.market_making_engine.run_market_making_loop()
+            await self.gemini_market_making_engine.run_market_making_loop()
         except asyncio.CancelledError:
-            logger.info("   🛑 Market-making strategy cancelled")
+            logger.info("   🛑 Gemini market-making strategy cancelled")
         except Exception as e:
-            logger.error(f"❌ Error in market-making strategy: {e}")
+            logger.error(f"❌ Error in Gemini market-making strategy: {e}")
             import traceback
             logger.error(traceback.format_exc())
     
     async def run(self):
-        """Run both strategies concurrently"""
+        """Run both market making strategies concurrently"""
         self.running = True
         
-        # Start strategies as concurrent tasks (only if available)
-        arbitrage_task = asyncio.create_task(self.run_arbitrage_strategy())
-        tasks = [arbitrage_task]
+        # Start strategies as concurrent tasks
+        coinbase_task = asyncio.create_task(self.run_coinbase_market_making())
+        tasks = [coinbase_task]
         
-        if self.market_making_engine:
-            market_making_task = asyncio.create_task(self.run_market_making_strategy())
-            tasks.append(market_making_task)
+        if self.gemini_market_making_engine:
+            gemini_task = asyncio.create_task(self.run_gemini_market_making())
+            tasks.append(gemini_task)
         else:
-            logger.info("   ⚠️ Market-making strategy not started - Gemini unavailable")
+            logger.info("   ⚠️ Gemini market-making strategy not started - Gemini unavailable")
         
         # Wait for shutdown signal or any task to complete/fail
         try:
@@ -180,7 +177,7 @@ class DualStrategyBot:
                 try:
                     await task  # This will raise if task failed
                 except Exception as e:
-                    logger.error(f"❌ Strategy task failed: {e}")
+                    logger.error(f"❌ Market making task failed: {e}")
                     import traceback
                     logger.error(traceback.format_exc())
             
@@ -191,34 +188,39 @@ class DualStrategyBot:
         except KeyboardInterrupt:
             logger.info("\n🛑 Shutdown signal received...")
         except Exception as e:
-            logger.error(f"❌ Error in dual strategy runner: {e}")
+            logger.error(f"❌ Error in dual market making runner: {e}")
             import traceback
             logger.error(traceback.format_exc())
         finally:
             # Stop both strategies
             self.running = False
-            self.market_making_engine.stop()
+            if self.coinbase_market_making_engine:
+                self.coinbase_market_making_engine.stop()
+            if self.gemini_market_making_engine:
+                self.gemini_market_making_engine.stop()
             
             # Cancel all tasks
-            arbitrage_task.cancel()
-            market_making_task.cancel()
+            coinbase_task.cancel()
+            if self.gemini_market_making_engine:
+                gemini_task.cancel()
             
             # Wait for cancellation
             try:
-                await arbitrage_task
+                await coinbase_task
             except asyncio.CancelledError:
                 pass
             except Exception as e:
-                logger.debug(f"Arbitrage task error during cleanup: {e}")
+                logger.debug(f"Coinbase task error during cleanup: {e}")
             
-            try:
-                await market_making_task
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                logger.debug(f"Market making task error during cleanup: {e}")
+            if self.gemini_market_making_engine:
+                try:
+                    await gemini_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.debug(f"Gemini task error during cleanup: {e}")
             
-            logger.info("✅ Both strategies stopped")
+            logger.info("✅ Both market making strategies stopped")
     
     def stop(self):
         """Stop the bot"""
