@@ -465,7 +465,19 @@ class CoinbaseMarketMakingEngine:
             max_inventory = total_balance_usd * self.max_inventory_percent
             
             # Place buy order (if we have quote currency and haven't exceeded max inventory)
-            if quote_balance is not None and quote_balance >= order_value_usd and inventory_value < max_inventory:
+            # 🔵 CRITICAL: Check balance with buffer before placing order
+            required_quote = order_amount * buy_price
+            required_with_buffer = required_quote * 1.05  # 5% buffer for fees and price movement
+            
+            if quote_balance is None:
+                quote_balance = 0.0
+            
+            if quote_balance < required_with_buffer:
+                logger.info(f"   🔵 [COINBASE] ⏭️ Skipping buy order for {pair} - insufficient {quote_currency} balance: ${quote_balance:.2f} < required ${required_with_buffer:.2f} (order: ${required_quote:.2f})")
+            elif inventory_value >= max_inventory:
+                logger.info(f"   🔵 [COINBASE] ⏭️ Skipping buy order for {pair} - inventory ${inventory_value:.2f} >= max ${max_inventory:.2f}")
+            else:
+                logger.info(f"   🔵 [COINBASE] {pair}: 📝 ATTEMPTING TO PLACE BUY ORDER... (Balance: ${quote_balance:.2f} {quote_currency}, Required: ${required_quote:.2f})")
                 try:
                     buy_order = await self.exchange_manager.create_order(
                         exchange_id='coinbase',

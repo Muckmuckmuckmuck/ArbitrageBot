@@ -517,18 +517,31 @@ class GeminiMarketMakingEngine:
             # Place buy order (if not over-inventoried)
             # 🔵 CRITICAL FIX: Ensure inventory_value is not None before comparison
             if inventory_value is not None and inventory_value < max_inventory:
-                logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE BUY ORDER...")
-                try:
-                    # 🔵 CRITICAL FIX: Validate order parameters before creating order
-                    if order_amount is None or order_amount <= 0:
-                        logger.error(f"   🟢 [GEMINI] ❌ Invalid order_amount: {order_amount}")
-                        raise ValueError(f"Invalid order_amount: {order_amount}")
-                    if buy_price is None or buy_price <= 0:
-                        logger.error(f"   🟢 [GEMINI] ❌ Invalid buy_price: {buy_price}")
-                        raise ValueError(f"Invalid buy_price: {buy_price}")
-                    
-                    logger.debug(f"   🟢 [GEMINI] {pair}: Creating buy order - amount={order_amount:.6f}, price=${buy_price:.6f}")
-                    buy_order = await self.exchange_manager.create_order(
+                # 🟢 CRITICAL: Check balance before placing buy order
+                quote_currency = pair.split('/')[1]
+                quote_balance = await self.get_inventory_balance(quote_currency)
+                if quote_balance is None:
+                    quote_balance = 0.0
+                
+                required_quote = order_amount * buy_price
+                # Add 5% buffer for fees and price movement
+                required_with_buffer = required_quote * 1.05
+                
+                if quote_balance < required_with_buffer:
+                    logger.info(f"   🟢 [GEMINI] ⏭️ Skipping buy order for {pair} - insufficient {quote_currency} balance: ${quote_balance:.2f} < required ${required_with_buffer:.2f} (order: ${required_quote:.2f})")
+                else:
+                    logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE BUY ORDER... (Balance: ${quote_balance:.2f} {quote_currency}, Required: ${required_quote:.2f})")
+                    try:
+                        # 🔵 CRITICAL FIX: Validate order parameters before creating order
+                        if order_amount is None or order_amount <= 0:
+                            logger.error(f"   🟢 [GEMINI] ❌ Invalid order_amount: {order_amount}")
+                            raise ValueError(f"Invalid order_amount: {order_amount}")
+                        if buy_price is None or buy_price <= 0:
+                            logger.error(f"   🟢 [GEMINI] ❌ Invalid buy_price: {buy_price}")
+                            raise ValueError(f"Invalid buy_price: {buy_price}")
+                        
+                        logger.debug(f"   🟢 [GEMINI] {pair}: Creating buy order - amount={order_amount:.6f}, price=${buy_price:.6f}")
+                        buy_order = await self.exchange_manager.create_order(
                         exchange_id='gemini',
                         symbol=pair,
                         order_type='limit',
