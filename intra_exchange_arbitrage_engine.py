@@ -650,11 +650,11 @@ class IntraExchangeArbitrageEngine:
             if ':' in symbol:
                 continue
             
-                base = market_info.get('base', '').strip().upper()
+            base = market_info.get('base', '').strip().upper()
             quote = market_info.get('quote', '').strip().upper()
             
             # Only count USD/USDC/USDT pairs
-            if base and quote in ['USD', 'USDC', 'USDT']:
+            if quote in ['USD', 'USDC', 'USDT']:
                 if base not in crypto_pair_count:
                     crypto_pair_count[base] = 0
                 crypto_pair_count[base] += 1
@@ -1370,7 +1370,7 @@ class IntraExchangeArbitrageEngine:
                     position_multiplier = 1.0  # Full size
                 elif spread_quality > 2.0:  # 2x minimum spread
                     position_multiplier = 0.8  # 80% size
-            else:
+                else:
                     position_multiplier = 0.6  # 60% size
                 
                 # Apply multiplier to desired size
