@@ -389,7 +389,8 @@ class GeminiMarketMakingEngine:
                     import traceback
                     logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
             else:
-                logger.info(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping buy order - inventory ${inventory_value:.2f} >= max ${max_inventory:.2f}")
+                inventory_value_str = f"${inventory_value:.2f}" if inventory_value is not None else "None"
+                logger.info(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping buy order - inventory {inventory_value_str} >= max ${max_inventory:.2f}")
             
             # Place sell order (if we have inventory)
             # 🔵 CRITICAL FIX: Ensure inventory is not None before comparison
