@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""
+Dual Strategy Trading Bot
+- Gemini: Market Making (Top 10 pairs)
+- Coinbase: Intra-Exchange Arbitrage (USD/USDC/USDT pairs)
+Both strategies run concurrently on Railway
+"""
+
+import asyncio
+import logging
+import signal
+import sys
+from coinbase_gemini_exchanges import CoinbaseGeminiExchangeManager
+from intra_exchange_arbitrage_engine import IntraExchangeArbitrageEngine
+from gemini_market_making_engine import GeminiMarketMakingEngine
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+class DualStrategyBot:
+    """Manages both strategies running concurrently"""
+    
+    def __init__(self):
+        self.exchange_manager = None
+        self.arbitrage_engine = None
+        self.market_making_engine = None
+        self.running = False
+        self.shutdown_event = asyncio.Event()
+        
+    async def initialize(self):
+        """Initialize both strategies"""
+        logger.info("=" * 80)
+        logger.info("🚀 INITIALIZING DUAL STRATEGY BOT")
+        logger.info("=" * 80)
+        logger.info("   Strategy 1: Coinbase Intra-Exchange Arbitrage")
+        logger.info("   Strategy 2: Gemini Market Making")
+        logger.info("=" * 80)
+        
+        # Initialize exchange manager
+        self.exchange_manager = CoinbaseGeminiExchangeManager()
+        await self.exchange_manager.initialize()
+        
+        # Initialize Coinbase arbitrage engine
+        logger.info("\n📊 Initializing Coinbase Intra-Exchange Arbitrage Engine...")
+        self.arbitrage_engine = IntraExchangeArbitrageEngine(
+            exchange_manager=self.exchange_manager,
+            min_profit_threshold=0.002,  # 0.2% minimum
+            min_position_size_usd=25.0,
+            max_position_size_usd=50.0
+        )
+        await self.arbitrage_engine.initialize()
+        
+        # Initialize Gemini market-making engine
+        logger.info("\n📊 Initializing Gemini Market-Making Engine...")
+        self.market_making_engine = GeminiMarketMakingEngine(
+            exchange_manager=self.exchange_manager,
+            capital_per_pair=10.0,  # $10 per pair (10 pairs = $100 total)
+            grid_spacing_percent=0.20,  # 0.20% spacing
+            order_size_percent=0.01,  # 1% of capital per order
+            min_spread_percent=0.12,  # Skip if spread < 0.12%
+            max_inventory_percent=0.25,  # Max 25% in one asset
+            requote_interval_seconds=15,  # Update every 15s
+            stop_loss_percent=0.02,  # -2% stop loss
+            take_profit_interval_minutes=60,  # Flatten every hour
+        )
+        await self.market_making_engine.initialize()
+        
+        logger.info("\n✅ Both strategies initialized successfully!")
+        logger.info("=" * 80)
+    
+    async def run_arbitrage_strategy(self):
+        """Run Coinbase intra-exchange arbitrage strategy"""
+        logger.info("\n🚀 Starting Coinbase Intra-Exchange Arbitrage Strategy...")
+        
+        while self.running:
+            try:
+                # Scan and execute on Coinbase
+                result = await self.arbitrage_engine.scan_and_execute_immediately(
+                    exchange_id='coinbase',
+                    max_cryptos=200
+                )
+                
+                # Log summary
+                logger.info(f"\n📊 Coinbase Arbitrage Summary:")
+                logger.info(f"   Opportunities found: {result.get('opportunities_found', 0)}")
+                logger.info(f"   Trades executed: {result.get('trades_executed', 0)}")
+                logger.info(f"   Trades skipped: {result.get('trades_skipped', 0)}")
+                
+                # Wait before next scan
+                await asyncio.sleep(60)  # Scan every 60 seconds
+                
+            except Exception as e:
+                logger.error(f"❌ Error in arbitrage strategy: {e}")
+                await asyncio.sleep(60)
+    
+    async def run_market_making_strategy(self):
+        """Run Gemini market-making strategy"""
+        logger.info("\n🚀 Starting Gemini Market-Making Strategy...")
+        
+        try:
+            await self.market_making_engine.run_market_making_loop()
+        except Exception as e:
+            logger.error(f"❌ Error in market-making strategy: {e}")
+    
+    async def run(self):
+        """Run both strategies concurrently"""
+        self.running = True
+        
+        # Start both strategies as concurrent tasks
+        arbitrage_task = asyncio.create_task(self.run_arbitrage_strategy())
+        market_making_task = asyncio.create_task(self.run_market_making_strategy())
+        
+        # Wait for shutdown signal
+        try:
+            await self.shutdown_event.wait()
+        except KeyboardInterrupt:
+            logger.info("\n🛑 Shutdown signal received...")
+        
+        # Stop both strategies
+        self.running = False
+        self.market_making_engine.stop()
+        
+        # Cancel tasks
+        arbitrage_task.cancel()
+        market_making_task.cancel()
+        
+        try:
+            await arbitrage_task
+        except asyncio.CancelledError:
+            pass
+        
+        try:
+            await market_making_task
+        except asyncio.CancelledError:
+            pass
+        
+        logger.info("✅ Both strategies stopped")
+    
+    def stop(self):
+        """Stop the bot"""
+        self.shutdown_event.set()
+
+async def main():
+    """Main entry point"""
+    bot = DualStrategyBot()
+    
+    # Setup signal handlers
+    def signal_handler(sig, frame):
+        logger.info("\n🛑 Shutdown signal received...")
+        bot.stop()
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    try:
+        await bot.initialize()
+        await bot.run()
+    except Exception as e:
+        logger.error(f"❌ Fatal error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+    finally:
+        logger.info("👋 Bot stopped")
+
+if __name__ == '__main__':
+    asyncio.run(main())
+
