@@ -474,29 +474,48 @@ class IntraExchangeArbitrageEngine:
                     ticker1 = await self.exchange_manager.fetch_ticker(exchange_id, pair1)
                     ticker2 = await self.exchange_manager.fetch_ticker(exchange_id, pair2)
                     
-                    price1 = ticker1.get('last') or ticker1.get('close') or ticker1.get('bid', 0)
-                    price2 = ticker2.get('last') or ticker2.get('close') or ticker2.get('bid', 0)
+                    # 🔵 CRITICAL FIX: Use ASK for buy and BID for sell (not last price)
+                    # ASK = what we pay to buy, BID = what we get when we sell
+                    ask1 = ticker1.get('ask', 0) or ticker1.get('last', 0)
+                    bid1 = ticker1.get('bid', 0) or ticker1.get('last', 0)
+                    ask2 = ticker2.get('ask', 0) or ticker2.get('last', 0)
+                    bid2 = ticker2.get('bid', 0) or ticker2.get('last', 0)
                     
-                    if price1 <= 0 or price2 <= 0:
+                    # For arbitrage: we want to buy where it's cheaper and sell where it's more expensive
+                    # Compare: buy at ASK of pair1 vs ASK of pair2, sell at BID of pair1 vs BID of pair2
+                    # We need: min(ask1, ask2) < max(bid1, bid2) for profit
+                    
+                    if ask1 <= 0 or bid1 <= 0 or ask2 <= 0 or bid2 <= 0:
                         continue
                     
-                    # Normalize both prices to USD
-                    usd_price1 = await self._normalize_price_to_usd(exchange_id, price1, quote1)
-                    usd_price2 = await self._normalize_price_to_usd(exchange_id, price2, quote2)
+                    # Normalize prices to USD for comparison
+                    usd_ask1 = await self._normalize_price_to_usd(exchange_id, ask1, quote1)
+                    usd_bid1 = await self._normalize_price_to_usd(exchange_id, bid1, quote1)
+                    usd_ask2 = await self._normalize_price_to_usd(exchange_id, ask2, quote2)
+                    usd_bid2 = await self._normalize_price_to_usd(exchange_id, bid2, quote2)
+                    
+                    # Determine best buy/sell combination
+                    # Option 1: Buy pair1, sell pair2
+                    profit1 = usd_bid2 - usd_ask1
+                    # Option 2: Buy pair2, sell pair1
+                    profit2 = usd_bid1 - usd_ask2
+                    
+                    # Choose the better option (higher profit)
+                    if profit1 > profit2 and profit1 > 0:
+                        buy_pair, buy_price = pair1, ask1
+                        sell_pair, sell_price = pair2, bid2
+                        buy_quote, sell_quote = quote1, quote2
+                    elif profit2 > 0:
+                        buy_pair, buy_price = pair2, ask2
+                        sell_pair, sell_price = pair1, bid1
+                        buy_quote, sell_quote = quote2, quote1
+                    else:
+                        # No profitable opportunity
+                        continue
                     
                     # Sanity check: prices shouldn't differ by more than 10x
-                    if max(usd_price1, usd_price2) / min(usd_price1, usd_price2) > 10:
+                    if max(buy_price, sell_price) / min(buy_price, sell_price) > 10:
                         continue  # Likely conversion error
-                    
-                    # Determine buy/sell direction
-                    if usd_price1 < usd_price2:
-                        buy_pair, buy_price = pair1, price1
-                        sell_pair, sell_price = pair2, price2
-                        buy_quote, sell_quote = quote1, quote2
-                    else:
-                        buy_pair, buy_price = pair2, price2
-                        sell_pair, sell_price = pair1, price1
-                        buy_quote, sell_quote = quote2, quote1
                     
                     # Calculate order book depth
                     depth_buy = await self._calculate_order_book_depth(exchange_id, buy_pair, 'buy', trade_size_usd)
@@ -507,13 +526,17 @@ class IntraExchangeArbitrageEngine:
                     vol2 = await self._calculate_volatility(exchange_id, pair2)
                     volatility = (vol1 + vol2) / 2
                     
+                    # Normalize buy/sell prices to USD for calculation
+                    usd_buy_price = await self._normalize_price_to_usd(exchange_id, buy_price, buy_quote)
+                    usd_sell_price = await self._normalize_price_to_usd(exchange_id, sell_price, sell_quote)
+                    
                     # Calculate spread width
-                    spread_width = abs(usd_price2 - usd_price1)
+                    spread_width = abs(usd_sell_price - usd_buy_price)
                     
                     # Calculate profitability
                     profit_data = calculator.calculate_net_profit(
-                        buy_price=usd_price1,
-                        sell_price=usd_price2,
+                        buy_price=usd_buy_price,
+                        sell_price=usd_sell_price,
                         trade_size_usd=trade_size_usd,
                         order_book_depth_buy=depth_buy,
                         order_book_depth_sell=depth_sell,
@@ -543,8 +566,8 @@ class IntraExchangeArbitrageEngine:
                         # LOG PROFITABLE OPPORTUNITY FOUND
                         exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
                         logger.info(f"{exchange_marker} [{exchange_id.upper()}] ✅ PROFITABLE: {base_crypto} | "
-                                   f"Buy: {buy_pair} @ ${buy_price:.6f} | "
-                                   f"Sell: {sell_pair} @ ${sell_price:.6f} | "
+                                   f"Buy: {buy_pair} @ ${usd_buy_price:.6f} (ASK) | "
+                                   f"Sell: {sell_pair} @ ${usd_sell_price:.6f} (BID) | "
                                    f"Spread: {profit_data['raw_spread']*100:.3f}% | "
                                    f"Net Profit: {net_profit*100:.3f}% | "
                                    f"Expected: ${profit_data['expected_profit_usd']:.2f}")
@@ -555,8 +578,8 @@ class IntraExchangeArbitrageEngine:
                                 base_crypto=base_crypto,
                                 buy_pair=buy_pair,
                                 sell_pair=sell_pair,
-                                buy_price=usd_price1,
-                                sell_price=usd_price2,
+                                buy_price=usd_buy_price,
+                                sell_price=usd_sell_price,
                                 raw_spread_percent=profit_data['raw_spread'] * 100,
                                 net_profit_percent=net_profit * 100,
                                 fees_buy=calculator.maker_fee * 100,

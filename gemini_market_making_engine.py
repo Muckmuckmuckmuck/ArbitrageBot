@@ -155,12 +155,23 @@ class GeminiMarketMakingEngine:
         """Get current market price for a pair"""
         try:
             ticker = await self.exchange_manager.fetch_ticker('gemini', pair)
-            mid_price = (ticker.get('bid', 0) + ticker.get('ask', 0)) / 2
-            if mid_price > 0:
-                return mid_price
-            return ticker.get('last') or ticker.get('close') or None
+            bid = ticker.get('bid', 0) or 0
+            ask = ticker.get('ask', 0) or 0
+            
+            # Calculate mid price (average of bid and ask)
+            if bid > 0 and ask > 0:
+                mid_price = (bid + ask) / 2
+                if mid_price > 0:
+                    return mid_price
+            
+            # Fallback to last price
+            last_price = ticker.get('last') or ticker.get('close') or 0
+            if last_price > 0:
+                return last_price
+            
+            return None
         except Exception as e:
-            logger.debug(f"   Error fetching price for {pair}: {e}")
+            logger.debug(f"   🟢 [GEMINI] Error fetching price for {pair}: {e}")
             return None
     
     async def get_spread(self, pair: str) -> Optional[float]:
@@ -248,6 +259,11 @@ class GeminiMarketMakingEngine:
                 order_value_usd = self.capital_per_pair * self.order_size_percent
             
             # Calculate order amount from USD value
+            # 🔵 CRITICAL FIX: Prevent division by zero
+            if current_price <= 0:
+                logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - invalid current price: {current_price}")
+                return False
+            
             order_amount = order_value_usd / current_price
             
             # Ensure order value meets minimum cost requirement
