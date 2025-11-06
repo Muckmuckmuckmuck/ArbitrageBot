@@ -611,11 +611,11 @@ class IntraExchangeArbitrageEngine:
                                 logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⚠️ {base_crypto}: Spread {profit_data['raw_spread']*100:.3f}% → Net {net_profit*100:.3f}% < Required {threshold*100:.3f}% (deficit: {deficit:.3f}%)")
                         else:
                             logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] NOT PROFITABLE: {base_crypto} | "
-                                       f"{buy_pair} vs {sell_pair} | "
-                                       f"Spread: {profit_data['raw_spread']*100:.3f}% | "
-                                       f"Net: {net_profit*100:.3f}% | "
-                                       f"Required: {threshold*100:.3f}% | "
-                                       f"Deficit: {deficit:.3f}%")
+                                   f"{buy_pair} vs {sell_pair} | "
+                                   f"Spread: {profit_data['raw_spread']*100:.3f}% | "
+                                   f"Net: {net_profit*100:.3f}% | "
+                                   f"Required: {threshold*100:.3f}% | "
+                                   f"Deficit: {deficit:.3f}%")
                 
                 except Exception as e:
                     logger.debug(f"Error evaluating {pair1} vs {pair2}: {e}")
@@ -650,7 +650,7 @@ class IntraExchangeArbitrageEngine:
             if ':' in symbol:
                 continue
             
-            base = market_info.get('base', '').strip().upper()
+                base = market_info.get('base', '').strip().upper()
             quote = market_info.get('quote', '').strip().upper()
             
             # Only count USD/USDC/USDT pairs
@@ -927,17 +927,26 @@ class IntraExchangeArbitrageEngine:
         Re-check spread right before execution
         Opportunities disappear fast - this prevents bad trades
         """
-        try:
             exchange_id = opportunity.exchange
+        exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
+        
+        try:
+            logger.debug(f"{exchange_marker} [{exchange_id.upper()}]    🔍 Validating opportunity: {opportunity.base_crypto}")
+            logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Buy pair: {opportunity.buy_pair}")
+            logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Sell pair: {opportunity.sell_pair}")
             
-            # Get fresh prices
+            # Get fresh prices - use ASK for buy, BID for sell (same as opportunity finding)
             ticker1 = await self.exchange_manager.fetch_ticker(exchange_id, opportunity.buy_pair)
             ticker2 = await self.exchange_manager.fetch_ticker(exchange_id, opportunity.sell_pair)
             
-            price1 = ticker1.get('last') or ticker1.get('close') or ticker1.get('bid', 0)
-            price2 = ticker2.get('last') or ticker2.get('close') or ticker2.get('bid', 0)
+            # 🔵 CRITICAL FIX: Use ASK for buy, BID for sell (not last price)
+            ask1 = ticker1.get('ask', 0) or ticker1.get('last', 0)
+            bid2 = ticker2.get('bid', 0) or ticker2.get('last', 0)
             
-            if price1 <= 0 or price2 <= 0:
+            logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Fresh prices: Buy ASK={ask1}, Sell BID={bid2}")
+            
+            if ask1 <= 0 or bid2 <= 0:
+                logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    ⚠️ Invalid prices: ask1={ask1}, bid2={bid2}")
                 return None
             
             # Extract quote currencies
@@ -945,13 +954,16 @@ class IntraExchangeArbitrageEngine:
             sell_quote = opportunity.sell_pair.split('/')[1]
             
             # Normalize to USD
-            usd_price1 = await self._normalize_price_to_usd(exchange_id, price1, buy_quote)
-            usd_price2 = await self._normalize_price_to_usd(exchange_id, price2, sell_quote)
+            usd_price1 = await self._normalize_price_to_usd(exchange_id, ask1, buy_quote)
+            usd_price2 = await self._normalize_price_to_usd(exchange_id, bid2, sell_quote)
+            
+            logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       USD prices: Buy=${usd_price1:.6f}, Sell=${usd_price2:.6f}")
             
             # Recalculate spread
             if usd_price1 < usd_price2:
                 raw_spread = (usd_price2 - usd_price1) / usd_price1
             else:
+                logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    ⚠️ Opportunity reversed: buy price ${usd_price1:.6f} >= sell price ${usd_price2:.6f}")
                 return None  # Opportunity reversed
             
             # Check if still profitable
@@ -960,8 +972,10 @@ class IntraExchangeArbitrageEngine:
             fees_total = calculator.maker_fee + calculator.maker_fee
             net_spread = raw_spread - fees_total - 0.002  # Account for slippage
             
+            logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Spread: {raw_spread*100:.3f}% → Net: {net_spread*100:.3f}% (fees: {fees_total*100:.3f}%)")
+            
             if net_spread < self.min_profit_threshold:
-                logger.warning(f"   ⚠️ Opportunity disappeared: spread now {net_spread*100:.3f}% < {self.min_profit_threshold*100:.3f}%")
+                logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    ⚠️ Opportunity disappeared: spread now {net_spread*100:.3f}% < {self.min_profit_threshold*100:.3f}%")
                 return None
             
             # Update opportunity with fresh prices
@@ -970,10 +984,13 @@ class IntraExchangeArbitrageEngine:
             opportunity.raw_spread_percent = raw_spread * 100
             opportunity.net_profit_percent = net_spread * 100
             
+            logger.debug(f"{exchange_marker} [{exchange_id.upper()}]    ✅ Opportunity still valid: {net_spread*100:.3f}% profit")
             return opportunity
             
         except Exception as e:
-            logger.warning(f"   ⚠️ Could not validate opportunity: {e}")
+            logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    ⚠️ Could not validate opportunity: {type(e).__name__}: {e}")
+            import traceback
+            logger.debug(f"{exchange_marker} [{exchange_id.upper()}]    Traceback: {traceback.format_exc()}")
             return None  # If we can't validate, skip the trade
     
     async def _wait_for_order_fill_with_chase(
@@ -1036,6 +1053,16 @@ class IntraExchangeArbitrageEngine:
                         try:
                             base_amount = order_status.get('amount', 0) - filled
                             if base_amount > 0:
+                                # 🔵 CRITICAL FIX: Validate parameters before creating order
+                                if base_amount is None or base_amount <= 0:
+                                    logger.warning(f"   ⚠️ Invalid base_amount for price chase: {base_amount}")
+                                    continue
+                                if current_price is None or current_price <= 0:
+                                    logger.warning(f"   ⚠️ Invalid current_price for price chase: {current_price}")
+                                    continue
+                                
+                                exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
+                                logger.info(f"{exchange_marker} [{exchange_id.upper()}]    🎯 Price chasing: ${current_price:.6f} (chased {price_chased*100:.2f}%)")
                                 new_order = await self.exchange_manager.create_order(
                                     exchange_id=exchange_id,
                                     symbol=symbol,
@@ -1044,11 +1071,16 @@ class IntraExchangeArbitrageEngine:
                                     amount=base_amount,
                                     price=current_price
                                 )
-                                order_id = new_order.get('id')
-                                logger.info(f"   🎯 Chased price: ${current_price:.6f} (chased {price_chased*100:.2f}%)")
+                                order_id = new_order.get('id') if new_order else None
+                                if order_id:
+                                    logger.info(f"{exchange_marker} [{exchange_id.upper()}]    ✅ Price chase order placed: ID={order_id}")
+                                else:
+                                    logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    ⚠️ Price chase order failed: no ID")
                         except Exception as e:
-                            logger.warning(f"   ⚠️ Failed to chase price: {e}")
-                            return order_status, current_price
+                            exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
+                            logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    ⚠️ Price chase failed: {type(e).__name__}: {e}")
+                            # Continue waiting instead of returning early
+                            pass
                     
             except Exception as e:
                 logger.warning(f"   ⚠️ Error checking order: {e}")
@@ -1338,7 +1370,7 @@ class IntraExchangeArbitrageEngine:
                     position_multiplier = 1.0  # Full size
                 elif spread_quality > 2.0:  # 2x minimum spread
                     position_multiplier = 0.8  # 80% size
-                else:
+            else:
                     position_multiplier = 0.6  # 60% size
                 
                 # Apply multiplier to desired size
@@ -1378,7 +1410,7 @@ class IntraExchangeArbitrageEngine:
                 if trade_size < opportunity.trade_size_usd:
                     logger.info(f"   💡 Adjusted trade size: ${trade_size:.2f} (available) vs ${opportunity.trade_size_usd:.2f} (desired)")
                 else:
-                    logger.info(f"   📊 Fixed sizing: ${trade_size:.2f} position")
+                logger.info(f"   📊 Fixed sizing: ${trade_size:.2f} position")
             
             base_amount = trade_size / opportunity.buy_price
             logger.info(f"   💵 Trade size: ${trade_size:.2f} → {base_amount:.6f} {opportunity.base_crypto}")
@@ -1404,14 +1436,14 @@ class IntraExchangeArbitrageEngine:
             logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Creating buy order - amount={base_amount:.6f}, price=${buy_price_limit:.6f}")
             
             try:
-                buy_order = await self.exchange_manager.create_order(
-                    exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
-                    symbol=opportunity.buy_pair,
-                    order_type='limit',
-                    side='buy',
-                    amount=base_amount,
-                    price=buy_price_limit
-                )
+            buy_order = await self.exchange_manager.create_order(
+                exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
+                symbol=opportunity.buy_pair,
+                order_type='limit',
+                side='buy',
+                amount=base_amount,
+                price=buy_price_limit
+            )
                 logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Buy order response = {buy_order}")
                 
                 buy_order_id = buy_order.get('id') if buy_order else None
@@ -1567,14 +1599,14 @@ class IntraExchangeArbitrageEngine:
             logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Creating sell order - amount={base_amount:.6f}, price=${sell_price_limit:.6f}")
             
             try:
-                sell_order = await self.exchange_manager.create_order(
-                    exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
-                    symbol=opportunity.sell_pair,
-                    order_type='limit',
-                    side='sell',
-                    amount=base_amount,
-                    price=sell_price_limit
-                )
+            sell_order = await self.exchange_manager.create_order(
+                exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
+                symbol=opportunity.sell_pair,
+                order_type='limit',
+                side='sell',
+                amount=base_amount,
+                price=sell_price_limit
+            )
                 logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Sell order response = {sell_order}")
                 
                 sell_order_id = sell_order.get('id') if sell_order else None
@@ -1825,19 +1857,19 @@ class IntraExchangeArbitrageEngine:
                 logger.info(f"      Opportunities found: {coinbase_results.get('opportunities_found', 0)}")
                 logger.info(f"      Trades executed: {coinbase_results.get('trades_executed', 0)}")
                 logger.info(f"      Trades skipped: {coinbase_results.get('trades_skipped', 0)}")
-                logger.info(f"")
+                                logger.info(f"")
                 logger.info(f"   ✅ GEMINI:")
                 logger.info(f"      Opportunities found: {gemini_results.get('opportunities_found', 0)}")
                 logger.info(f"      Trades executed: {gemini_results.get('trades_executed', 0)}")
                 logger.info(f"      Trades skipped: {gemini_results.get('trades_skipped', 0)}")
-                logger.info(f"")
+                                logger.info(f"")
                 logger.info(f"   📈 TOTAL:")
                 total_found = coinbase_results.get('opportunities_found', 0) + gemini_results.get('opportunities_found', 0)
                 total_executed = coinbase_results.get('trades_executed', 0) + gemini_results.get('trades_executed', 0)
                 logger.info(f"      Opportunities found: {total_found}")
                 logger.info(f"      Trades executed: {total_executed}")
                 logger.info("=" * 80)
-                logger.info("")
+                    logger.info("")
                 
                 # Print statistics
                 self._print_statistics()

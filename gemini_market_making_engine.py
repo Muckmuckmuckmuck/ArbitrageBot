@@ -317,9 +317,19 @@ class GeminiMarketMakingEngine:
                 buy_price = current_price * (1 - self.grid_spacing_percent / 100)
                 sell_price = current_price * (1 + self.grid_spacing_percent / 100)
             
+            # 🔵 CRITICAL FIX: Validate prices are not None before rounding
+            if buy_price is None or sell_price is None or buy_price <= 0 or sell_price <= 0:
+                logger.warning(f"   🟢 [GEMINI] ⚠️ Skipping {pair} - invalid calculated prices: buy=${buy_price}, sell=${sell_price}")
+                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'invalid_calculated_prices'}
+            
             # Round prices to exchange precision
             buy_price = round(buy_price, price_precision)
             sell_price = round(sell_price, price_precision)
+            
+            # 🔵 CRITICAL FIX: Validate prices after rounding
+            if buy_price <= 0 or sell_price <= 0:
+                logger.warning(f"   🟢 [GEMINI] ⚠️ Skipping {pair} - prices rounded to 0: buy=${buy_price}, sell=${sell_price}")
+                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'prices_rounded_to_zero'}
             
             # Check minimum order size (recalculate after rounding)
             min_order_value = order_amount * buy_price
@@ -358,6 +368,14 @@ class GeminiMarketMakingEngine:
             if inventory_value is not None and inventory_value < max_inventory:
                 logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE BUY ORDER...")
                 try:
+                    # 🔵 CRITICAL FIX: Validate order parameters before creating order
+                    if order_amount is None or order_amount <= 0:
+                        logger.error(f"   🟢 [GEMINI] ❌ Invalid order_amount: {order_amount}")
+                        raise ValueError(f"Invalid order_amount: {order_amount}")
+                    if buy_price is None or buy_price <= 0:
+                        logger.error(f"   🟢 [GEMINI] ❌ Invalid buy_price: {buy_price}")
+                        raise ValueError(f"Invalid buy_price: {buy_price}")
+                    
                     logger.debug(f"   🟢 [GEMINI] {pair}: Creating buy order - amount={order_amount:.6f}, price=${buy_price:.6f}")
                     buy_order = await self.exchange_manager.create_order(
                         exchange_id='gemini',
@@ -398,6 +416,15 @@ class GeminiMarketMakingEngine:
                 logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE SELL ORDER...")
                 try:
                     sell_amount = min(order_amount, inventory)
+                    
+                    # 🔵 CRITICAL FIX: Validate sell order parameters
+                    if sell_amount is None or sell_amount <= 0:
+                        logger.error(f"   🟢 [GEMINI] ❌ Invalid sell_amount: {sell_amount}")
+                        raise ValueError(f"Invalid sell_amount: {sell_amount}")
+                    if sell_price is None or sell_price <= 0:
+                        logger.error(f"   🟢 [GEMINI] ❌ Invalid sell_price: {sell_price}")
+                        raise ValueError(f"Invalid sell_price: {sell_price}")
+                    
                     logger.debug(f"   🟢 [GEMINI] {pair}: Creating sell order - amount={sell_amount:.6f}, price=${sell_price:.6f}")
                     sell_order = await self.exchange_manager.create_order(
                         exchange_id='gemini',

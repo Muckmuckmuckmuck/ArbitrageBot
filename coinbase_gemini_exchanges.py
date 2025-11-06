@@ -274,12 +274,27 @@ class CoinbaseGeminiExchangeManager:
             
             # Validate minimum order size AFTER rounding
             if price is not None:
+                # 🔵 CRITICAL FIX: Validate inputs before calculation
+                if amount is None or price is None:
+                    exchange_marker = "🔵" if exchange_id == EXCHANGE_COINBASE else "🟢"
+                    logger.error(f"   {exchange_marker} [{exchange_id.upper()}] ❌ Invalid order parameters: amount={amount}, price={price}")
+                    raise ValueError(f"Invalid order parameters: amount={amount}, price={price}")
+                
                 min_order_value = amount * price
                 # Check market minimums (typically $5-10 for most exchanges)
-                min_cost = market_info.get('limits', {}).get('cost', {}).get('min', 5.0)
+                # 🔵 CRITICAL FIX: Handle None values in min_cost
+                limits = market_info.get('limits', {}) or {}
+                cost_limits = limits.get('cost', {}) or {}
+                min_cost = cost_limits.get('min', 5.0) or 5.0
+                
+                # Ensure min_cost is a valid number
+                if min_cost is None or not isinstance(min_cost, (int, float)) or min_cost <= 0:
+                    min_cost = 5.0  # Default minimum
+                    logger.debug(f"   [{exchange_id.upper()}] Using default min_cost: ${min_cost:.2f}")
                 
                 # 🔵 COINBASE and 🟢 GEMINI have different minimums - log for debugging
-                if min_order_value < min_cost:
+                # 🔵 CRITICAL FIX: Ensure both values are valid before comparison
+                if min_order_value is not None and min_cost is not None and min_order_value < min_cost:
                     # 🔵 COINBASE / 🟢 GEMINI: Comprehensive logging with exchange marker
                     logger.error(f"   ❌ [{exchange_id.upper()}] Order validation failed for {symbol}:")
                     logger.error(f"      Exchange: {exchange_id.upper()}")
@@ -308,18 +323,44 @@ class CoinbaseGeminiExchangeManager:
                     raise ValueError(f"Order value ${min_order_value:.2f} < minimum $5.00 for {symbol}")
         
         # ====================================================================
+        # ⚪ COMMON: Final validation before order creation
+        # ====================================================================
+        # 🔵 CRITICAL FIX: Validate all parameters before API call
+        exchange_marker = "🔵" if exchange_id == EXCHANGE_COINBASE else "🟢"
+        
+        if amount is None or amount <= 0:
+            logger.error(f"   {exchange_marker} [{exchange_id.upper()}] ❌ Invalid amount: {amount}")
+            raise ValueError(f"Invalid amount: {amount}")
+        
+        if order_type == 'limit' and (price is None or price <= 0):
+            logger.error(f"   {exchange_marker} [{exchange_id.upper()}] ❌ Invalid price for limit order: {price}")
+            raise ValueError(f"Invalid price for limit order: {price}")
+        
+        # ====================================================================
         # ⚪ COMMON: Order creation (works for both exchanges)
         # ====================================================================
         # 🔵 COINBASE / 🟢 GEMINI: Create order with comprehensive logging
-        exchange_marker = "🔵" if exchange_id == EXCHANGE_COINBASE else "🟢"
-        logger.info(f"   {exchange_marker} [{exchange_id.upper()}] Creating {side} order:")
-        logger.info(f"      Symbol: {symbol}")
-        logger.info(f"      Type: {order_type}")
-        logger.info(f"      Amount: {amount:.8f}")
-        logger.info(f"      Price: ${price:.8f}" if price else "      Price: MARKET")
+        logger.info(f"   {exchange_marker} [{exchange_id.upper()}] 📝 Creating {side} {order_type} order:")
+        logger.info(f"      {exchange_marker} [{exchange_id.upper()}] Symbol: {symbol}")
+        logger.info(f"      {exchange_marker} [{exchange_id.upper()}] Type: {order_type}")
+        logger.info(f"      {exchange_marker} [{exchange_id.upper()}] Amount: {amount:.8f}")
+        if price:
+            logger.info(f"      {exchange_marker} [{exchange_id.upper()}] Price: ${price:.8f}")
+        else:
+            logger.info(f"      {exchange_marker} [{exchange_id.upper()}] Price: MARKET")
         
         # ⚪ Simple direct call - exactly like BTC script that worked
         try:
+            # 🔵 CRITICAL FIX: Log exact parameters being sent
+            logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] Order parameters:")
+            logger.debug(f"      {exchange_marker} [{exchange_id.upper()}] symbol={symbol}")
+            logger.debug(f"      {exchange_marker} [{exchange_id.upper()}] type={order_type}")
+            logger.debug(f"      {exchange_marker} [{exchange_id.upper()}] side={side}")
+            logger.debug(f"      {exchange_marker} [{exchange_id.upper()}] amount={amount}")
+            logger.debug(f"      {exchange_marker} [{exchange_id.upper()}] price={price}")
+            if order_params:
+                logger.debug(f"      {exchange_marker} [{exchange_id.upper()}] params={order_params}")
+            
             if order_params:
                 order = exchange.create_order(
                     symbol=symbol,
@@ -340,30 +381,49 @@ class CoinbaseGeminiExchangeManager:
             
             # CCXT returns sync result, but handle async just in case
             if hasattr(order, '__await__'):
-                order = await order
+                order_result = await order
+            else:
+                order_result = order
             
-            order_id = order.get('id', 'unknown')
-            logger.info(f"   {exchange_marker} [{exchange_id.upper()}] ✅ Order created: {order_id}")
-            return order
+            # 🔵 CRITICAL FIX: Log full order response for debugging
+            logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] Order response: {order_result}")
+            
+            order_id = order_result.get('id') if order_result else None
+            if order_id:
+                logger.info(f"   {exchange_marker} [{exchange_id.upper()}] ✅✅✅ ORDER CREATED SUCCESSFULLY: ID={order_id}")
+                logger.info(f"   {exchange_marker} [{exchange_id.upper()}] Order details: {symbol} {side} {amount:.8f} @ ${price:.8f if price else 'MARKET'}")
+            else:
+                logger.warning(f"   {exchange_marker} [{exchange_id.upper()}] ⚠️ Order created but no ID returned: {order_result}")
+            
+            return order_result
             
         except Exception as e:
             error_msg = str(e)
+            error_type = type(e).__name__
+            logger.error(f"   {exchange_marker} [{exchange_id.upper()}] ❌❌❌ ERROR CREATING ORDER:")
+            logger.error(f"   {exchange_marker} [{exchange_id.upper()}]    Error Type: {error_type}")
+            logger.error(f"   {exchange_marker} [{exchange_id.upper()}]    Error Message: {error_msg}")
+            logger.error(f"   {exchange_marker} [{exchange_id.upper()}]    Symbol: {symbol}")
+            logger.error(f"   {exchange_marker} [{exchange_id.upper()}]    Order Type: {order_type}")
+            logger.error(f"   {exchange_marker} [{exchange_id.upper()}]    Side: {side}")
+            logger.error(f"   {exchange_marker} [{exchange_id.upper()}]    Amount: {amount}")
+            logger.error(f"   {exchange_marker} [{exchange_id.upper()}]    Price: {price}")
+            import traceback
+            logger.error(f"   {exchange_marker} [{exchange_id.upper()}]    Traceback: {traceback.format_exc()}")
+            
             # ================================================================
             # 🔵 COINBASE-SPECIFIC: Error handling
             # ================================================================
             # 🔵 If it's "account is not available", provide detailed diagnostics
             if "account is not available" in error_msg.lower() and exchange_id == EXCHANGE_COINBASE:
-                logger.error(f"   ❌ Coinbase account error for {symbol} ({side}):")
-                logger.error(f"      Error: {error_msg}")
-                logger.error(f"   ⚠️ Possible causes:")
-                logger.error(f"      1. Account not enabled for {symbol.split('/')[1]} trading")
-                logger.error(f"      2. Account restrictions on EUR/GBP pairs")
-                logger.error(f"      3. KYC verification incomplete")
-                logger.error(f"      4. Account type limitations (Business vs Retail)")
-                logger.error(f"      5. Trading permissions not enabled for this currency pair")
-                logger.error(f"   💡 Check Coinbase account settings and trading permissions")
-                raise
-            # Re-raise other errors as-is
+                logger.error(f"   {exchange_marker} [{exchange_id.upper()}] ⚠️ Possible causes:")
+                logger.error(f"   {exchange_marker} [{exchange_id.upper()}]      1. Account not enabled for {symbol.split('/')[1]} trading")
+                logger.error(f"   {exchange_marker} [{exchange_id.upper()}]      2. Account restrictions on EUR/GBP pairs")
+                logger.error(f"   {exchange_marker} [{exchange_id.upper()}]      3. KYC verification incomplete")
+                logger.error(f"   {exchange_marker} [{exchange_id.upper()}]      4. Account type limitations (Business vs Retail)")
+                logger.error(f"   {exchange_marker} [{exchange_id.upper()}]      5. Trading permissions not enabled for this currency pair")
+                logger.error(f"   {exchange_marker} [{exchange_id.upper()}]   💡 Check Coinbase account settings and trading permissions")
+            
             raise
     
     async def convert_currency(self, exchange_id: str, from_currency: str, to_currency: str, amount: float) -> bool:
@@ -513,7 +573,7 @@ class CoinbaseGeminiExchangeManager:
         if exchange_id == EXCHANGE_COINBASE and network:
             fetch_params['network'] = network
             logger.info(f"   Using network: {network}")
-        
+            
         # ====================================================================
         # ⚪ COMMON: Fetch deposit address (works for both exchanges)
         # ====================================================================
@@ -573,7 +633,7 @@ class CoinbaseGeminiExchangeManager:
     # 🔵 COINBASE-SPECIFIC: Exchange API signature generation
     # ============================================================================
     def _generate_coinbase_exchange_signature(self, timestamp: str, method: str, 
-                                              request_path: str, body: str = '') -> str:
+                                             request_path: str, body: str = '') -> str:
         """🔵 Generate Coinbase Exchange API signature
         
         Args:
