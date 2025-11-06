@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Production-Grade Intra-Exchange Arbitrage Trading Engine
-Implements comprehensive profitability calculations for ALL trading pairs
+Implements comprehensive profitability calculations for USD/USDC/USDT pairs only
 Works on Coinbase and Gemini separately (no cross-exchange confusion)
+Only supports USD/USDC/USDT quote currencies (no EUR/GBP for simplicity and reliability)
 """
 
 import asyncio
@@ -274,14 +275,13 @@ class IntraExchangeArbitrageEngine:
         Get all trading pairs for a crypto (e.g., BTC/USD, BTC/USDC, BTC/USDT)
         Returns list of (pair_symbol, quote_currency) tuples
         Excludes futures, swaps, and other derivative markets
-        Now includes USD/USDC/USDT/EUR/GBP pairs (EUR/GBP conversion enabled)
+        Only USD/USDC/USDT pairs for simple intra-exchange arbitrage
         """
         exchange = self.exchange_manager.get_exchange(exchange_id)
         pairs = []
         
-        # Allow USD/USDC/USDT/EUR/GBP pairs
-        # Bridge conversion is now properly handled with completion checks
-        allowed_quotes = ['USD', 'USDC', 'USDT', 'EUR', 'GBP']
+        # Only allow USD/USDC/USDT pairs - no EUR/GBP to avoid conversion issues
+        allowed_quotes = ['USD', 'USDC', 'USDT']
         
         for symbol, market_info in exchange.markets.items():
             if not market_info.get('active', True):
@@ -313,7 +313,7 @@ class IntraExchangeArbitrageEngine:
     ) -> float:
         """
         Normalize any price to USD equivalent
-        Handles: USD, USDC, USDT, EUR, GBP, BTC, ETH, SOL, etc.
+        Handles: USD, USDC, USDT (no EUR/GBP - removed for simplicity)
         CRITICAL: This must be accurate for crypto-to-crypto pairs
         """
         if quote_currency == 'USD':
@@ -334,26 +334,6 @@ class IntraExchangeArbitrageEngine:
                 logger.debug(f"Could not fetch {quote_currency}/USD rate: {e}")
             # Fallback: assume 1:1 (very close)
             return price
-        
-        # Fiat currencies - fetch real-time rates
-        if quote_currency in ['EUR', 'GBP']:
-            try:
-                # Try to get real-time rate from exchange
-                exchange = self.exchange_manager.get_exchange(exchange_id)
-                fiat_pair = f"{quote_currency}/USD"
-                if fiat_pair in exchange.markets and ':' not in fiat_pair:
-                    ticker = await self.exchange_manager.fetch_ticker(exchange_id, fiat_pair)
-                    rate = ticker.get('last') or ticker.get('close') or ticker.get('bid', 0)
-                    if rate and rate > 0:
-                        return price * rate
-            except Exception as e:
-                logger.debug(f"Could not fetch {quote_currency}/USD rate: {e}")
-            
-            # Fallback to approximate rates
-            if quote_currency == 'EUR':
-                return price * 1.05
-            if quote_currency == 'GBP':
-                return price * 1.25
         
         # Crypto quote currencies - MUST fetch USD price for accuracy
         # This is critical for crypto-to-crypto pairs (e.g., BTC/ETH)
@@ -453,7 +433,7 @@ class IntraExchangeArbitrageEngine:
     ) -> Optional[TradeOpportunity]:
         """
         Find the best arbitrage opportunity for a crypto on a specific exchange
-        Compares ALL pairs (USD, USDC, USDT, EUR, GBP, BTC, ETH, etc.)
+        Compares USD, USDC, USDT pairs only (EUR/GBP removed for simplicity and reliability)
         """
         pairs = await self._get_all_pairs_for_crypto(exchange_id, base_crypto)
         
@@ -532,23 +512,9 @@ class IntraExchangeArbitrageEngine:
                         execution_latency_ms=self.execution_latency_ms
                     )
                     
-                    # Account for currency conversion cost if needed (EUR/GBP pairs)
-                    conversion_cost = 0.0
-                    if buy_quote in ['EUR', 'GBP'] and buy_quote not in ['USD', 'USDC', 'USDT']:
-                        # Need to convert USD/USDC/USDT to EUR/GBP (bridge conversion)
-                        conversion_cost = self.exchange_manager.get_conversion_cost_percent(exchange_id)
-                        logger.debug(f"   💱 Conversion cost for {buy_quote}: {conversion_cost*100:.2f}%")
-                    
-                    if sell_quote in ['EUR', 'GBP'] and sell_quote not in ['USD', 'USDC', 'USDT']:
-                        # Need to convert back from EUR/GBP to USD/USDC/USDT
-                        conversion_cost += self.exchange_manager.get_conversion_cost_percent(exchange_id)
-                        logger.debug(f"   💱 Conversion cost for {sell_quote}: {conversion_cost*100:.2f}%")
-                    
-                    # Deduct conversion cost from net profit
-                    if conversion_cost > 0:
-                        profit_data['net_profit'] = profit_data['net_profit'] - conversion_cost
-                        profit_data['expected_profit_usd'] = trade_size_usd * profit_data['net_profit']
-                        logger.debug(f"   ⚠️ Adjusted for conversion cost: net profit reduced by {conversion_cost*100:.2f}%")
+                    # No conversion costs needed - only USD/USDC/USDT pairs
+                    # These are interchangeable at 1:1 rate
+                    profit_data['expected_profit_usd'] = trade_size_usd * profit_data['net_profit']
                     
                     # Check if profitable
                     net_profit = profit_data['net_profit']
@@ -980,171 +946,20 @@ class IntraExchangeArbitrageEngine:
     ) -> bool:
         """
         Convert one currency to another on the exchange
-        Returns True if conversion successful
+        Only supports USD/USDC/USDT (interchangeable at 1:1)
+        Returns True if conversion successful (or not needed)
         """
-        try:
-            exchange = self.exchange_manager.get_exchange(exchange_id)
-            
-            # If same currency, no conversion needed
-            if from_currency == to_currency:
-                return True
-            
-            # Find conversion pair (try both directions)
-            conversion_pair = f"{from_currency}/{to_currency}"
-            reverse_pair = f"{to_currency}/{from_currency}"
-            
-            # Check if conversion pair exists
-            pair_to_use = None
-            side = None
-            
-            if conversion_pair in exchange.markets:
-                pair_to_use = conversion_pair
-                side = 'buy'  # We're buying to_currency with from_currency
-                logger.info(f"   📍 Using pair: {pair_to_use} (buying {to_currency} with {from_currency})")
-            elif reverse_pair in exchange.markets:
-                pair_to_use = reverse_pair
-                side = 'sell'  # We're selling from_currency to get to_currency
-                logger.info(f"   📍 Using reverse pair: {pair_to_use} (selling {from_currency} to get {to_currency})")
-            else:
-                logger.warning(f"   ⚠️ No conversion pair available: {from_currency} → {to_currency}")
-                logger.warning(f"      Tried: {conversion_pair} and {reverse_pair}")
-                return False
-            
-            # Get current price for the conversion
-            ticker = await self.exchange_manager.fetch_ticker(exchange_id, pair_to_use)
-            if side == 'buy':
-                # Buying to_currency: use ask price (what we pay)
-                current_price = ticker.get('ask') or ticker.get('last', 0)
-            else:
-                # Selling from_currency: use bid price (what we get)
-                current_price = ticker.get('bid') or ticker.get('last', 0)
-            
-            if current_price <= 0:
-                logger.warning(f"   ⚠️ Invalid price for {pair_to_use}: {current_price}")
-                return False
-            
-            logger.info(f"   🔄 Converting {from_currency} → {to_currency}")
-            logger.info(f"      Target: {amount:.6f} {to_currency}")
-            logger.info(f"      Pair: {pair_to_use}")
-            logger.info(f"      Price: {current_price:.6f}")
-            logger.info(f"      Side: {side}")
-            
-            # Calculate order amount based on direction
-            if side == 'buy':
-                # Buying to_currency with from_currency
-                # For market buy: we want 'amount' of to_currency (base)
-                # Coinbase requires price for market buy
-                order_amount = amount
-            else:
-                # Selling from_currency to get to_currency
-                # We need to sell enough from_currency to get 'amount' of to_currency
-                # amount is in to_currency, so we need: amount / price of from_currency
-                order_amount = amount / current_price
-                # Add 2% buffer for fees and slippage
-                order_amount = order_amount * 1.02
-            
-            logger.info(f"   📊 Order details:")
-            logger.info(f"      Amount: {order_amount:.6f} {from_currency if side == 'sell' else to_currency}")
-            logger.info(f"      Expected result: ~{amount:.6f} {to_currency}")
-            
-            # Place LIMIT order for conversion (Coinbase requires limit orders for some pairs)
-            # Use limit orders for better reliability and to avoid "limit only mode" errors
-            try:
-                # Calculate limit price with small buffer to ensure fill
-                if side == 'buy':
-                    # Buying to_currency: use ask price + small buffer
-                    limit_price = current_price * 1.005  # 0.5% above ask to ensure fill
-                else:
-                    # Selling from_currency: use bid price - small buffer
-                    limit_price = current_price * 0.995  # 0.5% below bid to ensure fill
-                
-                logger.info(f"   📝 Placing LIMIT conversion order:")
-                logger.info(f"      Price: {limit_price:.6f} (current: {current_price:.6f})")
-                logger.info(f"      Amount: {order_amount:.6f}")
-                
-                conversion_order = await self.exchange_manager.create_order(
-                    exchange_id=exchange_id,
-                    symbol=pair_to_use,
-                    order_type='limit',
-                    side=side,
-                    amount=order_amount,
-                    price=limit_price
-                )
-                
-                logger.info(f"   ✅ Conversion limit order placed: {conversion_order.get('id')}")
-                
-            except Exception as order_error:
-                logger.error(f"   ❌ Failed to place conversion order: {order_error}")
-                import traceback
-                logger.error(f"   Traceback: {traceback.format_exc()}")
-                return False
-            
-            # Wait for order to fill (with timeout)
-            max_wait_seconds = 10
-            waited = 0
-            check_interval = 1
-            
-            while waited < max_wait_seconds:
-                await asyncio.sleep(check_interval)
-                waited += check_interval
-                
-                try:
-                    order_status = await self.exchange_manager.fetch_order(
-                        exchange_id, conversion_order.get('id'), pair_to_use
-                    )
-                    
-                    status = order_status.get('status', 'unknown')
-                    
-                    if status in ['closed', 'filled']:
-                        filled = order_status.get('filled', 0)
-                        logger.info(f"   ✅ Currency conversion successful!")
-                        logger.info(f"      Filled: {filled:.6f} in {waited}s")
-                        return True
-                    elif status == 'canceled':
-                        logger.warning(f"   ⚠️ Conversion order was canceled")
-                        return False
-                    else:
-                        # Still pending, continue waiting
-                        if waited % 3 == 0:  # Log every 3 seconds
-                            logger.info(f"   ⏳ Waiting for conversion order to fill... ({waited}s)")
-                        
-                except Exception as check_error:
-                    logger.debug(f"   Error checking order status: {check_error}")
-            
-            # Timeout - check one more time
-            try:
-                order_status = await self.exchange_manager.fetch_order(
-                    exchange_id, conversion_order.get('id'), pair_to_use
-                )
-                status = order_status.get('status', 'unknown')
-                
-                if status in ['closed', 'filled']:
-                    filled = order_status.get('filled', 0)
-                    logger.info(f"   ✅ Currency conversion successful (after timeout check)!")
-                    logger.info(f"      Filled: {filled:.6f}")
-                    return True
-                else:
-                    # Limit order didn't fill - cancel it
-                    logger.warning(f"   ⚠️ Conversion limit order not filled after {max_wait_seconds}s: {status}")
-                    logger.warning(f"   ⚠️ Canceling order and reporting failure")
-                    
-                    try:
-                        await self.exchange_manager.cancel_order(exchange_id, conversion_order.get('id'), pair_to_use)
-                        logger.info(f"   ✅ Conversion order canceled")
-                    except Exception as cancel_error:
-                        logger.warning(f"   ⚠️ Could not cancel conversion order: {cancel_error}")
-                    
-                    return False
-                    
-            except Exception as verify_error:
-                logger.error(f"   ❌ Error verifying conversion: {verify_error}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"   ❌ Currency conversion failed: {e}")
-            import traceback
-            logger.error(f"   Traceback: {traceback.format_exc()}")
-            return False
+        # USD/USDC/USDT are interchangeable - no conversion needed
+        if from_currency in ['USD', 'USDC', 'USDT'] and to_currency in ['USD', 'USDC', 'USDT']:
+            return True
+        
+        if from_currency == to_currency:
+            return True
+        
+        # For other currencies, conversion is not supported
+        logger.warning(f"   ⚠️ Currency conversion not supported: {from_currency} → {to_currency}")
+        logger.warning(f"   💡 Only USD/USDC/USDT pairs are supported for intra-exchange arbitrage")
+        return False
     
     async def _ensure_currency_available(
         self,
@@ -1154,7 +969,7 @@ class IntraExchangeArbitrageEngine:
     ) -> bool:
         """
         Ensure we have the required currency, converting if necessary
-        Uses new multi-method conversion system for EUR/GBP
+        Only handles USD/USDC/USDT (interchangeable at 1:1)
         """
         balance = await self.exchange_manager.fetch_balance(exchange_id)
         free_balance = balance.get('free', {})
@@ -1174,68 +989,7 @@ class IntraExchangeArbitrageEngine:
                 logger.info(f"   ✅ Have ${total_available:.2f} in USD/USDC/USDT (need ${required_amount:.2f} {required_currency})")
                 return True
         
-        # For EUR/GBP, try to convert from USD/USDC/USDT
-        if required_currency in ['EUR', 'GBP']:
-            logger.info(f"   💱 Need {required_amount:.2f} {required_currency}, have {available:.2f}")
-            
-            # FIRST: Check if we have stuck BTC from a previous failed conversion
-            btc_balance = free_balance.get('BTC', 0)
-            if btc_balance > 0:
-                # Get BTC value in USD
-                try:
-                    btc_ticker = await self.exchange_manager.fetch_ticker(exchange_id, 'BTC/USD')
-                    btc_price = btc_ticker.get('last') or btc_ticker.get('bid', 0)
-                    btc_value_usd = btc_balance * btc_price if btc_price > 0 else 0
-                    
-                    if btc_value_usd >= required_amount * 0.5:
-                        logger.info(f"   💰 Found {btc_balance:.8f} BTC (${btc_value_usd:.2f}) - converting to {required_currency}")
-                        
-                        # Convert BTC directly to required currency
-                        success = await self.exchange_manager.convert_currency(
-                            exchange_id=exchange_id,
-                            from_currency='BTC',
-                            to_currency=required_currency,
-                            amount=btc_balance * 0.95  # Use 95% to leave buffer
-                        )
-                        
-                        if success:
-                            logger.info(f"   ✅ Stuck BTC converted to {required_currency}!")
-                            # Re-check balance after conversion
-                            balance = await self.exchange_manager.fetch_balance(exchange_id)
-                            new_available = balance.get('free', {}).get(required_currency, 0)
-                            if new_available >= required_amount * 1.1:
-                                return True
-                except Exception as e:
-                    logger.debug(f"   Error checking BTC: {e}")
-            
-            # SECOND: Try converting from USD/USDC/USDT
-            convertible_currencies = ['USD', 'USDC', 'USDT']
-            for from_currency in convertible_currencies:
-                from_balance = free_balance.get(from_currency, 0)
-                
-                if from_balance < required_amount * 0.5:  # Need at least 50% of required
-                    continue
-                
-                # Try conversion using new multi-method system
-                amount_to_convert = min(from_balance * 0.9, required_amount * 1.1)
-                
-                logger.info(f"   🔄 Converting {from_currency} → {required_currency} ({amount_to_convert:.2f})")
-                
-                success = await self.exchange_manager.convert_currency(
-                    exchange_id=exchange_id,
-                    from_currency=from_currency,
-                    to_currency=required_currency,
-                    amount=amount_to_convert
-                )
-                
-                if success:
-                    logger.info(f"   ✅ Currency conversion successful!")
-                    return True
-                else:
-                    logger.debug(f"   ⚠️ Conversion {from_currency} → {required_currency} failed, trying next...")
-            
-            logger.warning(f"   ⚠️ Could not convert to {required_currency}")
-            return False
+        # Only USD/USDC/USDT are supported - no conversion needed as they're interchangeable
         
         logger.warning(f"   ⚠️ Insufficient {required_currency}: have {available:.2f}, need {required_amount:.2f}")
         return False
@@ -1261,8 +1015,8 @@ class IntraExchangeArbitrageEngine:
             free_balance = balance.get('free', {})
             
             # Extract currencies
-            buy_quote = buy_pair.split('/')[1]  # e.g., 'EUR' from 'BTC/EUR'
-            sell_quote = sell_pair.split('/')[1]  # e.g., 'USDC' from 'BTC/USDC'
+            buy_quote = buy_pair.split('/')[1]  # e.g., 'USDC' from 'BTC/USDC'
+            sell_quote = sell_pair.split('/')[1]  # e.g., 'USD' from 'BTC/USD'
             base_crypto = buy_pair.split('/')[0]  # e.g., 'BTC'
             
             # Get current prices for calculations
@@ -1275,106 +1029,24 @@ class IntraExchangeArbitrageEngine:
                 logger.warning(f"   ⚠️ Invalid prices for balance check")
                 return False, 0
             
-            # Check for convertible currencies (USD/USDC/USDT) first
+            # Check for convertible currencies (USD/USDC/USDT) - these are interchangeable
             total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
             
-            # Check for BTC - if we have BTC and need EUR/GBP, convert it first (PRIORITY)
-            # This prevents BTC from getting stuck in the account
-            btc_balance = free_balance.get('BTC', 0)
-            btc_price = 0
-            btc_value_usd = 0
-            
-            if buy_quote in ['EUR', 'GBP'] and btc_balance > 0:
-                # Get BTC value in USD
-                try:
-                    btc_ticker = await self.exchange_manager.fetch_ticker(exchange_id, 'BTC/USD')
-                    btc_price = btc_ticker.get('last') or btc_ticker.get('bid', 0)
-                    btc_value_usd = btc_balance * btc_price if btc_price > 0 else 0
-                    
-                    # Always try to convert BTC if we have it and need EUR/GBP
-                    # This prevents funds from getting stuck
-                    if btc_value_usd > 0:  # Changed from >= trade_size_usd * 0.3 to > 0
-                        logger.info(f"   💰 Found {btc_balance:.8f} BTC (${btc_value_usd:.2f}) - converting to {buy_quote}")
-                        logger.info(f"   🔄 Converting BTC to {buy_quote} to prevent stuck funds...")
-                        
-                        # Convert BTC directly to required currency
-                        # Use 95% to leave small buffer, but convert as much as possible
-                        amount_to_convert = btc_balance * 0.95
-                        success = await self.exchange_manager.convert_currency(
-                            exchange_id=exchange_id,
-                            from_currency='BTC',
-                            to_currency=buy_quote,
-                            amount=amount_to_convert
-                        )
-                        
-                        if success:
-                            logger.info(f"   ✅ BTC converted to {buy_quote}!")
-                            # Re-check balance after conversion
-                            balance = await self.exchange_manager.fetch_balance(exchange_id)
-                            free_balance = balance.get('free', {})
-                            # Update BTC balance after conversion
-                            btc_balance = free_balance.get('BTC', 0)
-                            if btc_balance > 0:
-                                logger.warning(f"   ⚠️ Still have {btc_balance:.8f} BTC remaining after conversion")
-                        else:
-                            logger.warning(f"   ⚠️ BTC conversion failed - BTC may remain stuck")
-                            logger.warning(f"   💡 Will retry conversion on next opportunity")
-                except Exception as e:
-                    logger.error(f"   ❌ Error checking/converting BTC: {e}")
-                    # If we can't get price, estimate it for logging
-                    if btc_price == 0:
-                        btc_price = 103000  # Approximate BTC price for display
-                        btc_value_usd = btc_balance * btc_price
-            
             # OPTION 1: Check if we have the required quote currency directly
+            # For USD/USDC/USDT, we can use any of them interchangeably
             buy_balance = free_balance.get(buy_quote, 0)
             
-            # If we need EUR/GBP and don't have it, check if we can convert
-            if buy_quote in ['EUR', 'GBP'] and buy_balance < trade_size_usd * 0.3:
-                # We have convertible currency, need to convert to EUR/GBP
+            # If we don't have the exact quote currency, check if we have USD/USDC/USDT (interchangeable)
+            if buy_quote in ['USD', 'USDC', 'USDT'] and buy_balance < trade_size_usd * 0.3:
+                # Use other USD/USDC/USDT if available
                 if total_convertible > trade_size_usd * 0.3:
-                    logger.info(f"   💱 Need {buy_quote} but have ${total_convertible:.2f} in USD/USDC/USDT - converting...")
-                    
-                    # Attempt conversion
-                    conversion_success = await self._ensure_currency_available(
-                        exchange_id=exchange_id,
-                        required_currency=buy_quote,
-                        required_amount=min(trade_size_usd * 1.1, total_convertible * 0.8)
-                    )
-                    
-                    if conversion_success:
-                        # Re-check balance after conversion
-                        balance = await self.exchange_manager.fetch_balance(exchange_id)
-                        free_balance = balance.get('free', {})
-                        buy_balance = free_balance.get(buy_quote, 0)
-                        total_convertible = free_balance.get('USD', 0) + free_balance.get('USDC', 0) + free_balance.get('USDT', 0)
-                        logger.info(f"   ✅ Conversion successful: Have {buy_balance:.2f} {buy_quote}")
-                    else:
-                        logger.warning(f"   ⚠️ Conversion failed, but have ${total_convertible:.2f} convertible")
+                    logger.info(f"   💱 Need {buy_quote} but have ${total_convertible:.2f} in USD/USDC/USDT - using it")
+                    buy_balance = total_convertible  # Use total convertible as they're 1:1
             
             # Calculate cash available in USD equivalent
+            # USD/USDC/USDT are all 1:1 with USD
             if buy_quote in ['USD', 'USDC', 'USDT']:
                 cash_available_usd = buy_balance
-            elif buy_quote in ['EUR', 'GBP']:
-                # Use converted balance or convertible balance
-                if buy_balance > 0:
-                    # Convert EUR/GBP to USD equivalent
-                    try:
-                        usd_pair = f"{buy_quote}/USD"
-                        exchange = self.exchange_manager.get_exchange(exchange_id)
-                        if usd_pair in exchange.markets:
-                            usd_ticker = await self.exchange_manager.fetch_ticker(exchange_id, usd_pair)
-                            usd_rate = usd_ticker.get('last') or usd_ticker.get('bid', 1.08 if buy_quote == 'EUR' else 1.25)
-                            cash_available_usd = buy_balance * usd_rate
-                        else:
-                            # Approximate rates
-                            cash_available_usd = buy_balance * (1.08 if buy_quote == 'EUR' else 1.25)
-                    except:
-                        # Fallback to approximate rates
-                        cash_available_usd = buy_balance * (1.08 if buy_quote == 'EUR' else 1.25)
-                else:
-                    # No converted balance, use convertible if available
-                    cash_available_usd = total_convertible
             else:
                 # For other currencies, try to get USD pair
                 try:
@@ -1399,9 +1071,6 @@ class IntraExchangeArbitrageEngine:
             logger.info(f"   💰 Balance check:")
             logger.info(f"      Cash ({buy_quote}): {buy_balance:.2f} = ${cash_available_usd:.2f} USD equivalent")
             logger.info(f"      Convertible (USD/USDC/USDT): ${total_convertible:.2f}")
-            if btc_balance > 0:
-                btc_display_value = btc_balance * btc_price if btc_price > 0 else btc_balance * 103000
-                logger.info(f"      BTC: {btc_balance:.8f} = ${btc_display_value:.2f} USD value")
             logger.info(f"      Position ({base_crypto}): {base_crypto_balance:.8f} = ${crypto_value_usd:.2f} USD value")
             logger.info(f"      Total available: ${total_available_usd:.2f}")
             
@@ -1414,15 +1083,10 @@ class IntraExchangeArbitrageEngine:
                 logger.warning(f"   ⚠️ Available ${actual_position_size:.2f} < 50% of minimum ${self.min_position_size_usd:.2f}")
                 logger.warning(f"   📊 Breakdown: Cash=${cash_available_usd:.2f}, Positions=${crypto_value_usd:.2f}, Convertible=${total_convertible:.2f}")
                 
-                # If we have convertible currency but conversion failed, log it
-                if total_convertible >= self.min_position_size_usd * 0.5 and buy_quote in ['EUR', 'GBP']:
-                    logger.warning(f"   ⚠️ Have ${total_convertible:.2f} convertible but conversion to {buy_quote} failed or insufficient")
-                    logger.warning(f"   💡 Try converting manually or wait for next conversion attempt")
-                
-                # If we have BTC but conversion failed, log it
-                if btc_balance > 0 and btc_value_usd >= self.min_position_size_usd * 0.5:
-                    logger.warning(f"   ⚠️ Have {btc_balance:.8f} BTC (${btc_value_usd:.2f}) but conversion to {buy_quote} failed")
-                    logger.warning(f"   💡 BTC conversion will be retried on next trade attempt")
+                # If we have convertible currency but insufficient balance, log it
+                if total_convertible >= self.min_position_size_usd * 0.5:
+                    logger.warning(f"   ⚠️ Have ${total_convertible:.2f} in USD/USDC/USDT but insufficient for trade")
+                    logger.warning(f"   💡 Ensure sufficient balance in {buy_quote} for trading")
                 
                 return False, 0
             

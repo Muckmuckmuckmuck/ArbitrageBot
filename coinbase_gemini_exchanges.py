@@ -204,270 +204,34 @@ class CoinbaseGeminiExchangeManager:
     
     async def convert_currency(self, exchange_id: str, from_currency: str, to_currency: str, amount: float) -> bool:
         """
-        Convert currency using bridge currency method (USD → BTC → GBP/EUR)
+        Convert currency - simplified for USD/USDC/USDT only
         
-        Note: Advanced Trade API doesn't support direct conversion API endpoint
-        USD/GBP and USD/EUR direct pairs don't exist on Coinbase
-        So we must use BTC as bridge currency
+        Note: USD, USDC, and USDT are interchangeable at 1:1 rate
+        No actual conversion needed - just return True if currencies are compatible
         
-        Returns True if conversion successful
+        Returns True if conversion successful (or not needed)
         """
-        if exchange_id != 'coinbase':
-            logger.warning(f"Currency conversion only supported on Coinbase")
-            return False
+        # USD/USDC/USDT are interchangeable - no conversion needed
+        if from_currency in ['USD', 'USDC', 'USDT'] and to_currency in ['USD', 'USDC', 'USDT']:
+            logger.debug(f"   ✅ USD/USDC/USDT are interchangeable - no conversion needed")
+            return True
         
         if from_currency == to_currency:
             return True
         
-        exchange = self.get_exchange(exchange_id)
-        
-        # Quick check: Try direct trading pair first (rare, but check anyway)
-        direct_pairs = [
-            f"{from_currency}/{to_currency}",
-            f"{to_currency}/{from_currency}"
-        ]
-        
-        for pair in direct_pairs:
-            if pair in exchange.markets:
-                logger.info(f"   💱 Using direct trading pair {pair} (found!)")
-                try:
-                    ticker = await self.fetch_ticker(exchange_id, pair)
-                    # Determine side and amount based on pair format
-                    if pair.startswith(from_currency):
-                        # Pair is "FROM/TO" (e.g., BTC/EUR)
-                        # We want to SELL from_currency to get to_currency
-                        price = ticker.get('bid') or ticker.get('last', 0)  # Use bid for selling
-                        order_amount = amount  # Sell this much of from_currency
-                        side = 'sell'
-                    else:
-                        # Pair is "TO/FROM" (e.g., EUR/BTC)
-                        # We want to BUY to_currency with from_currency
-                        price = ticker.get('ask') or ticker.get('last', 0)  # Use ask for buying
-                        order_amount = amount / price if price > 0 else 0  # Calculate how much to_currency we can buy
-                        side = 'buy'
-                    
-                    if order_amount <= 0:
-                        continue
-                    
-                    limit_price = price * (1.005 if side == 'buy' else 0.995)
-                    
-                    order = await self.create_order(
-                        exchange_id=exchange_id,
-                        symbol=pair,
-                        order_type='limit',
-                        side=side,
-                        amount=order_amount,
-                        price=limit_price
-                    )
-                    
-                    if order:
-                        # Wait for order to fill and verify
-                        order_id = order.get('id')
-                        if order_id:
-                            max_wait = 30
-                            for _ in range(max_wait):
-                                await asyncio.sleep(1)
-                                try:
-                                    order_status = await self.fetch_order(exchange_id, order_id, pair)
-                                    status = order_status.get('status', 'unknown')
-                                    if status in ['closed', 'filled']:
-                                        # Verify conversion
-                                        balance_check = await self.fetch_balance(exchange_id)
-                                        final_balance = balance_check.get('free', {}).get(to_currency, 0)
-                                        if final_balance > 0:
-                                            logger.info(f"   ✅ Direct pair conversion successful: {pair} → {final_balance:.2f} {to_currency}")
-                                            return True
-                                    elif status == 'canceled':
-                                        break
-                                except Exception as check_error:
-                                    logger.debug(f"   Error checking order status: {check_error}")
-                            
-                            # If we get here, order didn't fill - log it
-                            logger.warning(f"   ⚠️ Direct pair order didn't fill within timeout")
-                        else:
-                            logger.warning(f"   ⚠️ Direct pair order placed but no order ID")
-                except Exception as e:
-                    logger.debug(f"   Direct pair {pair} failed: {e}")
-                    break
-        
-        # Check if we already have BTC and can sell it directly for EUR/GBP
-        if to_currency in ['EUR', 'GBP']:
-            balance = await self.fetch_balance(exchange_id)
-            free_balance = balance.get('free', {})
-            btc_balance = free_balance.get('BTC', 0)
-            
-            if btc_balance > 0:
-                logger.info(f"   💰 Found {btc_balance:.8f} BTC in account - using it for conversion")
-                
-                # Try to sell BTC directly for to_currency
-                btc_pair = f"BTC/{to_currency}"
-                reverse_pair = f"{to_currency}/BTC"
-                
-                if btc_pair in exchange.markets or reverse_pair in exchange.markets:
-                    pair_to_use = btc_pair if btc_pair in exchange.markets else reverse_pair
-                    side = 'sell' if btc_pair in exchange.markets else 'buy'
-                    
-                    logger.info(f"   💱 Selling BTC for {to_currency} using {pair_to_use}")
-                    
-                    try:
-                        ticker = await self.fetch_ticker(exchange_id, pair_to_use)
-                        if side == 'sell':
-                            price = ticker.get('bid') or ticker.get('last', 0)
-                            order_amount = btc_balance * 0.95  # Use 95% to leave buffer
-                        else:
-                            price = ticker.get('ask') or ticker.get('last', 0)
-                            order_amount = (amount / price) * 0.95 if price > 0 else 0
-                        
-                        if order_amount > 0 and price > 0:
-                            limit_price = price * (0.995 if side == 'sell' else 1.005)
-                            
-                            logger.info(f"   📝 Placing BTC sell order: {order_amount:.8f} BTC @ {limit_price:.2f} {to_currency}")
-                            logger.info(f"   🔍 Pair: {pair_to_use}, Side: {side}, Amount: {order_amount:.8f}, Price: {limit_price:.2f}")
-                            
-                            # Check if account can trade this pair before attempting
-                            try:
-                                # Simple test - fetch ticker to verify pair exists and is tradeable
-                                test_ticker = await self.fetch_ticker(exchange_id, pair_to_use)
-                                if not test_ticker or (test_ticker.get('bid', 0) == 0 and test_ticker.get('ask', 0) == 0):
-                                    logger.error(f"   ❌ Pair {pair_to_use} appears to be unavailable or not tradeable")
-                                    return False
-                                logger.info(f"   ✅ Pair {pair_to_use} verified tradeable (bid: {test_ticker.get('bid', 0):.2f}, ask: {test_ticker.get('ask', 0):.2f})")
-                            except Exception as ticker_error:
-                                logger.error(f"   ❌ Cannot fetch ticker for {pair_to_use}: {ticker_error}")
-                                return False
-                            
-                            order = await self.create_order(
-                                exchange_id=exchange_id,
-                                symbol=pair_to_use,
-                                order_type='limit',
-                                side=side,
-                                amount=order_amount,
-                                price=limit_price
-                            )
-                            
-                            if order:
-                                order_id = order.get('id')
-                                if order_id:
-                                    logger.info(f"   ✅ Order placed: {order_id}, waiting for fill...")
-                                    max_wait = 30
-                                    for wait_count in range(max_wait):
-                                        await asyncio.sleep(1)
-                                        try:
-                                            order_status = await self.fetch_order(exchange_id, order_id, pair_to_use)
-                                            status = order_status.get('status', 'unknown')
-                                            
-                                            if status in ['closed', 'filled']:
-                                                # Verify we actually have the target currency
-                                                balance_check = await self.fetch_balance(exchange_id)
-                                                final_balance = balance_check.get('free', {}).get(to_currency, 0)
-                                                if final_balance > 0:
-                                                    logger.info(f"   ✅ BTC conversion successful: {btc_balance:.8f} BTC → {final_balance:.2f} {to_currency}")
-                                                    return True
-                                                else:
-                                                    logger.warning(f"   ⚠️ Order filled but no {to_currency} in balance yet, waiting...")
-                                                    await asyncio.sleep(2)
-                                                    # Check once more
-                                                    balance_check = await self.fetch_balance(exchange_id)
-                                                    final_balance = balance_check.get('free', {}).get(to_currency, 0)
-                                                    if final_balance > 0:
-                                                        logger.info(f"   ✅ BTC conversion verified: {final_balance:.2f} {to_currency}")
-                                                        return True
-                                                    else:
-                                                        logger.error(f"   ❌ Order filled but still no {to_currency} in balance")
-                                                        return False
-                                            elif status == 'canceled':
-                                                logger.warning(f"   ⚠️ BTC conversion order was canceled")
-                                                break
-                                            elif status == 'open':
-                                                if wait_count % 5 == 0:  # Log every 5 seconds
-                                                    filled = order_status.get('filled', 0)
-                                                    logger.info(f"   ⏳ Order still open... ({wait_count}s elapsed, filled: {filled:.8f})")
-                                        except Exception as check_error:
-                                            logger.debug(f"   Error checking order status: {check_error}")
-                                    
-                                    # Timeout - check one more time
-                                    try:
-                                        order_status = await self.fetch_order(exchange_id, order_id, pair_to_use)
-                                        status = order_status.get('status', 'unknown')
-                                        if status in ['closed', 'filled']:
-                                            balance_check = await self.fetch_balance(exchange_id)
-                                            final_balance = balance_check.get('free', {}).get(to_currency, 0)
-                                            if final_balance > 0:
-                                                logger.info(f"   ✅ BTC conversion successful (timeout check): {final_balance:.2f} {to_currency}")
-                                                return True
-                                    except:
-                                        pass
-                                    
-                                    logger.error(f"   ❌ BTC conversion order did not fill within {max_wait} seconds")
-                                    # Try to cancel the order
-                                    try:
-                                        await self.cancel_order(exchange_id, order_id, pair_to_use)
-                                        logger.info(f"   ✅ Canceled unfilled order")
-                                    except:
-                                        pass
-                                    return False
-                                else:
-                                    logger.error(f"   ❌ No order ID returned from order creation")
-                                    return False
-                            else:
-                                logger.error(f"   ❌ Failed to create BTC conversion order")
-                                return False
-                        else:
-                            logger.error(f"   ❌ Invalid order amount or price: amount={order_amount}, price={price}")
-                    except Exception as e:
-                        logger.error(f"   ❌ Direct BTC conversion failed: {e}")
-                        import traceback
-                        logger.error(f"   Traceback: {traceback.format_exc()}")
-        
-        # Method: Bridge currency (USD/USDC/USDT → BTC → GBP/EUR)
-        # ONLY use bridge if from_currency is NOT BTC (we already checked BTC above)
-        if from_currency == 'BTC':
-            logger.error(f"   ❌ Cannot use bridge currency: Already have BTC, but direct conversion failed")
-            logger.error(f"   ⚠️ BTC conversion failed - check account manually")
-            return False
-        
-        # MUST complete both steps to avoid getting stuck
-        logger.info(f"   💱 Using bridge currency method: {from_currency} → BTC → {to_currency}")
-        logger.info(f"   ⚠️ CRITICAL: Both steps must complete or funds will be stuck in BTC")
-        
-        try:
-            bridge_success = await self._try_bridge_currency_conversion_with_completion(
-                exchange_id, from_currency, to_currency, amount
-            )
-            if bridge_success:
-                return True
-            else:
-                logger.error(f"   ❌ Bridge conversion incomplete - funds may be stuck in BTC")
-                logger.error(f"   ⚠️ Check account for BTC balance and manually convert if needed")
-        except Exception as e:
-            logger.error(f"   ❌ Bridge currency conversion failed: {e}")
-        
-        logger.warning(f"   ⚠️ Currency conversion failed: {from_currency} → {to_currency}")
+        # For other currencies, conversion is not supported
+        logger.warning(f"   ⚠️ Currency conversion not supported: {from_currency} → {to_currency}")
+        logger.warning(f"   💡 Only USD/USDC/USDT pairs are supported for intra-exchange arbitrage")
         return False
     
     def get_conversion_cost_percent(self, exchange_id: str) -> float:
         """
         Get the estimated conversion cost as a percentage
-        For bridge currency conversion (USD → BTC → GBP/EUR):
-        - 2x maker fees: ~0.8% (0.4% * 2)
-        - 2x slippage: ~1.0% (0.5% * 2)
-        - Price movement risk: ~0.5%
-        Total: ~1.8% - 2.3%
+        For USD/USDC/USDT: No conversion cost (they're interchangeable at 1:1)
         
-        Returns conversion cost as decimal (e.g., 0.018 for 1.8%)
+        Returns conversion cost as decimal (always 0.0 for USD/USDC/USDT)
         """
-        if exchange_id == 'coinbase':
-            # Coinbase maker fee: 0.4%
-            maker_fee = 0.004
-            # Bridge conversion: 2 trades = 2x fees
-            fees = maker_fee * 2  # 0.8%
-            # Slippage: 0.5% per trade * 2 = 1.0%
-            slippage = 0.005 * 2  # 1.0%
-            # Price movement risk between trades
-            price_risk = 0.005  # 0.5%
-            # Total conversion cost
-            total_cost = fees + slippage + price_risk  # ~2.3%
-            return total_cost
+        # USD/USDC/USDT are interchangeable - no conversion cost
         return 0.0
     
     async def _try_coinbase_conversion_api(
