@@ -196,15 +196,16 @@ class GeminiMarketMakingEngine:
                 ticker = await self.exchange_manager.fetch_ticker('gemini', pair)
                 volume_24h = ticker.get('quoteVolume', 0) or (ticker.get('volume', 0) * ticker.get('last', 0))
                 if volume_24h < 10000:  # Less than $10k volume
-                    logger.debug(f"   🟢 [GEMINI] Skipping {pair} - low volume: ${volume_24h:.0f}")
+                    logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - low volume: ${volume_24h:.0f} < $10,000")
                     return False
-            except:
+            except Exception as e:
+                logger.debug(f"   🟢 [GEMINI] Volume check failed for {pair}: {e}")
                 pass  # Continue if volume check fails
             
             # 🟢 IMPROVEMENT: Dynamic grid spacing based on spread
             spread = await self.get_spread(pair)
             if spread is None or spread < self.min_spread_percent:
-                logger.debug(f"   🟢 [GEMINI] Skipping {pair} - spread {spread:.3f}% < minimum {self.min_spread_percent:.2f}%")
+                logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - spread {spread:.3f}% < minimum {self.min_spread_percent:.2f}%")
                 return False  # Spread too tight
             
             # Get current price
@@ -244,7 +245,7 @@ class GeminiMarketMakingEngine:
             # Round amounts and prices to exchange precision
             order_amount = round(order_amount, amount_precision)
             if order_amount <= 0:
-                logger.debug(f"   ⚠️ Order amount too small after rounding: {order_amount}")
+                logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order amount too small after rounding: {order_amount}")
                 return False
             
             # Calculate grid prices (use dynamic spacing if available)
@@ -262,7 +263,7 @@ class GeminiMarketMakingEngine:
             # Check minimum order size (typically $5-10 for most pairs)
             min_order_value = order_amount * buy_price
             if min_order_value < 5.0:  # Minimum $5 order
-                logger.debug(f"   ⚠️ Order value ${min_order_value:.2f} < minimum $5.00")
+                logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order value ${min_order_value:.2f} < minimum $5.00")
                 return False
             
             # Check inventory limits

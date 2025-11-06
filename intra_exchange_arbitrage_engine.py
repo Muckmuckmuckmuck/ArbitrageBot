@@ -442,9 +442,12 @@ class IntraExchangeArbitrageEngine:
         Find the best arbitrage opportunity for a crypto on a specific exchange
         Compares USD, USDC, USDT pairs only (EUR/GBP removed for simplicity and reliability)
         """
+        exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
+        
         pairs = await self._get_all_pairs_for_crypto(exchange_id, base_crypto)
         
         if len(pairs) < 2:
+            logger.debug(f"{exchange_marker} [{exchange_id.upper()}] {base_crypto}: Only {len(pairs)} pair(s) found (need 2+ for arbitrage)")
             return None  # Need at least 2 pairs to arbitrage
         
         calculator = self.coinbase_calculator if exchange_id == 'coinbase' else self.gemini_calculator
@@ -538,7 +541,8 @@ class IntraExchangeArbitrageEngine:
                         )
                         
                         # LOG PROFITABLE OPPORTUNITY FOUND
-                        logger.info(f"   ✅ [{exchange_id.upper()}] PROFITABLE: {base_crypto} | "
+                        exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
+                        logger.info(f"{exchange_marker} [{exchange_id.upper()}] ✅ PROFITABLE: {base_crypto} | "
                                    f"Buy: {buy_pair} @ ${buy_price:.6f} | "
                                    f"Sell: {sell_pair} @ ${sell_price:.6f} | "
                                    f"Spread: {profit_data['raw_spread']*100:.3f}% | "
@@ -569,14 +573,26 @@ class IntraExchangeArbitrageEngine:
                             best_opportunity = opportunity
                             best_score = score
                     else:
-                        # LOG WHY NOT PROFITABLE
+                        # LOG WHY NOT PROFITABLE (only for Coinbase, and only occasionally to reduce spam)
                         deficit = (threshold - net_profit) * 100
-                        logger.debug(f"   ❌ [{exchange_id.upper()}] NOT PROFITABLE: {base_crypto} | "
-                                   f"{buy_pair} vs {sell_pair} | "
-                                   f"Spread: {profit_data['raw_spread']*100:.3f}% | "
-                                   f"Net: {net_profit*100:.3f}% | "
-                                   f"Required: {threshold*100:.3f}% | "
-                                   f"Deficit: {deficit:.3f}%")
+                        # For Coinbase, log first opportunity check per crypto, then every 10th check
+                        if exchange_id == 'coinbase':
+                            if not hasattr(self, '_coinbase_opportunity_logs'):
+                                self._coinbase_opportunity_logs = {}
+                            if base_crypto not in self._coinbase_opportunity_logs:
+                                self._coinbase_opportunity_logs[base_crypto] = 0
+                            self._coinbase_opportunity_logs[base_crypto] += 1
+                            
+                            # Log first check and every 10th check
+                            if self._coinbase_opportunity_logs[base_crypto] <= 1 or self._coinbase_opportunity_logs[base_crypto] % 10 == 0:
+                                logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⚠️ {base_crypto}: Spread {profit_data['raw_spread']*100:.3f}% → Net {net_profit*100:.3f}% < Required {threshold*100:.3f}% (deficit: {deficit:.3f}%)")
+                        else:
+                            logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] NOT PROFITABLE: {base_crypto} | "
+                                       f"{buy_pair} vs {sell_pair} | "
+                                       f"Spread: {profit_data['raw_spread']*100:.3f}% | "
+                                       f"Net: {net_profit*100:.3f}% | "
+                                       f"Required: {threshold*100:.3f}% | "
+                                       f"Deficit: {deficit:.3f}%")
                 
                 except Exception as e:
                     logger.debug(f"Error evaluating {pair1} vs {pair2}: {e}")
@@ -719,18 +735,19 @@ class IntraExchangeArbitrageEngine:
             if pair_count >= 2:
                 base_cryptos.add(crypto)
         
-        logger.info(f"   📊 Found {len(base_cryptos)} unique cryptos on {exchange_id.upper()} (with 2+ USD/USDC/USDT pairs)")
-        logger.info(f"   ⚡ IMMEDIATE EXECUTION MODE: Trades execute as soon as found!")
+        exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}] 📊 Found {len(base_cryptos)} unique cryptos (with 2+ USD/USDC/USDT pairs)")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⚡ IMMEDIATE EXECUTION MODE: Trades execute as soon as found!")
         
         # 🔵 IMPROVEMENT: Skip during low liquidity hours (reduce scan size)
         current_hour = datetime.now().hour
         # US market hours: 9 AM - 4 PM EST (14:00 - 21:00 UTC)
         if 14 <= current_hour <= 21:
             max_cryptos = max_cryptos  # Full scan during peak hours
-            logger.info(f"   ⏰ Peak hours detected - full scan: {max_cryptos} cryptos")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⏰ Peak hours detected - full scan: {max_cryptos} cryptos")
         else:
             max_cryptos = min(max_cryptos, 50)  # Reduced scan during off-peak
-            logger.info(f"   ⏰ Off-peak hours - reduced scan to {max_cryptos} cryptos")
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⏰ Off-peak hours - reduced scan to {max_cryptos} cryptos")
         
         logger.info("")
         
@@ -747,8 +764,9 @@ class IntraExchangeArbitrageEngine:
         # Scan each crypto and execute immediately
         for base_crypto in list(base_cryptos)[:max_cryptos]:
             scanned += 1
+            exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
             if scanned % 50 == 0:
-                logger.info(f"   📈 Progress: {scanned}/{min(len(base_cryptos), max_cryptos)} cryptos | "
+                logger.info(f"{exchange_marker} [{exchange_id.upper()}] 📈 Progress: {scanned}/{min(len(base_cryptos), max_cryptos)} cryptos | "
                            f"✅ Found: {opportunities_found} | "
                            f"🚀 Executed: {trades_executed} | "
                            f"⏭️ Skipped: {trades_skipped}")
@@ -786,24 +804,26 @@ class IntraExchangeArbitrageEngine:
                 self.stats[exchange_id]['opportunities_found'] += 1
                 
                 # 🔵 IMPROVEMENT: Skip recently failed pairs (5 minute cooldown)
+                exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
                 pair_key = f"{opportunity.buy_pair}/{opportunity.sell_pair}"
                 if pair_key in self.failed_pairs_cache:
                     time_since_fail = time.time() - self.failed_pairs_cache[pair_key]
                     if time_since_fail < 300:  # 5 minutes
-                        logger.debug(f"   ⏭️ Skipping {pair_key} - failed {time_since_fail:.0f}s ago")
+                        logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⏭️ Skipping {opportunity.base_crypto} ({pair_key}) - failed {time_since_fail:.0f}s ago (cooldown: 5min)")
                         trades_skipped += 1
                         continue
                 
                 # Check if profitable enough
                 if opportunity.net_profit_percent < self.min_profit_threshold * 100:
                     trades_skipped += 1
-                    logger.debug(f"   ⏭️ Skipped {opportunity.base_crypto}: profit {opportunity.net_profit_percent:.3f}% < threshold {self.min_profit_threshold*100:.2f}%")
+                    exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
+                    logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⏭️ Skipped {opportunity.base_crypto}: profit {opportunity.net_profit_percent:.3f}% < threshold {self.min_profit_threshold*100:.2f}%")
                     continue
                 
                 # Check for pair conflicts
                 if pair_key in active_pairs:
                     trades_skipped += 1
-                    logger.debug(f"   ⏭️ Skipped {opportunity.base_crypto}: pair conflict {pair_key}")
+                    logger.info(f"{exchange_marker} [{exchange_id.upper()}] ⏭️ Skipped {opportunity.base_crypto}: pair conflict {pair_key} (already trading)")
                     continue
                 
                 # ALL CHECKS PASSED - EXECUTE IMMEDIATELY!
@@ -811,11 +831,11 @@ class IntraExchangeArbitrageEngine:
                 active_base_cryptos.add(base_crypto)
                 
                 logger.info("")
-                logger.info(f"   🚀🚀🚀 IMMEDIATE EXECUTION: {opportunity.base_crypto}")
-                logger.info(f"      Buy: {opportunity.buy_pair} @ ${opportunity.buy_price:.6f}")
-                logger.info(f"      Sell: {opportunity.sell_pair} @ ${opportunity.sell_price:.6f}")
-                logger.info(f"      Net Profit: {opportunity.net_profit_percent:.3f}% (${opportunity.expected_profit_usd:.2f})")
-                logger.info(f"      Volume depth: ${min(opportunity.order_book_depth_buy, opportunity.order_book_depth_sell):.2f}")
+                logger.info(f"{exchange_marker} [{exchange_id.upper()}] 🚀🚀🚀 IMMEDIATE EXECUTION: {opportunity.base_crypto}")
+                logger.info(f"{exchange_marker} [{exchange_id.upper()}]    Buy: {opportunity.buy_pair} @ ${opportunity.buy_price:.6f}")
+                logger.info(f"{exchange_marker} [{exchange_id.upper()}]    Sell: {opportunity.sell_pair} @ ${opportunity.sell_price:.6f}")
+                logger.info(f"{exchange_marker} [{exchange_id.upper()}]    Net Profit: {opportunity.net_profit_percent:.3f}% (${opportunity.expected_profit_usd:.2f})")
+                logger.info(f"{exchange_marker} [{exchange_id.upper()}]    Volume depth: ${min(opportunity.order_book_depth_buy, opportunity.order_book_depth_sell):.2f}")
                 logger.info("")
                 
                 # 🔵 IMPROVEMENT: Prioritize high volume opportunities
@@ -856,13 +876,16 @@ class IntraExchangeArbitrageEngine:
                     trades_skipped += 1
         
         scan_time = time.time() - start_time
+        exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
         logger.info("")
-        logger.info(f"   ✅ [{exchange_id.upper()}] SCAN & EXECUTE COMPLETE:")
-        logger.info(f"      Time: {scan_time:.2f}s")
-        logger.info(f"      Cryptos scanned: {scanned}")
-        logger.info(f"      ✅ Opportunities found: {opportunities_found}")
-        logger.info(f"      🚀 Trades executed: {trades_executed}")
-        logger.info(f"      ⏭️ Trades skipped: {trades_skipped}")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}] ✅ SCAN & EXECUTE COMPLETE:")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    Time: {scan_time:.2f}s")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    Cryptos scanned: {scanned}")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    ✅ Opportunities found: {opportunities_found}")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    🚀 Trades executed: {trades_executed}")
+        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    ⏭️ Trades skipped: {trades_skipped}")
+        if opportunities_found == 0:
+            logger.info(f"{exchange_marker} [{exchange_id.upper()}]    💡 No opportunities found - spreads may be too tight or fees too high")
         logger.info("=" * 80)
         
         return {
