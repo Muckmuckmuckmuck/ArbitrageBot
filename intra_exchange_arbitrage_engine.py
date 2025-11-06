@@ -1036,30 +1036,26 @@ class IntraExchangeArbitrageEngine:
             # For USD/USDC/USDT, we can use any of them interchangeably
             buy_balance = free_balance.get(buy_quote, 0)
             
-            # If we don't have the exact quote currency, check if we have USD/USDC/USDT (interchangeable)
-            if buy_quote in ['USD', 'USDC', 'USDT'] and buy_balance < trade_size_usd * 0.3:
-                # Use other USD/USDC/USDT if available
-                if total_convertible > trade_size_usd * 0.3:
-                    logger.info(f"   💱 Need {buy_quote} but have ${total_convertible:.2f} in USD/USDC/USDT - using it")
-                    buy_balance = total_convertible  # Use total convertible as they're 1:1
-            
-            # Calculate cash available in USD equivalent
-            # USD/USDC/USDT are all 1:1 with USD
+            # If we don't have enough of the exact quote currency, use USD/USDC/USDT pool (interchangeable)
             if buy_quote in ['USD', 'USDC', 'USDT']:
+                # Use the convertible pool if we don't have enough of the specific currency
+                if buy_balance < trade_size_usd:
+                    # Use total convertible pool (USD/USDC/USDT are 1:1 interchangeable)
+                    if total_convertible > buy_balance:
+                        logger.info(f"   💱 Need {buy_quote} but have ${buy_balance:.2f} - using ${total_convertible:.2f} from USD/USDC/USDT pool")
+                        buy_balance = total_convertible  # Use total convertible as they're 1:1
+                    else:
+                        logger.info(f"   💱 Using available {buy_quote}: ${buy_balance:.2f}")
+                else:
+                    logger.info(f"   💰 Have sufficient {buy_quote}: ${buy_balance:.2f}")
+                
+                # Calculate cash available in USD equivalent
+                # USD/USDC/USDT are all 1:1 with USD
                 cash_available_usd = buy_balance
             else:
-                # For other currencies, try to get USD pair
-                try:
-                    usd_pair = f"{buy_quote}/USD"
-                    exchange = self.exchange_manager.get_exchange(exchange_id)
-                    if usd_pair in exchange.markets:
-                        usd_ticker = await self.exchange_manager.fetch_ticker(exchange_id, usd_pair)
-                        usd_rate = usd_ticker.get('last') or usd_ticker.get('bid', 1.0)
-                        cash_available_usd = buy_balance * usd_rate
-                    else:
-                        cash_available_usd = buy_balance
-                except:
-                    cash_available_usd = buy_balance
+                # For other currencies, not supported (only USD/USDC/USDT)
+                cash_available_usd = buy_balance
+                logger.warning(f"   ⚠️ Non-USD/USDC/USDT quote currency: {buy_quote} (not supported)")
             
             # OPTION 2: Check if we already have the base crypto (can sell immediately)
             base_crypto_balance = free_balance.get(base_crypto, 0)
