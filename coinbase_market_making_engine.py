@@ -666,28 +666,81 @@ class CoinbaseMarketMakingEngine:
                         )
                         status = order_status.get('status', 'unknown')
                         
-                        if status in ['closed', 'filled']:
+                        # Check for partial or full fills
+                        filled = float(order_status.get('filled', 0))
+                        remaining = float(order_status.get('remaining', 0))
+                        price = float(order_status.get('price', mm_order.price))
+                        
+                        # Track previous filled amount to detect new fills
+                        previous_filled = getattr(mm_order, 'filled_amount', 0.0)
+                        new_filled = filled - previous_filled
+                        
+                        if filled > previous_filled:
+                            # New fill detected (partial or full)
+                            mm_order.filled_amount = filled
+                            
+                            if mm_order.side == 'buy':
+                                # Buy order got filled (partially or fully)
+                                if status in ['closed', 'filled']:
+                                    mm_order.status = 'filled'
+                                    mm_order.filled_at = datetime.now()
+                                    self.stats[pair].filled_orders += 1
+                                    self.stats[pair].total_orders += 1
+                                    filled_count += 1
+                                    logger.info(f"   🔵 [COINBASE] ✅✅✅ BUY FULLY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
+                                else:
+                                    # Partial fill
+                                    logger.info(f"   🔵 [COINBASE] ✅ BUY PARTIALLY FILLED: {pair} @ ${price:.4f} - {new_filled:.6f} filled (total: {filled:.6f}/{mm_order.amount:.6f})")
+                                
+                                # 🔵 CRITICAL: Immediately sell the NEW amount that was just filled
+                                if new_filled > 0:
+                                    try:
+                                        await self._place_sell_order_for_filled_buy(pair, new_filled, price)
+                                    except Exception as e:
+                                        logger.error(f"   🔵 [COINBASE] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
+                                        import traceback
+                                        logger.debug(f"   🔵 [COINBASE] Traceback: {traceback.format_exc()}")
+                            
+                            elif mm_order.side == 'sell':
+                                # Sell order got filled (partially or fully)
+                                if status in ['closed', 'filled']:
+                                    mm_order.status = 'filled'
+                                    mm_order.filled_at = datetime.now()
+                                    self.stats[pair].filled_orders += 1
+                                    self.stats[pair].total_orders += 1
+                                    filled_count += 1
+                                    spread_profit = (price - mm_order.price) * filled
+                                    logger.info(f"   🔵 [COINBASE] ✅✅✅ SELL FULLY FILLED: {pair} @ ${price:.4f} for {filled:.6f} | Profit: ${spread_profit:.2f}")
+                                    self.stats[pair].total_profit_usd += spread_profit
+                                    self.pair_performance[pair]['total_profit'] += spread_profit
+                                    self.pair_performance[pair]['total_trades'] += 1
+                                else:
+                                    # Partial fill
+                                    spread_profit = (price - mm_order.price) * new_filled
+                                    logger.info(f"   🔵 [COINBASE] ✅ SELL PARTIALLY FILLED: {pair} @ ${price:.4f} - {new_filled:.6f} filled (total: {filled:.6f}/{mm_order.amount:.6f}) | Profit: ${spread_profit:.2f}")
+                                    self.stats[pair].total_profit_usd += spread_profit
+                                    self.pair_performance[pair]['total_profit'] += spread_profit
+                            
+                            # Update fill rate
+                            current_fill_rate = self.pair_fill_rates.get(pair, 0.5)
+                            self.pair_fill_rates[pair] = current_fill_rate * 0.9 + 0.1
+                        
+                        elif status in ['closed', 'filled'] and mm_order.status == 'open':
+                            # Order fully filled but we didn't detect it above (fallback)
                             mm_order.status = 'filled'
                             mm_order.filled_at = datetime.now()
                             self.stats[pair].filled_orders += 1
                             self.stats[pair].total_orders += 1
                             filled_count += 1
                             
-                            # Update fill rate
-                            current_fill_rate = self.pair_fill_rates.get(pair, 0.5)
-                            self.pair_fill_rates[pair] = current_fill_rate * 0.9 + 0.1
-                            
-                            # Update performance tracking
-                            filled = float(order_status.get('filled', 0))
-                            price = float(order_status.get('price', mm_order.price))
-                            
                             if mm_order.side == 'buy':
-                                logger.info(f"   🔵 [COINBASE] ✅ BUY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
-                                
-                                # 🔵 CRITICAL: Immediately place sell order for FULL amount bought
-                                await self._place_sell_order_for_filled_buy(pair, filled, price)
+                                logger.info(f"   🔵 [COINBASE] ✅✅✅ BUY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
+                                try:
+                                    await self._place_sell_order_for_filled_buy(pair, filled, price)
+                                except Exception as e:
+                                    logger.error(f"   🔵 [COINBASE] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
                             else:
-                                spread_profit = (price - mm_order.price) * filled if mm_order.side == 'sell' else 0
+                                spread_profit = (price - mm_order.price) * filled
                                 logger.info(f"   🔵 [COINBASE] ✅ SELL FILLED: {pair} @ ${price:.4f} for {filled:.6f} | Profit: ${spread_profit:.2f}")
                                 self.stats[pair].total_profit_usd += spread_profit
                                 self.pair_performance[pair]['total_profit'] += spread_profit

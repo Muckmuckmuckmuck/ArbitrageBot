@@ -49,6 +49,7 @@ class MarketMakingOrder:
     status: str = 'pending'  # 'pending', 'open', 'filled', 'canceled'
     created_at: datetime = field(default_factory=datetime.now)
     filled_at: Optional[datetime] = None
+    filled_amount: float = 0.0  # Track partial fills - amount that has been filled so far
 
 @dataclass
 class MarketMakingStats:
@@ -774,35 +775,78 @@ class GeminiMarketMakingEngine:
                         )
                         status = order_status.get('status', 'unknown')
                         
-                        if status in ['closed', 'filled']:
+                        # Check for partial or full fills
+                        filled = float(order_status.get('filled', 0))
+                        remaining = float(order_status.get('remaining', 0))
+                        price = float(order_status.get('price', mm_order.price))
+                        cost = float(order_status.get('cost', 0))
+                        
+                        # Track previous filled amount to detect new fills
+                        previous_filled = getattr(mm_order, 'filled_amount', 0.0)
+                        new_filled = filled - previous_filled
+                        
+                        if filled > previous_filled:
+                            # New fill detected (partial or full)
+                            mm_order.filled_amount = filled
+                            
+                            if mm_order.side == 'buy':
+                                # Buy order got filled (partially or fully)
+                                if status in ['closed', 'filled']:
+                                    mm_order.status = 'filled'
+                                    mm_order.filled_at = datetime.now()
+                                    self.stats[pair].filled_orders += 1
+                                    self.stats[pair].total_orders += 1
+                                    filled_count += 1
+                                    logger.info(f"   🟢 [GEMINI] ✅✅✅ BUY FULLY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
+                                else:
+                                    # Partial fill
+                                    logger.info(f"   🟢 [GEMINI] ✅ BUY PARTIALLY FILLED: {pair} @ ${price:.4f} - {new_filled:.6f} filled (total: {filled:.6f}/{mm_order.amount:.6f})")
+                                
+                                # 🟢 CRITICAL: Immediately sell the NEW amount that was just filled
+                                if new_filled > 0:
+                                    try:
+                                        await self._place_sell_order_for_filled_buy(pair, new_filled, price)
+                                    except Exception as e:
+                                        logger.error(f"   🟢 [GEMINI] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
+                                        import traceback
+                                        logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
+                            
+                            elif mm_order.side == 'sell':
+                                # Sell order got filled (partially or fully)
+                                if status in ['closed', 'filled']:
+                                    mm_order.status = 'filled'
+                                    mm_order.filled_at = datetime.now()
+                                    self.stats[pair].filled_orders += 1
+                                    self.stats[pair].total_orders += 1
+                                    filled_count += 1
+                                    spread_profit = (price - mm_order.price) * filled if mm_order.side == 'sell' else 0
+                                    logger.info(f"   🟢 [GEMINI] ✅✅✅ SELL FULLY FILLED: {pair} @ ${price:.4f} for {filled:.6f} | Profit: ${spread_profit:.2f}")
+                                    self.stats[pair].total_profit_usd += spread_profit
+                                else:
+                                    # Partial fill
+                                    spread_profit = (price - mm_order.price) * new_filled
+                                    logger.info(f"   🟢 [GEMINI] ✅ SELL PARTIALLY FILLED: {pair} @ ${price:.4f} - {new_filled:.6f} filled (total: {filled:.6f}/{mm_order.amount:.6f}) | Profit: ${spread_profit:.2f}")
+                                    self.stats[pair].total_profit_usd += spread_profit
+                            
+                            # Update fill rate
+                            current_fill_rate = self.pair_fill_rates.get(pair, 0.5)
+                            self.pair_fill_rates[pair] = current_fill_rate * 0.9 + 0.1  # 10% weight to new fill
+                        
+                        elif status in ['closed', 'filled'] and mm_order.status == 'open':
+                            # Order fully filled but we didn't detect it above (fallback)
                             mm_order.status = 'filled'
                             mm_order.filled_at = datetime.now()
                             self.stats[pair].filled_orders += 1
                             self.stats[pair].total_orders += 1
                             filled_count += 1
                             
-                            # 🟢 IMPROVEMENT: Update fill rate (exponential moving average)
-                            current_fill_rate = self.pair_fill_rates.get(pair, 0.5)
-                            self.pair_fill_rates[pair] = current_fill_rate * 0.9 + 0.1  # 10% weight to new fill
-                            
-                            # Calculate profit (simplified - actual calculation depends on inventory)
-                            filled = float(order_status.get('filled', 0))
-                            price = float(order_status.get('price', mm_order.price))
-                            cost = float(order_status.get('cost', 0))
-                            
                             if mm_order.side == 'buy':
-                                # Bought at lower price - profit when we sell
                                 logger.info(f"   🟢 [GEMINI] ✅✅✅ BUY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
-                                
-                                # 🟢 CRITICAL: Immediately place sell order for FULL amount bought
                                 try:
                                     await self._place_sell_order_for_filled_buy(pair, filled, price)
                                 except Exception as e:
                                     logger.error(f"   🟢 [GEMINI] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
-                                    import traceback
-                                    logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
                             else:
-                                # Sold at higher price - realized profit
                                 spread_profit = (price - mm_order.price) * filled if mm_order.side == 'sell' else 0
                                 logger.info(f"   🟢 [GEMINI] ✅ SELL FILLED: {pair} @ ${price:.4f} for {filled:.6f} | Profit: ${spread_profit:.2f}")
                                 self.stats[pair].total_profit_usd += spread_profit
