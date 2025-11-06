@@ -620,33 +620,33 @@ class GeminiMarketMakingEngine:
                         if sell_price is None or sell_price <= 0:
                             logger.error(f"   🟢 [GEMINI] ❌ Invalid sell_price: {sell_price}")
                             raise ValueError(f"Invalid sell_price: {sell_price}")
-                    
-                    logger.debug(f"   🟢 [GEMINI] {pair}: Creating sell order - amount={sell_amount:.6f}, price=${sell_price:.6f}")
-                    sell_order = await self.exchange_manager.create_order(
-                        exchange_id='gemini',
-                        symbol=pair,
-                        order_type='limit',
-                        side='sell',
-                        amount=sell_amount,
-                        price=sell_price
-                    )
-                    logger.debug(f"   🟢 [GEMINI] {pair}: Sell order response = {sell_order}")
-                    
-                    if sell_order and sell_order.get('id'):
-                        sell_order_id = sell_order.get('id')
-                        sell_mm_order = MarketMakingOrder(
-                            pair=pair,
+                        
+                        logger.debug(f"   🟢 [GEMINI] {pair}: Creating sell order - amount={sell_amount:.6f}, price=${sell_price:.6f}")
+                        sell_order = await self.exchange_manager.create_order(
+                            exchange_id='gemini',
+                            symbol=pair,
+                            order_type='limit',
                             side='sell',
-                            order_id=sell_order_id,
-                            price=sell_price,
                             amount=sell_amount,
-                            status='open'
+                            price=sell_price
                         )
-                        self.active_orders[pair].append(sell_mm_order)
-                        orders_placed += 1
-                        logger.info(f"   🟢 [GEMINI] ✅✅✅ SELL ORDER PLACED SUCCESSFULLY: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} (${sell_amount * sell_price:.2f}) | Order ID: {sell_order_id}")
-                    else:
-                        logger.warning(f"   🟢 [GEMINI] ⚠️ Sell order creation returned no ID: {sell_order}")
+                        logger.debug(f"   🟢 [GEMINI] {pair}: Sell order response = {sell_order}")
+                        
+                        if sell_order and sell_order.get('id'):
+                            sell_order_id = sell_order.get('id')
+                            sell_mm_order = MarketMakingOrder(
+                                pair=pair,
+                                side='sell',
+                                order_id=sell_order_id,
+                                price=sell_price,
+                                amount=sell_amount,
+                                status='open'
+                            )
+                            self.active_orders[pair].append(sell_mm_order)
+                            orders_placed += 1
+                            logger.info(f"   🟢 [GEMINI] ✅✅✅ SELL ORDER PLACED SUCCESSFULLY: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} (${sell_amount * sell_price:.2f}) | Order ID: {sell_order_id}")
+                        else:
+                            logger.warning(f"   🟢 [GEMINI] ⚠️ Sell order creation returned no ID: {sell_order}")
                 except Exception as e:
                     logger.error(f"   🟢 [GEMINI] ❌ FAILED TO PLACE SELL ORDER for {pair}: {type(e).__name__}: {e}")
                     import traceback
