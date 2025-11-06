@@ -221,17 +221,7 @@ class GeminiMarketMakingEngine:
             # Cancel existing orders for this pair first
             await self.cancel_pair_orders(pair)
             
-            # 🟢 IMPROVEMENT: Adjust order size based on spread
-            base_currency = pair.split('/')[0]
-            if spread:
-                # Scale order size: wider spread = larger orders (max 2x, min 0.5x)
-                spread_multiplier = min(max(spread / self.min_spread_percent, 0.5), 2.0)
-                order_amount = (self.capital_per_pair * self.order_size_percent * spread_multiplier) / current_price
-                logger.debug(f"   🟢 [GEMINI] {pair}: Spread {spread:.3f}% → Order size multiplier {spread_multiplier:.2f}x")
-            else:
-                order_amount = (self.capital_per_pair * self.order_size_percent) / current_price
-            
-            # Get market info for precision requirements
+            # Get market info for precision requirements FIRST (before calculating order amount)
             exchange = self.exchange_manager.get_exchange('gemini')
             market_info = exchange.markets.get(pair, {})
             
@@ -242,8 +232,39 @@ class GeminiMarketMakingEngine:
             amount_precision = int(precision_data.get('amount', 8)) if precision_data.get('amount') else 8
             price_precision = int(precision_data.get('price', 8)) if precision_data.get('price') else 8
             
-            # Round amounts and prices to exchange precision
+            # Get minimum order size from market info
+            limits = market_info.get('limits', {})
+            min_amount = limits.get('amount', {}).get('min', 0) or 0
+            min_cost = limits.get('cost', {}).get('min', 5.0) or 5.0  # Default $5 minimum
+            
+            # 🟢 IMPROVEMENT: Adjust order size based on spread
+            base_currency = pair.split('/')[0]
+            if spread:
+                # Scale order size: wider spread = larger orders (max 2x, min 0.5x)
+                spread_multiplier = min(max(spread / self.min_spread_percent, 0.5), 2.0)
+                order_value_usd = self.capital_per_pair * self.order_size_percent * spread_multiplier
+                logger.debug(f"   🟢 [GEMINI] {pair}: Spread {spread:.3f}% → Order size multiplier {spread_multiplier:.2f}x → Order value: ${order_value_usd:.2f}")
+            else:
+                order_value_usd = self.capital_per_pair * self.order_size_percent
+            
+            # Calculate order amount from USD value
+            order_amount = order_value_usd / current_price
+            
+            # Ensure order value meets minimum cost requirement
+            if order_value_usd < min_cost:
+                logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order value ${order_value_usd:.2f} < minimum ${min_cost:.2f}")
+                return False
+            
+            # Round amounts to exchange precision (but ensure it's not 0)
             order_amount = round(order_amount, amount_precision)
+            
+            # Ensure order amount meets minimum amount requirement
+            if min_amount > 0 and order_amount < min_amount:
+                # Increase order amount to meet minimum
+                order_amount = min_amount
+                order_value_usd = order_amount * current_price
+                logger.debug(f"   🟢 [GEMINI] {pair}: Adjusted order amount to minimum {min_amount}")
+            
             if order_amount <= 0:
                 logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order amount too small after rounding: {order_amount}")
                 return False
@@ -260,11 +281,20 @@ class GeminiMarketMakingEngine:
             buy_price = round(buy_price, price_precision)
             sell_price = round(sell_price, price_precision)
             
-            # Check minimum order size (typically $5-10 for most pairs)
+            # Check minimum order size (recalculate after rounding)
             min_order_value = order_amount * buy_price
-            if min_order_value < 5.0:  # Minimum $5 order
-                logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order value ${min_order_value:.2f} < minimum $5.00")
-                return False
+            if min_order_value < min_cost:
+                # Try to increase order amount to meet minimum
+                required_amount = min_cost / buy_price
+                if required_amount > order_amount:
+                    order_amount = round(required_amount, amount_precision)
+                    min_order_value = order_amount * buy_price
+                    logger.debug(f"   🟢 [GEMINI] {pair}: Increased order amount to meet minimum cost")
+                
+                # Final check
+                if min_order_value < min_cost:
+                    logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order value ${min_order_value:.2f} < minimum ${min_cost:.2f} (after rounding)")
+                    return False
             
             # Check inventory limits
             inventory = await self.get_inventory_balance(base_currency)

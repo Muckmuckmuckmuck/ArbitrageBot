@@ -72,9 +72,9 @@ class DualStrategyBot:
         logger.info("\n📊 Initializing Gemini Market-Making Engine...")
         self.market_making_engine = GeminiMarketMakingEngine(
             exchange_manager=self.exchange_manager,
-            capital_per_pair=10.0,  # $10 per pair (10 pairs = $100 total)
+            capital_per_pair=50.0,  # $50 per pair (increased from $10 to allow meaningful orders)
             grid_spacing_percent=0.20,  # 0.20% spacing
-            order_size_percent=0.01,  # 1% of capital per order
+            order_size_percent=0.10,  # 10% of capital per order (increased from 1% to $5 per order)
             min_spread_percent=0.12,  # Skip if spread < 0.12%
             max_inventory_percent=0.25,  # Max 25% in one asset
             requote_interval_seconds=15,  # Update every 15s

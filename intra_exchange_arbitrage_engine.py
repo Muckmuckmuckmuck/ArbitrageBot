@@ -257,7 +257,7 @@ class IntraExchangeArbitrageEngine:
         self.market_order_fallback_enabled = True  # Use market orders if limit doesn't fill
         self.market_order_threshold = 0.005  # Use market order if spread > 0.5%
         self.dynamic_position_sizing = True  # Scale position with opportunity quality
-        self.min_position_size_usd = 25.0  # Minimum position size
+        self.min_position_size_usd = 5.0  # Minimum position size (lowered from $25 to allow smaller trades)
         self.max_position_size_usd = max_position_size_usd  # Maximum position size
         
     async def initialize(self):
@@ -1174,15 +1174,17 @@ class IntraExchangeArbitrageEngine:
             # Use 90% of available to leave buffer for fees/slippage
             actual_position_size = min(trade_size_usd, total_available_usd * 0.9)
             
-            # Minimum position size check
-            if actual_position_size < self.min_position_size_usd * 0.5:
-                logger.warning(f"   ⚠️ Available ${actual_position_size:.2f} < 50% of minimum ${self.min_position_size_usd:.2f}")
-                logger.warning(f"   📊 Breakdown: Cash=${cash_available_usd:.2f}, Positions=${crypto_value_usd:.2f}, Convertible=${total_convertible:.2f}")
+            # Minimum position size check - allow smaller trades if balance is low
+            # If we have at least $5, allow the trade (lowered threshold)
+            min_required = max(self.min_position_size_usd * 0.2, 5.0)  # At least $5 or 20% of minimum
+            if actual_position_size < min_required:
+                logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    ⚠️ Available ${actual_position_size:.2f} < minimum ${min_required:.2f}")
+                logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    📊 Breakdown: Cash=${cash_available_usd:.2f}, Positions=${crypto_value_usd:.2f}, Convertible=${total_convertible:.2f}")
                 
                 # If we have convertible currency but insufficient balance, log it
-                if total_convertible >= self.min_position_size_usd * 0.5:
-                    logger.warning(f"   ⚠️ Have ${total_convertible:.2f} in USD/USDC/USDT but insufficient for trade")
-                    logger.warning(f"   💡 Ensure sufficient balance in {buy_quote} for trading")
+                if total_convertible >= min_required:
+                    logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    ⚠️ Have ${total_convertible:.2f} in USD/USDC/USDT but insufficient for trade")
+                    logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    💡 Ensure sufficient balance in {buy_quote} for trading")
                 
                 return False, 0
             
@@ -1325,14 +1327,15 @@ class IntraExchangeArbitrageEngine:
                 
                 logger.info(f"   📊 Spread quality: {spread_quality:.2f}x → Position multiplier: {position_multiplier:.1f}x → Trade size: ${trade_size:.2f}")
                 
-                # Ensure we meet minimum size
-                if trade_size < self.min_position_size_usd:
-                    logger.warning(f"   ⚠️ Available amount ${trade_size:.2f} < minimum ${self.min_position_size_usd:.2f}")
-                    # Still proceed if we have at least 50% of minimum
-                    if trade_size >= self.min_position_size_usd * 0.5:
-                        logger.info(f"   💡 Using smaller trade size: ${trade_size:.2f} (50% of minimum)")
+                # Ensure we meet minimum size - allow smaller trades if balance is low
+                min_required = max(self.min_position_size_usd * 0.2, 5.0)  # At least $5 or 20% of minimum
+                if trade_size < min_required:
+                    logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    ⚠️ Available amount ${trade_size:.2f} < minimum ${min_required:.2f}")
+                    # Still proceed if we have at least $5
+                    if trade_size >= 5.0:
+                        logger.info(f"{exchange_marker} [{exchange_id.upper()}]    💡 Using smaller trade size: ${trade_size:.2f} (minimum $5.00)")
                     else:
-                        logger.warning(f"   ❌ Trade size too small, skipping")
+                        logger.warning(f"{exchange_marker} [{exchange_id.upper()}]    ❌ Trade size too small (${trade_size:.2f} < $5.00), skipping")
                         return TradeExecution(
                             exchange=exchange_id,
                             opportunity=opportunity,
