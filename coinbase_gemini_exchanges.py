@@ -214,14 +214,19 @@ class CoinbaseGeminiExchangeManager:
                 logger.info(f"   💱 Using direct trading pair {pair} (found!)")
                 try:
                     ticker = await self.fetch_ticker(exchange_id, pair)
+                    # Determine side and amount based on pair format
                     if pair.startswith(from_currency):
-                        price = ticker.get('ask') or ticker.get('last', 0)
-                        order_amount = amount / price if price > 0 else 0
-                        side = 'buy'
-                    else:
-                        price = ticker.get('bid') or ticker.get('last', 0)
-                        order_amount = amount * price if price > 0 else 0
+                        # Pair is "FROM/TO" (e.g., BTC/EUR)
+                        # We want to SELL from_currency to get to_currency
+                        price = ticker.get('bid') or ticker.get('last', 0)  # Use bid for selling
+                        order_amount = amount  # Sell this much of from_currency
                         side = 'sell'
+                    else:
+                        # Pair is "TO/FROM" (e.g., EUR/BTC)
+                        # We want to BUY to_currency with from_currency
+                        price = ticker.get('ask') or ticker.get('last', 0)  # Use ask for buying
+                        order_amount = amount / price if price > 0 else 0  # Calculate how much to_currency we can buy
+                        side = 'buy'
                     
                     if order_amount <= 0:
                         continue
