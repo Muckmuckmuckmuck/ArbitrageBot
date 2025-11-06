@@ -313,9 +313,24 @@ class GeminiMarketMakingEngine:
                 logger.warning(f"   🟢 [GEMINI] ⚠️ Volume check failed for {pair}: {e}")
                 pass  # Continue if volume check fails
             
+            # 🟢 CRITICAL: Check for existing orders FIRST before spread check
+            # If we have open orders, check them for fills even if spread is low
+            existing_orders = self.active_orders.get(pair, [])
+            open_orders = [o for o in existing_orders if o.status == 'open']
+            
             # 🟢 IMPROVEMENT: Dynamic grid spacing based on spread
             spread = await self.get_spread(pair)
             logger.debug(f"   🟢 [GEMINI] {pair}: Current spread = {spread}%")
+            
+            # If spread is too low BUT we have open orders, keep checking them for fills
+            if (spread is None or spread <= 0 or spread < self.min_spread_percent) and open_orders:
+                spread_msg = f"{spread:.3f}%" if spread is not None else "None"
+                logger.info(f"   🟢 [GEMINI] {pair}: Spread {spread_msg} < minimum {self.min_spread_percent:.2f}%, but keeping {len(open_orders)} open order(s) to check for fills")
+                # Check existing orders for fills, don't cancel them
+                filled = await self.check_and_update_orders(pair)
+                return {'success': True, 'orders_placed': 0, 'orders_filled': filled, 'error': None}
+            
+            # If spread is too low and no open orders, skip entirely
             if spread is None or spread <= 0 or spread < self.min_spread_percent:
                 spread_msg = f"{spread:.3f}%" if spread is not None else "None"
                 logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - spread {spread_msg} < minimum {self.min_spread_percent:.2f}%")
@@ -341,8 +356,8 @@ class GeminiMarketMakingEngine:
             else:
                 logger.debug(f"   🟢 [GEMINI] {pair}: Existing orders still competitive, keeping them")
                 # Check for fills on existing orders
-                await self.check_and_update_orders(pair)
-                return {'success': True, 'orders_placed': 0, 'orders_filled': 0, 'error': None}
+                filled = await self.check_and_update_orders(pair)
+                return {'success': True, 'orders_placed': 0, 'orders_filled': filled, 'error': None}
             
             # Get market info for precision requirements FIRST (before calculating order amount)
             exchange = self.exchange_manager.get_exchange('gemini')
@@ -628,11 +643,11 @@ class GeminiMarketMakingEngine:
         if not open_orders:
             return True  # No open orders, need to place new ones
         
-        # Check order age - if older than 2 minutes, update them
+        # Check order age - if older than 5 minutes, update them (increased from 2 to 5 minutes)
         now = datetime.now()
         for order in open_orders:
             age_seconds = (now - order.created_at).total_seconds()
-            if age_seconds > 120:  # 2 minutes
+            if age_seconds > 300:  # 5 minutes (increased to give more time to fill)
                 logger.debug(f"   🟢 [GEMINI] {pair}: Order {order.order_id} is {age_seconds:.0f}s old, updating")
                 return True
         
@@ -653,7 +668,7 @@ class GeminiMarketMakingEngine:
                     else:  # sell
                         price_diff_pct = abs((current_ask - order.price) / current_ask) * 100
                     
-                    if price_diff_pct > 0.5:  # More than 0.5% away
+                    if price_diff_pct > 1.0:  # More than 1.0% away (increased from 0.5% to prevent premature cancellation)
                         logger.debug(f"   🟢 [GEMINI] {pair}: Order {order.order_id} price {price_diff_pct:.2f}% away from market, updating")
                         return True
         except Exception as e:
