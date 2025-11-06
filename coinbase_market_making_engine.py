@@ -470,7 +470,9 @@ class CoinbaseMarketMakingEngine:
             
             limits = market_info.get('limits', {})
             min_amount = limits.get('amount', {}).get('min', 0) or 0
-            min_cost = limits.get('cost', {}).get('min', 5.0) or 5.0
+            # 🔵 FLEXIBLE: Use exchange minimum or $1.00 (whichever is lower) to allow smaller orders
+            exchange_min_cost = limits.get('cost', {}).get('min', 0) or 0
+            min_cost = max(exchange_min_cost, 1.0) if exchange_min_cost > 0 else 1.0  # At least $1.00, use exchange min if higher
             
             # 🔵 DYNAMIC: Adjust order size based on spread and performance
             base_currency = pair.split('/')[0]
@@ -958,7 +960,9 @@ class CoinbaseMarketMakingEngine:
                         # Check if position is large enough to flatten (must meet minimum order size)
                         market_info = exchange.markets.get(pair, {})
                         limits = market_info.get('limits', {})
-                        min_cost = limits.get('cost', {}).get('min', 5.0) or 5.0
+                        # 🔵 FLEXIBLE: Use exchange minimum or $1.00 (whichever is lower) to allow smaller orders
+            exchange_min_cost = limits.get('cost', {}).get('min', 0) or 0
+            min_cost = max(exchange_min_cost, 1.0) if exchange_min_cost > 0 else 1.0  # At least $1.00, use exchange min if higher
                         
                         position_value = inventory * current_price
                         if position_value < min_cost:
@@ -1018,6 +1022,9 @@ class CoinbaseMarketMakingEngine:
                 logger.info("")
                 logger.info(f"🔵 [COINBASE] MARKET-MAKING CYCLE #{cycle_count} - {datetime.now().strftime('%H:%M:%S')}")
                 logger.info("=" * 80)
+                
+                # 🔵 CRITICAL: Check and sell ALL inventory first (even if not in trading pairs)
+                await self.sell_all_inventory()
                 
                 # Check if time to flatten (take profit)
                 time_since_flatten = (datetime.now() - self.last_flatten_time).total_seconds() / 60
