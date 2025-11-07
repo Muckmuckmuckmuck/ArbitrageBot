@@ -91,6 +91,8 @@ class CoinbaseMarketMakingEngine:
         self.requote_interval_seconds = requote_interval_seconds
         self.stop_loss_percent = stop_loss_percent
         self.take_profit_interval_minutes = take_profit_interval_minutes
+        self.min_spacing_percent = 0.50  # Minimum spacing to ensure profitability (percent)
+        self.max_spacing_percent = 1.50  # Cap spacing to avoid quoting too far away
         
         # Active orders tracking
         self.active_orders: Dict[str, List[MarketMakingOrder]] = defaultdict(list)
@@ -430,22 +432,26 @@ class CoinbaseMarketMakingEngine:
             # Get spread
             spread = await self.get_spread(pair)
             
-            # If spread is too low BUT we have open orders, keep checking them for fills
-            if (spread is None or spread <= 0 or spread < self.min_spread_percent) and open_orders:
+            # 🔵 DYNAMIC: Adjust grid spacing based on spread with hard floor/ceiling
+            base_spacing = (spread * 0.5) if spread and spread > 0 else self.min_spacing_percent
+            dynamic_spacing = max(self.min_spacing_percent, base_spacing)
+            dynamic_spacing = min(dynamic_spacing, self.max_spacing_percent)
+
+            effective_spread = (spread or 0) + (2 * dynamic_spacing)
+            
+            # If effective spread is too low BUT we have open orders, keep checking them for fills
+            if (spread is None or spread <= 0 or effective_spread < self.min_spread_percent) and open_orders:
                 spread_msg = f"{spread:.3f}%" if spread is not None else "None"
-                logger.info(f"   🔵 [COINBASE] {pair}: Spread {spread_msg} < minimum {self.min_spread_percent:.2f}%, but keeping {len(open_orders)} open order(s) to check for fills")
+                logger.info(f"   🔵 [COINBASE] {pair}: Effective spread {effective_spread:.3f}% (raw {spread_msg}) < minimum {self.min_spread_percent:.2f}%, but keeping {len(open_orders)} open order(s) to check for fills")
                 # Check existing orders for fills, don't cancel them
                 filled = await self.check_and_update_orders(pair)
                 return {'success': True, 'orders_placed': 0, 'orders_filled': filled, 'error': None}
             
-            # If spread is too low and no open orders, skip entirely
-            if spread is None or spread <= 0 or spread < self.min_spread_percent:
+            # If effective spread is too low and no open orders, skip entirely
+            if spread is None or spread <= 0 or effective_spread < self.min_spread_percent:
                 spread_msg = f"{spread:.3f}%" if spread is not None else "None"
-                logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - spread {spread_msg} < minimum {self.min_spread_percent:.2f}%")
+                logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - effective spread {effective_spread:.3f}% (raw {spread_msg}) < minimum {self.min_spread_percent:.2f}%")
                 return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'spread_too_tight'}
-            
-            # 🔵 DYNAMIC: Adjust grid spacing based on spread (50% of spread, min 0.15%, max 0.5%)
-            dynamic_spacing = min(max(spread * 0.5, 0.15), 0.5)
             
             # 🔵 SMART: Only cancel/update orders if prices have moved significantly
             # This prevents canceling orders that are about to fill
