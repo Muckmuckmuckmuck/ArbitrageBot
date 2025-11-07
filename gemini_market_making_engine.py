@@ -10,6 +10,7 @@ EXCHANGE: 🟢 GEMINI ONLY - This entire module is for Gemini market making
 import asyncio
 import logging
 import time
+import statistics
 from typing import Dict, List, Optional, Tuple, Any
 from decimal import Decimal
 import random
@@ -82,6 +83,8 @@ class GeminiMarketMakingEngine:
         requote_interval_seconds: int = 15,  # Update orders every 15s
         stop_loss_percent: float = 0.02,  # -2% stop loss
         take_profit_interval_minutes: int = 60,  # Flatten every hour
+        max_volatility_percent: float = 2.5,  # Skip highly volatile markets
+        min_depth_usd: float = 300.0,  # Require at least this much depth per side
     ):
         self.exchange_manager = exchange_manager
         self.capital_per_pair = capital_per_pair
@@ -93,6 +96,8 @@ class GeminiMarketMakingEngine:
         self.stop_loss_percent = stop_loss_percent
         self.take_profit_interval_minutes = take_profit_interval_minutes
         self.min_profit_buffer_percent = max(min_spread_percent * 0.5, 0.35)  # Ensure at least ~fee coverage
+        self.max_volatility_percent = max_volatility_percent
+        self.min_depth_usd = min_depth_usd
         
         # Active orders tracking
         self.active_orders: Dict[str, List[MarketMakingOrder]] = defaultdict(list)
@@ -307,6 +312,58 @@ class GeminiMarketMakingEngine:
         except Exception as e:
             logger.debug(f"   🟢 [GEMINI] Error fetching spread for {pair}: {e}")
             return None
+
+    async def _compute_short_term_volatility(self, pair: str, limit: int = 20) -> Optional[float]:
+        """Calculate short-term volatility using 1-minute candles."""
+        try:
+            ohlcv = await self.exchange_manager.fetch_ohlcv('gemini', pair, timeframe='1m', limit=limit)
+            closes = [candle[4] for candle in ohlcv if candle and candle[4]]
+            if len(closes) < 5:
+                return None
+            returns = []
+            for i in range(1, len(closes)):
+                prev = closes[i - 1]
+                curr = closes[i]
+                if prev and prev > 0 and curr:
+                    returns.append((curr / prev - 1) * 100)
+            if len(returns) < 4:
+                return None
+            volatility = statistics.pstdev(returns)
+            return abs(volatility)
+        except Exception as e:
+            logger.debug(f"   🟢 [GEMINI] Unable to compute volatility for {pair}: {e}")
+            return None
+
+    async def _compute_order_book_depth(self, pair: str, depth_levels: int = 5) -> Optional[float]:
+        """Estimate USD depth by summing top-of-book levels."""
+        try:
+            order_book = await self.exchange_manager.fetch_order_book('gemini', pair, limit=depth_levels)
+            bids = order_book.get('bids', []) or []
+            asks = order_book.get('asks', []) or []
+            if not bids or not asks:
+                return None
+            bid_depth = sum(price * amount for price, amount in bids[:depth_levels])
+            ask_depth = sum(price * amount for price, amount in asks[:depth_levels])
+            return min(bid_depth, ask_depth)
+        except Exception as e:
+            logger.debug(f"   🟢 [GEMINI] Unable to compute order book depth for {pair}: {e}")
+            return None
+
+    async def _evaluate_market_health(self, pair: str) -> Tuple[bool, Dict[str, Optional[float]], str]:
+        metrics: Dict[str, Optional[float]] = {'volatility': None, 'depth_usd': None}
+        volatility = await self._compute_short_term_volatility(pair)
+        if volatility is not None:
+            metrics['volatility'] = volatility
+            if volatility > self.max_volatility_percent:
+                return False, metrics, f"volatility {volatility:.2f}% > max {self.max_volatility_percent:.2f}%"
+
+        depth_usd = await self._compute_order_book_depth(pair)
+        if depth_usd is not None:
+            metrics['depth_usd'] = depth_usd
+            if depth_usd < self.min_depth_usd:
+                return False, metrics, f"depth ${depth_usd:.0f} < minimum ${self.min_depth_usd:.0f}"
+
+        return True, metrics, "market healthy"
     
     async def get_inventory_balance(self, base_currency: str) -> float:
         """Get current inventory balance for a base currency"""
@@ -462,6 +519,17 @@ class GeminiMarketMakingEngine:
             if current_price is None or current_price <= 0:
                 logger.warning(f"   🟢 [GEMINI] ⚠️ Skipping {pair} - invalid price: {current_price}")
                 return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'invalid_price'}
+
+            market_ok, market_metrics, health_reason = await self._evaluate_market_health(pair)
+            if not market_ok:
+                logger.info(
+                    f"   🟢 [GEMINI] ⏭️ Skipping {pair} - {health_reason}"
+                    + (f" | metrics: {market_metrics}" if any(market_metrics.values()) else "")
+                )
+                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'market_unhealthy'}
+            else:
+                if any(market_metrics.values()):
+                    logger.debug(f"   🟢 [GEMINI] {pair}: Market metrics {market_metrics}")
             
             # 🟢 IMPROVEMENT: Use 50% of current spread as grid spacing (max 0.5%, min 0.15%)
             dynamic_spacing = min(max(spread * 0.5, 0.15), 0.5)
