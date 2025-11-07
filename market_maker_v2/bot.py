@@ -28,6 +28,7 @@ class PairRuntime:
     active_orders: Dict[str, OrderRecord]
     last_quote_time: float = 0.0
     last_reconcile_time: float = 0.0
+    last_status_log: float = 0.0
 
 
 class MarketMakerBot:
@@ -118,6 +119,7 @@ class MarketMakerBot:
         if snapshot is None:
             return
 
+        spread_pct = snapshot.spread_pct
         volatility = runtime.market_data.volatility.volatility()
         if self.config.strategy.simulate_mode:
             self._simulate_fills(runtime, snapshot)
@@ -130,28 +132,30 @@ class MarketMakerBot:
 
         now = time.time()
         if now - runtime.last_quote_time >= runtime.cfg.order_refresh_seconds:
-            await self._refresh_quotes(runtime, snapshot.mid_price, snapshot.spread_pct, volatility)
+            await self._refresh_quotes(runtime, snapshot, spread_pct, volatility)
             runtime.last_quote_time = now
 
         if now - runtime.last_reconcile_time >= 5:
             await runtime.order_manager.reconcile(runtime.cfg.symbol)
-            self._handle_order_updates(runtime)
+            await self._handle_order_updates(runtime, snapshot, spread_pct, volatility)
             runtime.last_reconcile_time = now
         else:
-            self._handle_order_updates(runtime)
+            await self._handle_order_updates(runtime, snapshot, spread_pct, volatility)
+
+        self._log_pair_status(runtime, snapshot)
 
     async def _refresh_quotes(
         self,
         runtime: PairRuntime,
-        mid_price: Decimal,
+        snapshot,
         spread_pct: Decimal,
         volatility: Decimal,
     ) -> None:
         inventory_skew = Decimal("0")
         if self.config.strategy.enable_inventory_skew:
-            inventory_skew = runtime.inventory.compute_skew(mid_price)
+            inventory_skew = runtime.inventory.compute_skew(snapshot.mid_price)
 
-        decision = runtime.quoter.compute(mid_price, spread_pct, volatility, inventory_skew)
+        decision = runtime.quoter.compute(snapshot.mid_price, spread_pct, volatility, inventory_skew)
         logger.info(
             "Quoting %s | bid=%s x%s ask=%s x%s spread=%.2fbps skew=%.2f%%",
             runtime.cfg.symbol,
@@ -163,28 +167,8 @@ class MarketMakerBot:
             decision.inventory_skew * Decimal("100"),
         )
 
-        await runtime.order_manager.cancel_all(runtime.cfg.symbol)
-        runtime.active_orders.clear()
-
-        try:
-            bid_order = await runtime.order_manager.place_limit_order(
-                runtime.cfg.symbol,
-                "buy",
-                decision.bid_amount,
-                decision.bid_price,
-            )
-            ask_order = await runtime.order_manager.place_limit_order(
-                runtime.cfg.symbol,
-                "sell",
-                decision.ask_amount,
-                decision.ask_price,
-            )
-            runtime.active_orders = {
-                "buy": bid_order,
-                "sell": ask_order,
-            }
-        except ExchangeError as exc:
-            logger.error("Failed placing quotes for %s: %s", runtime.cfg.symbol, exc)
+        await self._ensure_quote_side(runtime, snapshot, "buy", decision.bid_price, decision.bid_amount)
+        await self._ensure_quote_side(runtime, snapshot, "sell", decision.ask_price, decision.ask_amount)
 
     @staticmethod
     def _split_symbol(symbol: str) -> tuple[str, str]:
@@ -205,10 +189,17 @@ class MarketMakerBot:
                 updated = runtime.order_manager.mark_filled(order, snapshot.best_bid)
                 runtime.active_orders[side] = updated
 
-    def _handle_order_updates(self, runtime: PairRuntime) -> None:
-        snapshot = runtime.market_data.snapshot
-        if snapshot is None:
-            return
+    async def _handle_order_updates(
+        self,
+        runtime: PairRuntime,
+        snapshot,
+        spread_pct: Decimal,
+        volatility: Decimal,
+    ) -> None:
+        inventory_skew = Decimal("0")
+        if self.config.strategy.enable_inventory_skew:
+            inventory_skew = runtime.inventory.compute_skew(snapshot.mid_price)
+        decision: Optional[Quoter] = None  # placeholder for type hints
         for side, order in list(runtime.active_orders.items()):
             latest = runtime.order_manager.get(order.client_order_id)
             if latest is None:
@@ -228,4 +219,121 @@ class MarketMakerBot:
                         latest.amount,
                     )
                     runtime.last_quote_time = 0
+        missing_sides = [
+            side
+            for side in ("buy", "sell")
+            if side not in runtime.active_orders or runtime.active_orders[side].status != "open"
+        ]
+        if missing_sides:
+            quote_decision = runtime.quoter.compute(snapshot.mid_price, spread_pct, volatility, inventory_skew)
+            if "buy" in missing_sides:
+                await self._ensure_quote_side(runtime, snapshot, "buy", quote_decision.bid_price, quote_decision.bid_amount, force=True)
+            if "sell" in missing_sides:
+                await self._ensure_quote_side(runtime, snapshot, "sell", quote_decision.ask_price, quote_decision.ask_amount, force=True)
+
+    async def _ensure_quote_side(
+        self,
+        runtime: PairRuntime,
+        snapshot,
+        side: str,
+        target_price: Decimal,
+        target_amount: Decimal,
+        force: bool = False,
+    ) -> Optional[OrderRecord]:
+        if target_amount <= Decimal("0"):
+            return None
+
+        existing = runtime.active_orders.get(side)
+        now = time.time()
+        needs_replace = force
+        if existing and existing.status == "open":
+            price_denominator = existing.price if existing.price > 0 else target_price
+            price_delta = abs(existing.price - target_price) / price_denominator
+            age = now - existing.created_at
+            if price_delta >= runtime.cfg.price_requote_pct or age >= runtime.cfg.order_expiry_seconds:
+                needs_replace = True
+            if not needs_replace:
+                return existing
+            await runtime.order_manager.cancel_order(runtime.cfg.symbol, existing)
+            runtime.active_orders.pop(side, None)
+
+        inventory_snapshot = runtime.inventory.snapshot
+        if inventory_snapshot is None:
+            logger.debug("Skipping ensure for %s on %s - no inventory snapshot yet", side, runtime.cfg.symbol)
+            return None
+
+        amount = target_amount
+        if side == "sell":
+            available_base = inventory_snapshot.base_balance
+            if available_base <= Decimal("0"):
+                logger.debug("%s sell ensure skipped - zero base balance", runtime.cfg.symbol)
+                return None
+            if amount > available_base:
+                amount = available_base.quantize(Decimal("0.00001"))
+        else:
+            available_quote = inventory_snapshot.quote_balance
+            if available_quote <= Decimal("0"):
+                logger.debug("%s buy ensure skipped - zero quote balance", runtime.cfg.symbol)
+                return None
+            required_quote = target_price * amount * Decimal("1.01")
+            if required_quote > available_quote:
+                amount = (available_quote / (target_price * Decimal("1.01"))).quantize(Decimal("0.00001"))
+
+        if amount <= Decimal("0"):
+            logger.debug("%s ensure skipped - adjusted amount <= 0", runtime.cfg.symbol)
+            return None
+
+        order_value = target_price * amount
+        if order_value < runtime.cfg.min_order_usd:
+            logger.debug(
+                "%s ensure skipped - order value %.2f below minimum %.2f",
+                runtime.cfg.symbol,
+                order_value,
+                runtime.cfg.min_order_usd,
+            )
+            return None
+
+        try:
+            new_order = await runtime.order_manager.place_limit_order(runtime.cfg.symbol, side, amount, target_price)
+            runtime.active_orders[side] = new_order
+            logger.info(
+                "Posted %s order for %s @ %s x%s",
+                side.upper(),
+                runtime.cfg.symbol,
+                target_price,
+                amount,
+            )
+            return new_order
+        except ExchangeError as exc:
+            logger.error("Failed to place %s order for %s: %s", side, runtime.cfg.symbol, exc)
+            return None
+
+    def _count_active_orders(self, runtime: PairRuntime) -> tuple[int, int]:
+        buy_count = 0
+        sell_count = 0
+        for order in runtime.order_manager.store.fetch_open(runtime.cfg.symbol):
+            if order.side == "buy":
+                buy_count += 1
+            elif order.side == "sell":
+                sell_count += 1
+        return buy_count, sell_count
+
+    def _log_pair_status(self, runtime: PairRuntime, snapshot) -> None:
+        now = time.time()
+        if now - runtime.last_status_log < 10:
+            return
+        buy_count, sell_count = self._count_active_orders(runtime)
+        inventory_snapshot = runtime.inventory.snapshot
+        base_bal = float(inventory_snapshot.base_balance) if inventory_snapshot else 0.0
+        quote_bal = float(inventory_snapshot.quote_balance) if inventory_snapshot else 0.0
+        logger.info(
+            "[STATUS] %s | BUY=%d SELL=%d | base=%.6f quote=$%.2f | mid=%s",
+            runtime.cfg.symbol,
+            buy_count,
+            sell_count,
+            base_bal,
+            quote_bal,
+            snapshot.mid_price,
+        )
+        runtime.last_status_log = now
 

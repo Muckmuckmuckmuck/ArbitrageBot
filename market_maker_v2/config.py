@@ -19,6 +19,7 @@ class PairConfig:
     max_spread_bps: Decimal = Decimal("120")
     order_refresh_seconds: int = 20
     order_expiry_seconds: int = 45
+    price_requote_pct: Decimal = Decimal("0.002")  # reprice if drift > 0.2%
 
 
 @dataclass(slots=True)
