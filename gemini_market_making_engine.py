@@ -10,7 +10,7 @@ EXCHANGE: 🟢 GEMINI ONLY - This entire module is for Gemini market making
 import asyncio
 import logging
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from decimal import Decimal
 import random
 from dataclasses import dataclass, field
@@ -108,6 +108,7 @@ class GeminiMarketMakingEngine:
         self.min_volume_usd = 50000.0
         self.net_profit_usd: float = 0.0
         self.position_tracker: Dict[str, List[Dict[str, float]]] = defaultdict(list)
+        self.pending_sell_queue: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         
         # Running state
         self.running = False
@@ -963,15 +964,16 @@ class GeminiMarketMakingEngine:
                                 else:
                                     # Partial fill
                                     logger.info(f"   🟢 [GEMINI] ✅ BUY PARTIALLY FILLED: {pair} @ ${price:.4f} - {new_filled:.6f} filled (total: {filled:.6f}/{mm_order.amount:.6f})")
-                                    
-                                    # 🟢 CRITICAL: Immediately sell the NEW amount that was just filled
-                                    if new_filled > 0:
-                                        try:
-                                            await self._place_sell_order_for_filled_buy(pair, new_filled, price)
-                                        except Exception as e:
-                                            logger.error(f"   🟢 [GEMINI] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
-                                            import traceback
-                                            logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
+
+                                if new_filled > 0:
+                                    try:
+                                        sell_placed = await self._place_sell_order_for_filled_buy(pair, new_filled, price)
+                                        if not sell_placed:
+                                            logger.info(f"   🟢 [GEMINI] {pair}: Queued {new_filled:.6f} for later sell (inventory pending)")
+                                    except Exception as e:
+                                        logger.error(f"   🟢 [GEMINI] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
+                                        import traceback
+                                        logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
                             
                             elif mm_order.side == 'sell':
                                 # Sell order got filled (partially or fully)
@@ -1035,7 +1037,9 @@ class GeminiMarketMakingEngine:
                             if mm_order.side == 'buy':
                                 logger.info(f"   🟢 [GEMINI] ✅✅✅ BUY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
                                 try:
-                                    await self._place_sell_order_for_filled_buy(pair, filled, price)
+                                    sell_placed = await self._place_sell_order_for_filled_buy(pair, filled, price)
+                                    if not sell_placed:
+                                        logger.info(f"   🟢 [GEMINI] {pair}: Queued {filled:.6f} for later sell (inventory pending)")
                                 except Exception as e:
                                     logger.error(f"   🟢 [GEMINI] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
                             else:
@@ -1067,87 +1071,103 @@ class GeminiMarketMakingEngine:
         
         return filled_count
     
-    async def _place_sell_order_for_filled_buy(self, pair: str, filled_amount: float, buy_price: float):
-        """
-        Place a sell order immediately after a buy order fills
-        This ensures we sell the complete amount we bought
-        """
+    async def _place_sell_order_for_filled_buy(self, pair: str, filled_amount: float, buy_price: float, allow_queue: bool = True) -> bool:
+        """Attempt to place a sell order for newly acquired inventory. Returns True if an order was placed."""
         try:
             base_currency = pair.split('/')[0]
-            
-            # Wait a moment for balance to update
-            await asyncio.sleep(0.5)
-            
-            # Get current inventory to verify we have the crypto
-            inventory = await self.get_inventory_balance(base_currency)
-            if inventory is None:
-                inventory = 0.0
-            
-            # Use the actual filled amount (or available inventory if less)
+
+            # Wait briefly for balances to settle (Gemini can lag balance updates by a few hundred ms)
+            await asyncio.sleep(0.2)
+
+            max_inventory_checks = 5
+            inventory = 0.0
+            for attempt in range(max_inventory_checks):
+                balance_value = await self.get_inventory_balance(base_currency)
+                inventory = balance_value or 0.0
+                if inventory + 1e-8 >= filled_amount:
+                    break
+                await asyncio.sleep(0.3 * (attempt + 1))
+            else:
+                balance_value = await self.get_inventory_balance(base_currency)
+                inventory = balance_value or 0.0
+
+            if inventory <= 0:
+                if allow_queue:
+                    self.pending_sell_queue[pair].append({
+                        'amount': filled_amount,
+                        'buy_price': buy_price,
+                        'created_at': datetime.now(),
+                        'retry_count': 0
+                    })
+                    logger.warning(f"   🟢 [GEMINI] ⚠️ {pair}: Inventory not yet available after buy fill ({filled_amount:.6f}). Queued for retry.")
+                return False
+
             sell_amount = min(filled_amount, inventory)
-            
-            if sell_amount <= 0:
-                logger.warning(f"   🟢 [GEMINI] ⚠️ {pair}: No inventory available to sell after buy fill (filled: {filled_amount}, inventory: {inventory})")
-                return
-            
-            # Get current market price for sell order
+            leftover_amount = max(filled_amount - sell_amount, 0.0)
+
             ticker = await self.exchange_manager.fetch_ticker('gemini', pair)
             current_ask = ticker.get('ask', 0) or 0
             current_bid = ticker.get('bid', 0) or 0
-            
+
+            min_sell_price_with_buffer = buy_price * (1 + self.min_spread_percent / 100)
+
             if current_ask <= 0:
-                # Fallback to buy_price with markup
-                sell_price = buy_price * 1.01  # 1% markup
-                logger.warning(f"   🟢 [GEMINI] ⚠️ {pair}: No ask price, using buy_price * 1.01 = ${sell_price:.6f}")
+                sell_price = max(buy_price * 1.01, min_sell_price_with_buffer)
+                logger.warning(f"   🟢 [GEMINI] ⚠️ {pair}: No ask price, using fallback ${sell_price:.6f}")
             else:
-                # Place sell order slightly above ask to get filled quickly
                 spread = await self.get_spread(pair)
                 if spread and spread > 0:
-                    # Use 50% of spread as markup
                     markup = min(max(spread * 0.5, 0.15), 0.5) / 100
                 else:
-                    markup = 0.002  # Default 0.2% markup
-                
+                    markup = 0.002
+
                 sell_price = current_ask * (1 + markup)
-                last_buy_price = self.last_buy_prices.get(pair, 0)
-                min_target_price = last_buy_price * (1 + self.min_profit_buffer_percent / 100) if last_buy_price else 0
-                if min_target_price and sell_price < min_target_price:
+                if sell_price < min_sell_price_with_buffer:
                     logger.info(
-                        f"   🟢 [GEMINI] {pair}: Raising inventory sell price to maintain profit buffer ({sell_price:.6f} → {min_target_price:.6f})"
+                        f"   🟢 [GEMINI] {pair}: Raising sell price to maintain profit buffer ({sell_price:.6f} → {min_sell_price_with_buffer:.6f})"
                     )
-                    sell_price = min_target_price
-            
-            # Get market info for precision
+                    sell_price = min_sell_price_with_buffer
+
             exchange = self.exchange_manager.get_exchange('gemini')
             market_info = exchange.markets.get(pair, {})
             precision_data = market_info.get('precision', {})
-            
+
             amount_precision = max(int(precision_data.get('amount', 8)), 1)
-            price_precision = max(int(precision_data.get('price', 8)), 1)
-            
-            # Round amounts to exchange precision
+
             sell_amount = round(sell_amount, amount_precision)
-            
-            # Check minimum order size
+
             limits = market_info.get('limits', {})
             exchange_min_cost = limits.get('cost', {}).get('min')
             min_cost = exchange_min_cost if exchange_min_cost and exchange_min_cost > 0 else 1.0
             min_amount = limits.get('amount', {}).get('min', 0.0) or 0.0
 
-            if sell_amount * sell_price < min_cost:
-                if inventory * sell_price >= min_cost:
-                    sell_amount = inventory
+            order_value = sell_amount * sell_price
+            if order_value < min_cost or sell_amount < min_amount:
+                if allow_queue:
+                    self.pending_sell_queue[pair].append({
+                        'amount': filled_amount,
+                        'buy_price': buy_price,
+                        'created_at': datetime.now(),
+                        'retry_count': 0
+                    })
+                    logger.warning(
+                        f"   🟢 [GEMINI] ⚠️ {pair}: Sell order too small (${order_value:.2f} vs min ${min_cost:.2f} or amount {sell_amount:.6f} vs min {min_amount:.6f}). Queued for later."
+                    )
                 else:
-                    logger.warning(f"   🟢 [GEMINI] ⚠️ {pair}: Sell order value ${sell_amount * sell_price:.2f} < minimum ${min_cost:.2f}, keeping position for later")
-                    return
-            
-            if sell_amount < min_amount:
-                logger.warning(f"   🟢 [GEMINI] ⚠️ {pair}: Sell amount {sell_amount:.6f} < minimum {min_amount:.6f}, skipping")
-                return
-            
-            # Place the sell order
-            logger.info(f"   🟢 [GEMINI] 📝 PLACING SELL ORDER for filled buy: {pair} @ ${sell_price:.6f} for {sell_amount:.6f} (${sell_amount * sell_price:.2f})")
-            
+                    logger.debug(
+                        f"   🟢 [GEMINI] {pair}: Pending sell still below exchange minimums (value ${order_value:.2f}, amount {sell_amount:.6f})."
+                    )
+                return False
+
+            jitter = (random.random() * 0.0001 - 0.00005) * sell_price
+            sell_price += jitter
+            if sell_price < min_sell_price_with_buffer:
+                sell_price = min_sell_price_with_buffer
+
+            logger.info(
+                f"   🟢 [GEMINI] 📝 PLACING SELL ORDER for filled buy: {pair} @ ${sell_price:.6f} for {sell_amount:.6f} (${sell_amount * sell_price:.2f})"
+            )
+
             sell_order = await self.exchange_manager.create_order(
                 exchange_id='gemini',
                 symbol=pair,
@@ -1156,30 +1176,87 @@ class GeminiMarketMakingEngine:
                 amount=sell_amount,
                 price=sell_price
             )
-            
-            sell_order_id = sell_order.get('id')
-            if sell_order_id:
-                # Track the order
-                from datetime import datetime
+
+            if sell_order and sell_order.get('id'):
+                sell_order_id = sell_order['id']
                 mm_order = MarketMakingOrder(
                     pair=pair,
                     side='sell',
+                    order_id=sell_order_id,
                     price=sell_price,
                     amount=sell_amount,
-                    order_id=sell_order_id,
                     status='open',
                     created_at=datetime.now()
                 )
                 self.active_orders[pair].append(mm_order)
-                
-                logger.info(f"   🟢 [GEMINI] ✅✅✅ SELL ORDER PLACED for filled buy: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} | Order ID: {sell_order_id}")
-            else:
-                logger.error(f"   🟢 [GEMINI] ❌ Failed to place sell order for filled buy: No order ID returned")
-                
+                logger.info(
+                    f"   🟢 [GEMINI] ✅✅✅ SELL ORDER PLACED for filled buy: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} | Order ID: {sell_order_id}"
+                )
+
+                if leftover_amount > 1e-8 and allow_queue:
+                    self.pending_sell_queue[pair].append({
+                        'amount': leftover_amount,
+                        'buy_price': buy_price,
+                        'created_at': datetime.now(),
+                        'retry_count': 0
+                    })
+                    logger.info(f"   🟢 [GEMINI] {pair}: Queued remaining {leftover_amount:.6f} for follow-up sell")
+
+                return True
+
+            logger.warning(f"   🟢 [GEMINI] ❌ Sell order placement returned no ID for {pair}: {sell_order}")
+            if allow_queue:
+                self.pending_sell_queue[pair].append({
+                    'amount': filled_amount,
+                    'buy_price': buy_price,
+                    'created_at': datetime.now(),
+                    'retry_count': 0
+                })
+            return False
+
         except Exception as e:
-            logger.error(f"   🟢 [GEMINI] ❌ ERROR placing sell order for filled buy on {pair}: {type(e).__name__}: {e}")
+            logger.error(f"   🟢 [GEMINI] ❌ ERROR placing follow-up sell order on {pair}: {type(e).__name__}: {e}")
             import traceback
             logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
+            if allow_queue:
+                self.pending_sell_queue[pair].append({
+                    'amount': filled_amount,
+                    'buy_price': buy_price,
+                    'created_at': datetime.now(),
+                    'retry_count': 0
+                })
+            return False
+
+    async def _flush_pending_sell_queue(self):
+        """Retry any queued sell orders that could not be placed earlier."""
+        if not self.pending_sell_queue:
+            return
+
+        for pair in list(self.pending_sell_queue.keys()):
+            queue_entries = self.pending_sell_queue.get(pair, [])
+            if not queue_entries:
+                self.pending_sell_queue.pop(pair, None)
+                continue
+
+            remaining_entries: List[Dict[str, Any]] = []
+            for entry in queue_entries:
+                amount = entry.get('amount', 0.0)
+                buy_price = entry.get('buy_price', 0.0)
+                retry_count = entry.get('retry_count', 0)
+                success = await self._place_sell_order_for_filled_buy(pair, amount, buy_price, allow_queue=False)
+                if success:
+                    continue
+                entry['retry_count'] = retry_count + 1
+                if entry['retry_count'] % 5 == 0:
+                    logger.warning(
+                        f"   🟢 [GEMINI] ⚠️ Pending sell for {pair} still waiting after {entry['retry_count']} attempts (amount {amount:.6f})"
+                    )
+                remaining_entries.append(entry)
+
+            if remaining_entries:
+                self.pending_sell_queue[pair] = remaining_entries
+            else:
+                self.pending_sell_queue.pop(pair, None)
     
     async def flatten_positions(self):
         """Flatten all positions (take profit)"""
@@ -1279,6 +1356,8 @@ class GeminiMarketMakingEngine:
                 
                 # 🟢 CRITICAL: Check and sell ALL inventory first (even if not in trading pairs)
                 await self.sell_all_inventory()
+                # 🟢 Ensure any queued sells from recent fills are retried once inventory settles
+                await self._flush_pending_sell_queue()
                 
                 total_orders_placed = 0
                 total_orders_filled = 0
