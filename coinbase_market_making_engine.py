@@ -9,8 +9,9 @@ EXCHANGE: 🔵 COINBASE ONLY - This entire module is for Coinbase market making
 
 import asyncio
 import logging
+import random
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -106,6 +107,7 @@ class CoinbaseMarketMakingEngine:
         # 🔵 IMPROVEMENT: Track fill rates for pairs (focus on pairs that actually fill)
         self.pair_fill_rates: Dict[str, float] = {}  # pair -> fill_rate (0-1)
         self.last_buy_prices: Dict[str, float] = defaultdict(lambda: 0.0)
+        self.pending_sell_queue: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         
         # 🔵 IMPROVEMENT: Dynamic adjustment tracking
         self.pair_performance: Dict[str, Dict] = defaultdict(lambda: {
@@ -879,7 +881,9 @@ class CoinbaseMarketMakingEngine:
                                 if new_filled > 0:
                                     try:
                                         self.last_buy_prices[pair] = price
-                                        await self._place_sell_order_for_filled_buy(pair, new_filled, price)
+                                        sell_placed = await self._place_sell_order_for_filled_buy(pair, new_filled, price)
+                                        if not sell_placed:
+                                            logger.info(f"   🔵 [COINBASE] {pair}: Queued {new_filled:.6f} for later sell (inventory pending)")
                                     except Exception as e:
                                         logger.error(f"   🔵 [COINBASE] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
                                         import traceback
@@ -921,7 +925,9 @@ class CoinbaseMarketMakingEngine:
                                 logger.info(f"   🔵 [COINBASE] ✅✅✅ BUY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
                                 try:
                                     self.last_buy_prices[pair] = price
-                                    await self._place_sell_order_for_filled_buy(pair, filled, price)
+                                    sell_placed = await self._place_sell_order_for_filled_buy(pair, filled, price)
+                                    if not sell_placed:
+                                        logger.info(f"   🔵 [COINBASE] {pair}: Queued {filled:.6f} for later sell (inventory pending)")
                                 except Exception as e:
                                     logger.error(f"   🔵 [COINBASE] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
                             else:
@@ -956,86 +962,102 @@ class CoinbaseMarketMakingEngine:
         
         return filled_count
     
-    async def _place_sell_order_for_filled_buy(self, pair: str, filled_amount: float, buy_price: float):
-        """
-        Place a sell order immediately after a buy order fills
-        This ensures we sell the complete amount we bought
-        """
+    async def _place_sell_order_for_filled_buy(self, pair: str, filled_amount: float, buy_price: float, allow_queue: bool = True) -> bool:
+        """Try to place a follow-up sell for a newly filled buy. Returns True when an order is submitted."""
         try:
             base_currency = pair.split('/')[0]
-            
-            # Wait a moment for balance to update
-            await asyncio.sleep(0.5)
-            
-            # Get current inventory to verify we have the crypto
-            inventory = await self.get_inventory_balance(base_currency)
-            if inventory is None:
-                inventory = 0.0
-            
-            # Use the actual filled amount (or available inventory if less)
+
+            await asyncio.sleep(0.2)
+
+            max_checks = 5
+            inventory = 0.0
+            for attempt in range(max_checks):
+                balance_value = await self.get_inventory_balance(base_currency)
+                inventory = balance_value or 0.0
+                if inventory + 1e-8 >= filled_amount:
+                    break
+                await asyncio.sleep(0.3 * (attempt + 1))
+            else:
+                balance_value = await self.get_inventory_balance(base_currency)
+                inventory = balance_value or 0.0
+
+            if inventory <= 0:
+                if allow_queue:
+                    self.pending_sell_queue[pair].append({
+                        'amount': filled_amount,
+                        'buy_price': buy_price,
+                        'created_at': datetime.now(),
+                        'retry_count': 0
+                    })
+                    logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: Inventory not ready after buy fill ({filled_amount:.6f}). Queued for retry.")
+                return False
+
             sell_amount = min(filled_amount, inventory)
-            
-            if sell_amount <= 0:
-                logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: No inventory available to sell after buy fill (filled: {filled_amount}, inventory: {inventory})")
-                return
-            
-            # Get current market price for sell order
+            leftover_amount = max(filled_amount - sell_amount, 0.0)
+
             ticker = await self.exchange_manager.fetch_ticker('coinbase', pair)
             current_ask = ticker.get('ask', 0) or 0
-            current_bid = ticker.get('bid', 0) or 0
-            
+
+            min_sell_price_with_buffer = buy_price * (1 + self.min_spread_percent / 100)
+            min_profit_price = buy_price * (1 + self.min_profit_buffer_percent / 100)
+
             if current_ask <= 0:
-                # Fallback to buy_price with markup
-                sell_price = buy_price * 1.01  # 1% markup
-                logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: No ask price, using buy_price * 1.01 = ${sell_price:.6f}")
+                sell_price = max(buy_price * 1.01, min_profit_price, min_sell_price_with_buffer)
+                logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: Missing ask, using fallback ${sell_price:.6f}")
             else:
-                # Place sell order slightly above ask to get filled quickly
                 spread = await self.get_spread(pair)
                 if spread and spread > 0:
-                    # Use 50% of spread as markup
                     markup = min(max(spread * 0.5, 0.25), 1.0) / 100
                 else:
-                    markup = 0.003  # Default 0.3% markup
-                
+                    markup = 0.003
+
                 sell_price = current_ask * (1 + markup)
-                min_target_price = buy_price * (1 + self.min_profit_buffer_percent / 100)
-                if sell_price < min_target_price:
+                target_price = max(min_sell_price_with_buffer, min_profit_price)
+                if sell_price < target_price:
                     logger.info(
-                        f"   🔵 [COINBASE] {pair}: Raising post-fill sell price to maintain profit buffer ({sell_price:.6f} → {min_target_price:.6f})"
+                        f"   🔵 [COINBASE] {pair}: Raising sell target to maintain buffer ({sell_price:.6f} → {target_price:.6f})"
                     )
-                    sell_price = min_target_price
-            
-            # Get market info for precision
+                    sell_price = target_price
+
             exchange = self.exchange_manager.get_exchange('coinbase')
             market_info = exchange.markets.get(pair, {})
             precision_data = market_info.get('precision', {})
-            
+
             amount_precision = max(int(precision_data.get('amount', 8)), 1)
-            price_precision = max(int(precision_data.get('price', 8)), 2)
-            
-            # Round amounts to exchange precision
+
             sell_amount = round(sell_amount, amount_precision)
-            
-            # Check minimum order size
+
             limits = market_info.get('limits', {})
             exchange_min_cost = limits.get('cost', {}).get('min')
             min_cost = exchange_min_cost if exchange_min_cost and exchange_min_cost > 0 else 1.0
             min_amount = limits.get('amount', {}).get('min', 0.0) or 0.0
 
-            if sell_amount * sell_price < min_cost:
-                if inventory * sell_price >= min_cost:
-                    sell_amount = inventory
+            order_value = sell_amount * sell_price
+            if order_value < min_cost or sell_amount < min_amount:
+                if allow_queue:
+                    self.pending_sell_queue[pair].append({
+                        'amount': filled_amount,
+                        'buy_price': buy_price,
+                        'created_at': datetime.now(),
+                        'retry_count': 0
+                    })
+                    logger.warning(
+                        f"   🔵 [COINBASE] ⚠️ {pair}: Sell below minimums (value ${order_value:.2f}, amount {sell_amount:.6f}). Queued for later."
+                    )
                 else:
-                    logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: Sell order value ${sell_amount * sell_price:.2f} < minimum ${min_cost:.2f}, skipping")
-                    return
-            
-            if sell_amount < min_amount:
-                logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: Sell amount {sell_amount:.6f} < minimum {min_amount:.6f}, skipping")
-                return
-            
-            # Place the sell order
-            logger.info(f"   🔵 [COINBASE] 📝 PLACING SELL ORDER for filled buy: {pair} @ ${sell_price:.6f} for {sell_amount:.6f} (${sell_amount * sell_price:.2f})")
-            
+                    logger.debug(
+                        f"   🔵 [COINBASE] {pair}: Retry sell still below minimums (value ${order_value:.2f}, amount {sell_amount:.6f})."
+                    )
+                return False
+
+            jitter = (random.random() * 0.0001 - 0.00005) * sell_price
+            sell_price += jitter
+            sell_price = max(sell_price, min_profit_price, min_sell_price_with_buffer)
+
+            logger.info(
+                f"   🔵 [COINBASE] 📝 PLACING SELL ORDER for filled buy: {pair} @ ${sell_price:.6f} for {sell_amount:.6f} (${order_value:.2f})"
+            )
+
             sell_order = await self.exchange_manager.create_order(
                 exchange_id='coinbase',
                 symbol=pair,
@@ -1044,11 +1066,9 @@ class CoinbaseMarketMakingEngine:
                 amount=sell_amount,
                 price=sell_price
             )
-            
-            sell_order_id = sell_order.get('id')
-            if sell_order_id:
-                # Track the order
-                from datetime import datetime
+
+            if sell_order and sell_order.get('id'):
+                sell_order_id = sell_order['id']
                 mm_order = MarketMakingOrder(
                     pair=pair,
                     side='sell',
@@ -1059,15 +1079,74 @@ class CoinbaseMarketMakingEngine:
                     created_at=datetime.now()
                 )
                 self.active_orders[pair].append(mm_order)
-                
-                logger.info(f"   🔵 [COINBASE] ✅✅✅ SELL ORDER PLACED for filled buy: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} | Order ID: {sell_order_id}")
-            else:
-                logger.error(f"   🔵 [COINBASE] ❌ Failed to place sell order for filled buy: No order ID returned")
-                
+                logger.info(
+                    f"   🔵 [COINBASE] ✅✅✅ SELL ORDER PLACED for filled buy: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} | Order ID: {sell_order_id}"
+                )
+
+                if leftover_amount > 1e-8 and allow_queue:
+                    self.pending_sell_queue[pair].append({
+                        'amount': leftover_amount,
+                        'buy_price': buy_price,
+                        'created_at': datetime.now(),
+                        'retry_count': 0
+                    })
+                    logger.info(f"   🔵 [COINBASE] {pair}: Queued remaining {leftover_amount:.6f} for follow-up sell")
+
+                return True
+
+            logger.warning(f"   🔵 [COINBASE] ❌ Sell order placement returned no ID for {pair}: {sell_order}")
+            if allow_queue:
+                self.pending_sell_queue[pair].append({
+                    'amount': filled_amount,
+                    'buy_price': buy_price,
+                    'created_at': datetime.now(),
+                    'retry_count': 0
+                })
+            return False
+
         except Exception as e:
-            logger.error(f"   🔵 [COINBASE] ❌ ERROR placing sell order for filled buy on {pair}: {type(e).__name__}: {e}")
+            logger.error(f"   🔵 [COINBASE] ❌ ERROR placing follow-up sell order on {pair}: {type(e).__name__}: {e}")
             import traceback
             logger.debug(f"   🔵 [COINBASE] Traceback: {traceback.format_exc()}")
+            if allow_queue:
+                self.pending_sell_queue[pair].append({
+                    'amount': filled_amount,
+                    'buy_price': buy_price,
+                    'created_at': datetime.now(),
+                    'retry_count': 0
+                })
+            return False
+
+    async def _flush_pending_sell_queue(self):
+        """Retry queued sells that were waiting for balances or minimum sizing."""
+        if not self.pending_sell_queue:
+            return
+
+        for pair in list(self.pending_sell_queue.keys()):
+            entries = self.pending_sell_queue.get(pair, [])
+            if not entries:
+                self.pending_sell_queue.pop(pair, None)
+                continue
+
+            remaining: List[Dict[str, Any]] = []
+            for entry in entries:
+                amount = entry.get('amount', 0.0)
+                buy_price = entry.get('buy_price', 0.0)
+                retry_count = entry.get('retry_count', 0)
+                success = await self._place_sell_order_for_filled_buy(pair, amount, buy_price, allow_queue=False)
+                if success:
+                    continue
+                entry['retry_count'] = retry_count + 1
+                if entry['retry_count'] % 5 == 0:
+                    logger.warning(
+                        f"   🔵 [COINBASE] ⚠️ Pending sell for {pair} still waiting after {entry['retry_count']} attempts (amount {amount:.6f})"
+                    )
+                remaining.append(entry)
+
+            if remaining:
+                self.pending_sell_queue[pair] = remaining
+            else:
+                self.pending_sell_queue.pop(pair, None)
     
     async def flatten_positions(self):
         """Flatten all positions (take profit)"""
@@ -1152,6 +1231,8 @@ class CoinbaseMarketMakingEngine:
                 
                 # 🔵 CRITICAL: Check and sell ALL inventory first (even if not in trading pairs)
                 await self.sell_all_inventory()
+                # 🔵 Ensure any queued sells from balance lag are retried promptly
+                await self._flush_pending_sell_queue()
                 
                 # Check if time to flatten (take profit)
                 time_since_flatten = (datetime.now() - self.last_flatten_time).total_seconds() / 60
