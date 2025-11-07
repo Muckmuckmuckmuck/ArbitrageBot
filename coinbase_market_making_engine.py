@@ -302,6 +302,14 @@ class CoinbaseMarketMakingEngine:
                 mid = (bid + ask) / 2
                 if mid > 0:
                     spread = ((ask - bid) / mid) * 100
+                    last_spread, last_mid = getattr(self, '_last_spreads', {}).get(pair, (spread, mid))
+                    if spread > 0 and last_mid > 0:
+                        spread_change = abs(spread - last_spread)
+                        if spread_change > 0.15:
+                            self.pair_anomaly_counters[pair]['spread_jump'] += 1
+                    if not hasattr(self, '_last_spreads'):
+                        self._last_spreads = {}
+                    self._last_spreads[pair] = (spread, mid)
                     return spread
             return None
         except Exception as e:
@@ -763,7 +771,7 @@ class CoinbaseMarketMakingEngine:
                     else:  # sell
                         price_diff_pct = abs((current_ask - order.price) / current_ask) * 100
                     
-                    if price_diff_pct > 0.4:
+                    if price_diff_pct > 0.2:
                         return True, f"order {order.order_id} price drift {price_diff_pct:.2f}%"
         except Exception as e:
             logger.debug(f"   🔵 [COINBASE] Error checking price movement for {pair}: {e}")
