@@ -799,75 +799,75 @@ class GeminiMarketMakingEngine:
             return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': str(e)}
     
     async def should_update_pair_orders(self, pair: str, target_spacing: float) -> Tuple[bool, str]:
-        """
-        Determine if existing orders should be updated.
-        Returns a tuple of (should_update, reason).
-        """
+        """Determine if existing orders should be updated. Returns (should_update, reason)."""
         existing_orders = self.active_orders.get(pair, [])
         if not existing_orders:
             return True, "no existing orders"
-        
-        # Check if any orders are still open
+
         open_orders = [o for o in existing_orders if o.status == 'open']
         if not open_orders:
             return True, "all orders closed"
-        
-        # Check order age - if older than 5 minutes, update them (increased from 2 to 5 minutes)
+
         now = datetime.now()
         for order in open_orders:
             age_seconds = (now - order.created_at).total_seconds()
-            if age_seconds > 900:  # 15 minutes to allow fills
+            if age_seconds > 900:  # let quotes rest for up to 15 minutes
                 return True, f"order {order.order_id} age {age_seconds:.0f}s > 900s"
-        
-        # Check if prices have moved significantly
+
         try:
             ticker = await self.exchange_manager.fetch_ticker('gemini', pair)
             current_bid = ticker.get('bid', 0) or 0
             current_ask = ticker.get('ask', 0) or 0
-            
+
             if current_bid <= 0 or current_ask <= 0:
                 return True, "missing bid/ask data"
-            
+
+            try:
+                order_book = await self.exchange_manager.fetch_order_book('gemini', pair, limit=20)
+                bids = order_book.get('bids', []) or []
+                asks = order_book.get('asks', []) or []
+            except Exception as depth_error:
+                bids, asks = [], []
+                logger.debug(f"   🟢 [GEMINI] Depth fetch failed for {pair}: {depth_error}")
+
+            top_bid_volume = bids[0][1] if bids else 0
+            top_ask_volume = asks[0][1] if asks else 0
+
+            buy_drift_threshold = 0.2
+            sell_drift_threshold = max(0.6, self.min_spread_percent * 3)
+            sell_grace_period = 240  # seconds
+
             for order in open_orders:
-                if order.price > 0:
-                    # Check if order price is >0.5% away from current market
-                    if order.side == 'buy':
-                        price_diff_pct = abs((current_bid - order.price) / current_bid) * 100
-                    else:  # sell
-                        price_diff_pct = abs((current_ask - order.price) / current_ask) * 100
-                    
-                    if price_diff_pct > 0.2:
-                        return True, f"order {order.order_id} price drift {price_diff_pct:.2f}%"
+                if order.price <= 0:
+                    continue
+
+                order_age = (now - order.created_at).total_seconds()
+
+                if order.side == 'buy':
+                    price_diff_pct = abs((current_bid - order.price) / current_bid) * 100
+                    if order.price >= current_ask:
+                        return True, f"buy order {order.order_id} price {order.price} >= current ask {current_ask}"
+                    if top_ask_volume > top_bid_volume * 3 and price_diff_pct < 0.5:
+                        return True, f"heavy ask pressure ({top_ask_volume:.0f} vs {top_bid_volume:.0f})"
+                    drift_threshold = buy_drift_threshold
+                else:
+                    price_diff_pct = abs((current_ask - order.price) / current_ask) * 100
+                    if order.price <= current_bid:
+                        return True, f"sell order {order.order_id} price {order.price} <= current bid {current_bid}"
+                    if top_bid_volume > top_ask_volume * 3 and price_diff_pct < 0.5:
+                        return True, f"heavy bid pressure ({top_bid_volume:.0f} vs {top_ask_volume:.0f})"
+                    drift_threshold = sell_drift_threshold
+
+                    if order_age < sell_grace_period and price_diff_pct < drift_threshold * 1.5:
+                        continue
+
+                if price_diff_pct > drift_threshold:
+                    return True, f"order {order.order_id} price drift {price_diff_pct:.2f}%"
+
         except Exception as e:
             logger.debug(f"   🟢 [GEMINI] Error checking price movement for {pair}: {e}")
             return True, f"error checking price drift: {e}"
 
-        # Optional: Check for order-book anomalies (requires Gemini depth)
-        try:
-            order_book = await self.exchange_manager.fetch_order_book('gemini', pair, limit=20)
-            best_bid = order_book['bids'][0][0] if order_book.get('bids') else current_bid
-            best_ask = order_book['asks'][0][0] if order_book.get('asks') else current_ask
-
-            spread_basis = best_ask - best_bid if best_ask and best_bid else 0
-            if spread_basis > 0:
-                for order in open_orders:
-                    if order.side == 'sell' and order.price < best_bid:
-                        return True, f"sell order {order.order_id} under best bid {best_bid:.6f}"
-                    if order.side == 'buy' and order.price > best_ask:
-                        return True, f"buy order {order.order_id} above best ask {best_ask:.6f}"
-                top_bid_volume = order_book['bids'][0][1] if order_book.get('bids') else 0
-                top_ask_volume = order_book['asks'][0][1] if order_book.get('asks') else 0
-                if top_bid_volume and top_ask_volume:
-                    imbalance = top_ask_volume / top_bid_volume if top_bid_volume else float('inf')
-                    if imbalance > 3.0:
-                        return True, f"ask pressure imbalance {imbalance:.2f}x"
-                    imbalance = top_bid_volume / top_ask_volume if top_ask_volume else float('inf')
-                    if imbalance > 3.0:
-                        return True, f"bid pressure imbalance {imbalance:.2f}x"
-        except Exception as e:
-            logger.debug(f"   🟢 [GEMINI] Error checking order book for {pair}: {e}")
-
-        # Orders are still competitive, keep them
         return False, "orders still competitive"
     
     async def cancel_pair_orders(self, pair: str, reason: str = "unspecified"):
