@@ -25,23 +25,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Top pairs for market making on Coinbase (ranked by liquidity and profitability)
+# Core bases we want to quote on Coinbase (high-liquidity assets)
+TOP_COINBASE_BASES = [
+    'BTC', 'ETH', 'SOL', 'AVAX', 'LINK', 'UNI', 'DOGE', 'XRP',
+    'ADA', 'DOT', 'MATIC', 'ATOM', 'ALGO', 'LTC', 'AAVE'
+]
+
+# Prioritize both USD and USDC quotes so we can trade when cash is held in either
+TOP_COINBASE_QUOTES = ['USD', 'USDC']
+
+# Generate the default pair universe (duplicates removed downstream during initialization)
 TOP_COINBASE_PAIRS = [
-    'BTC/USD',   # Highest liquidity
-    'ETH/USD',   # High liquidity
-    'SOL/USD',   # High liquidity
-    'AVAX/USD',  # Good liquidity
-    'LINK/USD',  # Good liquidity
-    'UNI/USD',   # Good liquidity
-    'DOGE/USD',  # High volume
-    'XRP/USD',   # High volume
-    'ADA/USD',   # Good liquidity
-    'DOT/USD',   # Good liquidity
-    'MATIC/USD', # Good liquidity
-    'ATOM/USD',  # Good liquidity
-    'ALGO/USD',  # Good liquidity
-    'LTC/USD',   # Good liquidity
-    'AAVE/USD',  # Good liquidity
+    f"{base}/{quote}"
+    for base in TOP_COINBASE_BASES
+    for quote in TOP_COINBASE_QUOTES
 ]
 
 @dataclass
