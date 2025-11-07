@@ -9,6 +9,7 @@ EXCHANGE: 🟢 GEMINI ONLY - This entire module is for Gemini market making
 
 import asyncio
 import logging
+import math
 import time
 import statistics
 from typing import Dict, List, Optional, Tuple, Any
@@ -91,10 +92,10 @@ class GeminiMarketMakingEngine:
         self.grid_spacing_percent = grid_spacing_percent
         self.order_size_percent = order_size_percent
         self.maker_fee_percent = 0.10  # Estimated maker fee (percent)
-        self.taker_fee_percent = 0.35  # Conservative fallback for forced exits
+        self.taker_fee_percent = 0.20  # Conservative fallback for forced exits
         self.min_order_value_usd = 5.00
         self.balance_buffer_multiplier = 1.05
-        self.min_profit_buffer_percent = 0.15  # Cushion beyond fees
+        self.min_profit_buffer_percent = 0.08  # Cushion beyond fees
         self.min_spread_percent = max(
             min_spread_percent,
             (self.maker_fee_percent + self.taker_fee_percent) + self.min_profit_buffer_percent
@@ -104,14 +105,14 @@ class GeminiMarketMakingEngine:
         self.stop_loss_percent = stop_loss_percent
         self.take_profit_interval_minutes = take_profit_interval_minutes
         self.max_volatility_percent = max_volatility_percent
-        self.min_depth_usd = max(min_depth_usd, 1500.0)
-        self.min_volume_usd = 40000.0
+        self.min_depth_usd = max(min_depth_usd, 600.0)
+        self.min_volume_usd = 20000.0
         self.min_fill_rate_threshold = 0.10
         self.fill_rate_blacklist_minutes = 10
         self.max_pair_loss_usd = -6.0
         self.max_global_loss_usd = -18.0
-        self.inside_quote_volume_threshold = 900.0
-        self.inside_quote_improve_bps = 2.5
+        self.inside_quote_volume_threshold = 600.0
+        self.inside_quote_improve_bps = 2.0
         self.micro_reprice_threshold = 0.12
         self.inventory_max_age_minutes = 70
         
@@ -454,11 +455,11 @@ class GeminiMarketMakingEngine:
         )
 
         volatility = market_metrics.get('volatility') or 0.0
-        volatility_component = min(volatility * 0.5, 1.2)
+        volatility_component = min(volatility * 0.3, 0.6)
 
         fill_component = 0.0
         if fill_rate < 0.25:
-            fill_component = (0.25 - fill_rate) * 0.6
+            fill_component = (0.25 - fill_rate) * 0.4
 
         override = self.pair_spread_overrides.get(pair)
 
@@ -682,7 +683,7 @@ class GeminiMarketMakingEngine:
 
             spread = await self.get_spread(pair)
             base_spacing = (spread * 0.5) if spread and spread > 0 else self.grid_spacing_percent
-            dynamic_spacing = max(0.10, min(base_spacing, 0.45))
+            dynamic_spacing = max(0.08, min(base_spacing, 0.35))
             effective_spread = (spread or 0) + (2 * dynamic_spacing)
 
             current_price = await self.get_current_price(pair)
@@ -815,6 +816,7 @@ class GeminiMarketMakingEngine:
             elif total_profit < -3:
                 profit_multiplier = max(0.55, 1.0 + total_profit / 18.0)
 
+            precision_factor = 10 ** amount_precision
             order_value_usd = 0.0
             order_amount = 0.0
 
@@ -835,6 +837,15 @@ class GeminiMarketMakingEngine:
 
                 order_amount = order_value_usd / current_price
                 order_amount = round(order_amount, amount_precision)
+                
+                # Ensure we meet the minimum dollar cost after rounding by rounding UP if needed
+                min_amount_required = min_buy_cost / current_price
+                min_amount_rounded = math.ceil(min_amount_required * precision_factor) / precision_factor
+                if min_amount > 0:
+                    min_amount_rounded = max(min_amount_rounded, min_amount)
+                if order_amount < min_amount_rounded:
+                    order_amount = round(min_amount_rounded, amount_precision)
+                    order_value_usd = order_amount * current_price
             
             # 🔵 CRITICAL FIX: If rounding caused amount to become 0, recalculate
             if allow_new_buys:
@@ -968,7 +979,8 @@ class GeminiMarketMakingEngine:
                     if buy_price > 0:
                         required_amount = min_buy_cost / buy_price
                         if required_amount > order_amount:
-                            order_amount = round(required_amount, amount_precision)
+                            required_ceiled = math.ceil(required_amount * precision_factor) / precision_factor
+                            order_amount = round(required_ceiled, amount_precision)
                             min_order_value = order_amount * buy_price
                             logger.debug(f"   🟢 [GEMINI] {pair}: Increased order amount to meet minimum cost")
                     if min_order_value < min_buy_cost:
