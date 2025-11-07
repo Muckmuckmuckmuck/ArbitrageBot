@@ -104,8 +104,8 @@ class GeminiMarketMakingEngine:
         self.stop_loss_percent = stop_loss_percent
         self.take_profit_interval_minutes = take_profit_interval_minutes
         self.max_volatility_percent = max_volatility_percent
-        self.min_depth_usd = max(min_depth_usd, 8000.0)
-        self.min_volume_usd = 90000.0
+        self.min_depth_usd = max(min_depth_usd, 1500.0)
+        self.min_volume_usd = 40000.0
         self.min_fill_rate_threshold = 0.10
         self.fill_rate_blacklist_minutes = 10
         self.max_pair_loss_usd = -6.0
@@ -262,7 +262,7 @@ class GeminiMarketMakingEngine:
 
                     # Calculate suitability score
                     # Higher volume = better, wider spread = better (up to a point)
-                    volume_score = min(volume_24h / 3000000.0, 1.0)  # Normalize to $3M
+                    volume_score = min(volume_24h / 1200000.0, 1.0)  # Normalize to $1.2M
                     spread_score = min(spread / 1.0, 1.0)  # Normalize to 1% spread
                     score = (volume_score * 0.6) + (spread_score * 0.4)  # 60% volume, 40% spread
                     
@@ -682,7 +682,7 @@ class GeminiMarketMakingEngine:
 
             spread = await self.get_spread(pair)
             base_spacing = (spread * 0.5) if spread and spread > 0 else self.grid_spacing_percent
-            dynamic_spacing = max(0.12, min(base_spacing, 0.6))
+            dynamic_spacing = max(0.10, min(base_spacing, 0.45))
             effective_spread = (spread or 0) + (2 * dynamic_spacing)
 
             current_price = await self.get_current_price(pair)
@@ -719,12 +719,10 @@ class GeminiMarketMakingEngine:
             )
 
             if fill_rate < self.min_fill_rate_threshold and not open_orders:
-                allow_new_buys = False
-                blacklist_until = datetime.now() + timedelta(minutes=self.fill_rate_blacklist_minutes)
-                self.pair_skip_until[pair] = blacklist_until
                 logger.info(
-                    f"   🟢 [GEMINI] ⏸️ {pair}: Fill rate {fill_rate:.2f} below {self.min_fill_rate_threshold:.2f} - pausing new buys until {blacklist_until.strftime('%H:%M:%S')}"
+                    f"   🟢 [GEMINI] {pair}: Fill rate {fill_rate:.2f} below {self.min_fill_rate_threshold:.2f}; allowing smaller orders but watching closely"
                 )
+                fill_rate = max(fill_rate, 0.05)
 
             if (spread is None or spread <= 0 or effective_spread < required_spread) and open_orders:
                 logger.info(f"   🟢 [GEMINI] {pair}: Effective spread {effective_spread:.3f}% (raw {spread_msg}) < minimum {required_spread:.2f}%, but keeping {len(open_orders)} open order(s) to check for fills")
