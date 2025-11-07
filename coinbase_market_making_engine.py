@@ -93,7 +93,8 @@ class CoinbaseMarketMakingEngine:
         self.take_profit_interval_minutes = take_profit_interval_minutes
         self.min_spacing_percent = 0.50  # Minimum spacing to ensure profitability (percent)
         self.max_spacing_percent = 1.50  # Cap spacing to avoid quoting too far away
-        
+        self.min_profit_buffer_percent = max(min_spread_percent * 0.5, 0.6)
+
         # Active orders tracking
         self.active_orders: Dict[str, List[MarketMakingOrder]] = defaultdict(list)
         
@@ -103,6 +104,7 @@ class CoinbaseMarketMakingEngine:
         
         # 🔵 IMPROVEMENT: Track fill rates for pairs (focus on pairs that actually fill)
         self.pair_fill_rates: Dict[str, float] = {}  # pair -> fill_rate (0-1)
+        self.last_buy_prices: Dict[str, float] = defaultdict(lambda: 0.0)
         
         # 🔵 IMPROVEMENT: Dynamic adjustment tracking
         self.pair_performance: Dict[str, Dict] = defaultdict(lambda: {
@@ -530,7 +532,10 @@ class CoinbaseMarketMakingEngine:
                 # If market spread is wide, use larger spacing to capture more profit
                 if current_spread > 0:
                     # Use 30-70% of market spread as our spacing (adaptive)
-                    adaptive_spacing = min(max(current_spread * 0.5, dynamic_spacing * 0.5), dynamic_spacing * 1.5)
+                    if current_spread * 0.5 < dynamic_spacing * 0.5:
+                        adaptive_spacing = max(current_spread * 0.5, dynamic_spacing * 0.5)
+                    else:
+                        adaptive_spacing = min(max(current_spread * 0.5, dynamic_spacing * 0.5), dynamic_spacing * 1.5)
                 else:
                     adaptive_spacing = dynamic_spacing
                 
@@ -629,6 +634,7 @@ class CoinbaseMarketMakingEngine:
                             )
                             self.active_orders[pair].append(buy_mm_order)
                             orders_placed += 1
+                            self.last_buy_prices[pair] = buy_price
                             logger.info(f"   🔵 [COINBASE] ✅ BUY ORDER PLACED: {pair} @ ${buy_price:.4f} for {order_amount:.6f} | Order ID: {buy_order_id}")
                     except Exception as e:
                         logger.error(f"   🔵 [COINBASE] ❌ FAILED TO PLACE BUY ORDER: {e}")
@@ -655,6 +661,14 @@ class CoinbaseMarketMakingEngine:
                             logger.error(f"   🔵 [COINBASE] ❌ Invalid sell_price: {sell_price}")
                             raise ValueError(f"Invalid sell_price: {sell_price}")
                         
+                        last_buy_price = self.last_buy_prices.get(pair, 0)
+                        min_target_price = last_buy_price * (1 + self.min_profit_buffer_percent / 100) if last_buy_price else 0
+                        if min_target_price and sell_price < min_target_price:
+                            logger.info(
+                                f"   🔵 [COINBASE] {pair}: Raising inventory sell price to maintain profit buffer ({sell_price:.6f} → {min_target_price:.6f})"
+                            )
+                            sell_price = min_target_price
+
                         logger.debug(f"   🔵 [COINBASE] {pair}: Creating sell order - amount={sell_amount:.6f}, price=${sell_price:.6f}")
                         sell_order = await self.exchange_manager.create_order(
                             exchange_id='coinbase',
@@ -728,12 +742,30 @@ class CoinbaseMarketMakingEngine:
                     else:  # sell
                         price_diff_pct = abs((current_ask - order.price) / current_ask) * 100
                     
-                    if price_diff_pct > 1.0:  # More than 1.0% away (increased from 0.5% to prevent premature cancellation)
+                    if price_diff_pct > 0.4:
                         return True, f"order {order.order_id} price drift {price_diff_pct:.2f}%"
         except Exception as e:
             logger.debug(f"   🔵 [COINBASE] Error checking price movement for {pair}: {e}")
             return True, f"error checking price drift: {e}"
-        
+
+        # Order flow check using order book depth
+        try:
+            order_book = await self.exchange_manager.fetch_order_book('coinbase', pair, limit=20)
+            best_bid = order_book['bids'][0][0] if order_book.get('bids') else current_bid
+            best_ask = order_book['asks'][0][0] if order_book.get('asks') else current_ask
+            if best_bid and best_ask:
+                top_bid_volume = order_book['bids'][0][1] if order_book.get('bids') else 0
+                top_ask_volume = order_book['asks'][0][1] if order_book.get('asks') else 0
+                for order in open_orders:
+                    if order.side == 'sell' and order.price < best_bid:
+                        return True, f"sell order {order.order_id} under best bid {best_bid:.6f}"
+                    if order.side == 'buy' and order.price > best_ask:
+                        return True, f"buy order {order.order_id} above best ask {best_ask:.6f}"
+                if top_ask_volume and top_bid_volume and top_ask_volume > top_bid_volume * 4:
+                    return True, f"heavy ask pressure (ask vol {top_ask_volume:.4f} vs bid {top_bid_volume:.4f})"
+        except Exception as e:
+            logger.debug(f"   🔵 [COINBASE] Error checking order book for {pair}: {e}")
+ 
         # Orders are still competitive, keep them
         return False, "orders still competitive"
     
@@ -808,6 +840,7 @@ class CoinbaseMarketMakingEngine:
                                     self.stats[pair].filled_orders += 1
                                     self.stats[pair].total_orders += 1
                                     filled_count += 1
+                                    self.last_buy_prices[pair] = price
                                     logger.info(f"   🔵 [COINBASE] ✅✅✅ BUY FULLY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
                                 else:
                                     # Partial fill
@@ -816,6 +849,7 @@ class CoinbaseMarketMakingEngine:
                                 # 🔵 CRITICAL: Immediately sell the NEW amount that was just filled
                                 if new_filled > 0:
                                     try:
+                                        self.last_buy_prices[pair] = price
                                         await self._place_sell_order_for_filled_buy(pair, new_filled, price)
                                     except Exception as e:
                                         logger.error(f"   🔵 [COINBASE] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
@@ -857,6 +891,7 @@ class CoinbaseMarketMakingEngine:
                             if mm_order.side == 'buy':
                                 logger.info(f"   🔵 [COINBASE] ✅✅✅ BUY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
                                 try:
+                                    self.last_buy_prices[pair] = price
                                     await self._place_sell_order_for_filled_buy(pair, filled, price)
                                 except Exception as e:
                                     logger.error(f"   🔵 [COINBASE] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
@@ -929,11 +964,17 @@ class CoinbaseMarketMakingEngine:
                 spread = await self.get_spread(pair)
                 if spread and spread > 0:
                     # Use 50% of spread as markup
-                    markup = min(max(spread * 0.5, 0.15), 0.5) / 100
+                    markup = min(max(spread * 0.5, 0.25), 1.0) / 100
                 else:
-                    markup = 0.002  # Default 0.2% markup
+                    markup = 0.003  # Default 0.3% markup
                 
                 sell_price = current_ask * (1 + markup)
+                min_target_price = buy_price * (1 + self.min_profit_buffer_percent / 100)
+                if sell_price < min_target_price:
+                    logger.info(
+                        f"   🔵 [COINBASE] {pair}: Raising post-fill sell price to maintain profit buffer ({sell_price:.6f} → {min_target_price:.6f})"
+                    )
+                    sell_price = min_target_price
             
             # Get market info for precision
             exchange = self.exchange_manager.get_exchange('coinbase')

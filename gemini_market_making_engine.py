@@ -87,6 +87,7 @@ class GeminiMarketMakingEngine:
         self.requote_interval_seconds = requote_interval_seconds
         self.stop_loss_percent = stop_loss_percent
         self.take_profit_interval_minutes = take_profit_interval_minutes
+        self.min_profit_buffer_percent = max(min_spread_percent * 0.5, 0.35)  # Ensure at least ~fee coverage
         
         # Active orders tracking
         self.active_orders: Dict[str, List[MarketMakingOrder]] = defaultdict(list)
@@ -97,6 +98,7 @@ class GeminiMarketMakingEngine:
         
         # 🟢 IMPROVEMENT: Track fill rates for pairs (focus on pairs that actually fill)
         self.pair_fill_rates: Dict[str, float] = {}  # pair -> fill_rate (0-1)
+        self.last_buy_prices: Dict[str, float] = defaultdict(lambda: 0.0)
         
         # Running state
         self.running = False
@@ -682,6 +684,7 @@ class GeminiMarketMakingEngine:
                             )
                             self.active_orders[pair].append(buy_mm_order)
                             orders_placed += 1
+                            self.last_buy_prices[pair] = buy_price
                             logger.info(f"   🟢 [GEMINI] ✅✅✅ BUY ORDER PLACED SUCCESSFULLY: {pair} @ ${buy_price:.4f} for {order_amount:.6f} (${order_amount * buy_price:.2f}) | Order ID: {buy_order_id}")
                         else:
                             logger.warning(f"   🟢 [GEMINI] ⚠️ Buy order creation returned no ID: {buy_order}")
@@ -806,12 +809,28 @@ class GeminiMarketMakingEngine:
                     else:  # sell
                         price_diff_pct = abs((current_ask - order.price) / current_ask) * 100
                     
-                    if price_diff_pct > 1.0:  # More than 1.0% away (increased from 0.5% to prevent premature cancellation)
+                    if price_diff_pct > 0.4:
                         return True, f"order {order.order_id} price drift {price_diff_pct:.2f}%"
         except Exception as e:
             logger.debug(f"   🟢 [GEMINI] Error checking price movement for {pair}: {e}")
             return True, f"error checking price drift: {e}"
-        
+
+        # Optional: Check for order-book anomalies (requires Gemini depth)
+        try:
+            order_book = await self.exchange_manager.fetch_order_book('gemini', pair, limit=20)
+            best_bid = order_book['bids'][0][0] if order_book.get('bids') else current_bid
+            best_ask = order_book['asks'][0][0] if order_book.get('asks') else current_ask
+
+            spread_basis = best_ask - best_bid if best_ask and best_bid else 0
+            if spread_basis > 0:
+                for order in open_orders:
+                    if order.side == 'sell' and order.price < best_bid:
+                        return True, f"sell order {order.order_id} below best bid {best_bid:.6f}"
+                    if order.side == 'buy' and order.price > best_ask:
+                        return True, f"buy order {order.order_id} above best ask {best_ask:.6f}"
+        except Exception as e:
+            logger.debug(f"   🟢 [GEMINI] Error checking order book for {pair}: {e}")
+
         # Orders are still competitive, keep them
         return False, "orders still competitive"
     
@@ -890,19 +909,21 @@ class GeminiMarketMakingEngine:
                                     self.stats[pair].filled_orders += 1
                                     self.stats[pair].total_orders += 1
                                     filled_count += 1
+                                    self.last_buy_prices[pair] = price
                                     logger.info(f"   🟢 [GEMINI] ✅✅✅ BUY FULLY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
                                 else:
                                     # Partial fill
                                     logger.info(f"   🟢 [GEMINI] ✅ BUY PARTIALLY FILLED: {pair} @ ${price:.4f} - {new_filled:.6f} filled (total: {filled:.6f}/{mm_order.amount:.6f})")
-                                
-                                # 🟢 CRITICAL: Immediately sell the NEW amount that was just filled
-                                if new_filled > 0:
-                                    try:
-                                        await self._place_sell_order_for_filled_buy(pair, new_filled, price)
-                                    except Exception as e:
-                                        logger.error(f"   🟢 [GEMINI] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
-                                        import traceback
-                                        logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
+                                    
+                                    # 🟢 CRITICAL: Immediately sell the NEW amount that was just filled
+                                    if new_filled > 0:
+                                        try:
+                                            self.last_buy_prices[pair] = price
+                                            await self._place_sell_order_for_filled_buy(pair, new_filled, price)
+                                        except Exception as e:
+                                            logger.error(f"   🟢 [GEMINI] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
+                                            import traceback
+                                            logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
                             
                             elif mm_order.side == 'sell':
                                 # Sell order got filled (partially or fully)
@@ -936,6 +957,7 @@ class GeminiMarketMakingEngine:
                             if mm_order.side == 'buy':
                                 logger.info(f"   🟢 [GEMINI] ✅✅✅ BUY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
                                 try:
+                                    self.last_buy_prices[pair] = price
                                     await self._place_sell_order_for_filled_buy(pair, filled, price)
                                 except Exception as e:
                                     logger.error(f"   🟢 [GEMINI] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
@@ -1011,6 +1033,13 @@ class GeminiMarketMakingEngine:
                     markup = 0.002  # Default 0.2% markup
                 
                 sell_price = current_ask * (1 + markup)
+                last_buy_price = self.last_buy_prices.get(pair, 0)
+                min_target_price = last_buy_price * (1 + self.min_profit_buffer_percent / 100) if last_buy_price else 0
+                if min_target_price and sell_price < min_target_price:
+                    logger.info(
+                        f"   🟢 [GEMINI] {pair}: Raising inventory sell price to maintain profit buffer ({sell_price:.6f} → {min_target_price:.6f})"
+                    )
+                    sell_price = min_target_price
             
             # Get market info for precision
             exchange = self.exchange_manager.get_exchange('gemini')
@@ -1033,7 +1062,7 @@ class GeminiMarketMakingEngine:
                 if inventory * sell_price >= min_cost:
                     sell_amount = inventory
                 else:
-                    logger.warning(f"   🟢 [GEMINI] ⚠️ {pair}: Sell order value ${sell_amount * sell_price:.2f} < minimum ${min_cost:.2f}, skipping")
+                    logger.warning(f"   🟢 [GEMINI] ⚠️ {pair}: Sell order value ${sell_amount * sell_price:.2f} < minimum ${min_cost:.2f}, keeping position for later")
                     return
             
             if sell_amount < min_amount:
