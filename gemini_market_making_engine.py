@@ -104,16 +104,16 @@ class GeminiMarketMakingEngine:
         self.stop_loss_percent = stop_loss_percent
         self.take_profit_interval_minutes = take_profit_interval_minutes
         self.max_volatility_percent = max_volatility_percent
-        self.min_depth_usd = max(min_depth_usd, 100000.0)
-        self.min_volume_usd = 300000.0
-        self.min_fill_rate_threshold = 0.20
-        self.fill_rate_blacklist_minutes = 30
-        self.max_pair_loss_usd = -4.0
-        self.max_global_loss_usd = -12.0
-        self.inside_quote_volume_threshold = 1500.0
-        self.inside_quote_improve_bps = 3.0
-        self.micro_reprice_threshold = 0.15
-        self.inventory_max_age_minutes = 45
+        self.min_depth_usd = max(min_depth_usd, 8000.0)
+        self.min_volume_usd = 90000.0
+        self.min_fill_rate_threshold = 0.10
+        self.fill_rate_blacklist_minutes = 10
+        self.max_pair_loss_usd = -6.0
+        self.max_global_loss_usd = -18.0
+        self.inside_quote_volume_threshold = 900.0
+        self.inside_quote_improve_bps = 2.5
+        self.micro_reprice_threshold = 0.12
+        self.inventory_max_age_minutes = 70
         
         # Active orders tracking
         self.active_orders: Dict[str, List[MarketMakingOrder]] = defaultdict(list)
@@ -337,6 +337,12 @@ class GeminiMarketMakingEngine:
         for pair in available_pairs:
             self.stats[pair] = MarketMakingStats(pair=pair)
             self.pair_fill_rates[pair] = 0.5  # Default neutral fill rate
+            self.pair_performance[pair] = {
+                'total_profit': 0.0,
+                'total_trades': 0,
+                'avg_spread': 0.0,
+                'fill_rate': 0.5,
+            }
         
         logger.info(f"   ✅ Total available pairs: {len(available_pairs)}")
         if len(available_pairs) == 0:
@@ -448,11 +454,11 @@ class GeminiMarketMakingEngine:
         )
 
         volatility = market_metrics.get('volatility') or 0.0
-        volatility_component = min(volatility * 0.7, 1.8)
+        volatility_component = min(volatility * 0.5, 1.2)
 
         fill_component = 0.0
-        if fill_rate < 0.3:
-            fill_component = (0.3 - fill_rate) * 0.9
+        if fill_rate < 0.25:
+            fill_component = (0.25 - fill_rate) * 0.6
 
         override = self.pair_spread_overrides.get(pair)
 
@@ -638,7 +644,7 @@ class GeminiMarketMakingEngine:
 
             if self.net_profit_usd <= self.max_global_loss_usd:
                 if not self.global_loss_pause_until or self.global_loss_pause_until <= now:
-                    self.global_loss_pause_until = now + timedelta(minutes=15)
+                    self.global_loss_pause_until = now + timedelta(minutes=6)
                     logger.warning(
                         f"   🟢 [GEMINI] ⛔ Pausing new buys for 15 minutes - engine net ${self.net_profit_usd:.2f} <= max loss ${self.max_global_loss_usd:.2f}"
                     )
@@ -1807,6 +1813,7 @@ class GeminiMarketMakingEngine:
                                 amount=sell_amount,
                                 price=sell_price
                             )
+                            self.pair_last_inventory_timestamp[pair] = datetime.now()
                             logger.info(f"   🟢 [GEMINI] ✅ FLATTENED {pair}: Placed sell order for {sell_amount:.6f} {base_currency} @ ${sell_price:.4f} (${sell_amount * sell_price:.2f})")
                             flattened_count += 1
                         except Exception as e:

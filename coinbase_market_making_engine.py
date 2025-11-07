@@ -106,17 +106,17 @@ class CoinbaseMarketMakingEngine:
         self.take_profit_interval_minutes = take_profit_interval_minutes
         self.min_spacing_percent = 0.50  # Minimum spacing to ensure profitability (percent)
         self.max_spacing_percent = 1.50  # Cap spacing to avoid quoting too far away
-        self.min_volume_usd = 500000.0
+        self.min_volume_usd = 150000.0
         self.max_volatility_percent = max_volatility_percent
-        self.min_depth_usd = max(min_depth_usd, 150000.0)
-        self.min_fill_rate_threshold = 0.25
-        self.fill_rate_blacklist_minutes = 30
-        self.max_pair_loss_usd = -5.0
-        self.max_global_loss_usd = -15.0
-        self.inside_quote_volume_threshold = 3000.0
+        self.min_depth_usd = max(min_depth_usd, 7500.0)
+        self.min_fill_rate_threshold = 0.12
+        self.fill_rate_blacklist_minutes = 10
+        self.max_pair_loss_usd = -8.0
+        self.max_global_loss_usd = -25.0
+        self.inside_quote_volume_threshold = 1200.0
         self.inside_quote_improve_bps = 2.0  # 0.02%
         self.micro_reprice_threshold = 0.12  # 0.12% drift triggers reprice
-        self.inventory_max_age_minutes = 45
+        self.inventory_max_age_minutes = 75
 
         # Active orders tracking
         self.active_orders: Dict[str, List[MarketMakingOrder]] = defaultdict(list)
@@ -332,7 +332,12 @@ class CoinbaseMarketMakingEngine:
         for pair in available_pairs:
             self.stats[pair] = MarketMakingStats(pair=pair)
             self.pair_fill_rates[pair] = 0.5  # Default neutral fill rate
-            self.pair_performance[pair] = {'total_profit': 0.0, 'trades': 0}
+            self.pair_performance[pair] = {
+                'total_profit': 0.0,
+                'total_trades': 0,
+                'avg_spread': 0.0,
+                'fill_rate': 0.5,
+            }
         
         logger.info(f"   ✅ Total available pairs: {len(available_pairs)}")
         if len(available_pairs) == 0:
@@ -451,11 +456,11 @@ class CoinbaseMarketMakingEngine:
         )
 
         volatility = market_metrics.get('volatility') or 0.0
-        volatility_component = min(volatility * 0.6, 1.5)
+        volatility_component = min(volatility * 0.4, 1.0)
 
         fill_component = 0.0
-        if fill_rate < 0.35:
-            fill_component = (0.35 - fill_rate) * 0.8  # encourage better edge when fills are scarce
+        if fill_rate < 0.3:
+            fill_component = (0.3 - fill_rate) * 0.6  # encourage better edge when fills are scarce
 
         override = self.pair_spread_overrides.get(pair)
 
@@ -638,7 +643,7 @@ class CoinbaseMarketMakingEngine:
 
             if self.net_profit_usd <= self.max_global_loss_usd:
                 if not self.global_loss_pause_until or self.global_loss_pause_until <= now:
-                    self.global_loss_pause_until = now + timedelta(minutes=15)
+                    self.global_loss_pause_until = now + timedelta(minutes=5)
                     logger.warning(
                         f"   🔵 [COINBASE] ⛔ Pausing new buys for 15 minutes - engine net ${self.net_profit_usd:.2f} <= max loss ${self.max_global_loss_usd:.2f}"
                     )
@@ -1804,6 +1809,7 @@ class CoinbaseMarketMakingEngine:
                                 amount=sell_amount,
                                 price=sell_price
                             )
+                            self.pair_last_inventory_timestamp[pair] = datetime.now()
                             logger.info(f"   🔵 [COINBASE] ✅ FLATTENED {pair}: Placed sell order for {sell_amount:.6f} {base_currency} @ ${sell_price:.4f}")
                             flattened_count += 1
                         except Exception as e:
