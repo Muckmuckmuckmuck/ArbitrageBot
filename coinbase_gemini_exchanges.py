@@ -8,7 +8,6 @@ EXCHANGE MARKERS:
     ⚪ COMMON - Code that works for both exchanges
 """
 
-import ccxt
 import logging
 import hmac
 import hashlib
@@ -19,6 +18,9 @@ import aiohttp
 import asyncio
 from datetime import datetime
 from typing import Dict, Optional, List, Tuple, Any
+
+import ccxt
+from ccxt.base.errors import OrderNotFound, InvalidOrder, ExchangeError
 from coinbase_gemini_config import Config
 
 logger = logging.getLogger(__name__)
@@ -669,6 +671,17 @@ class CoinbaseGeminiExchangeManager:
             
             logger.info(f"✅ Order cancelled on {exchange_id}: {order_id}")
             return result
+        except (OrderNotFound, InvalidOrder) as e:
+            logger.warning(f"⚠️ Order {order_id} already closed on {exchange_id}: {e}")
+            return {'status': 'already_closed', 'order_id': order_id, 'symbol': symbol}
+        except ExchangeError as e:
+            message = str(e).lower()
+            ignorable_keywords = ['order not found', 'already done', 'cancelorders() has failed']
+            if any(keyword in message for keyword in ignorable_keywords):
+                logger.warning(f"⚠️ Treating cancel error as benign for {order_id} on {exchange_id}: {e}")
+                return {'status': 'already_closed', 'order_id': order_id, 'symbol': symbol}
+            logger.error(f"Error cancelling order {order_id} on {exchange_id}: {e}")
+            raise
         except Exception as e:
             logger.error(f"Error cancelling order {order_id} on {exchange_id}: {e}")
             raise

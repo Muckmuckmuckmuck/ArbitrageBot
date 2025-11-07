@@ -94,7 +94,7 @@ class CoinbaseMarketMakingEngine:
         self.taker_fee_percent = 0.35  # Estimated taker fee (fallback / crosses)
         self.min_order_value_usd = 5.00
         self.min_inventory_sell_value_usd = 5.00
-        self.balance_buffer_multiplier = 1.20
+        self.balance_buffer_multiplier = 1.05
         self.min_profit_buffer_percent = 0.25  # Additional cushion beyond fees
         self.min_spread_percent = max(
             min_spread_percent,
@@ -1021,12 +1021,59 @@ class CoinbaseMarketMakingEngine:
                             mm_order.order_id,
                             pair
                         )
-                        status = order_status.get('status', 'unknown')
-                        
-                        # Check for partial or full fills
-                        filled = float(order_status.get('filled', 0))
-                        remaining = float(order_status.get('remaining', 0))
-                        price = float(order_status.get('price', mm_order.price))
+
+                        info = order_status.get('info', {}) or {}
+                        status = (order_status.get('status') or info.get('status') or 'unknown').lower()
+
+                        def _as_float(value, default=0.0):
+                            try:
+                                if value is None:
+                                    return default
+                                return float(value)
+                            except (TypeError, ValueError):
+                                return default
+
+                        amount = _as_float(order_status.get('amount'), mm_order.amount or 0.0)
+                        if amount <= 0:
+                            amount = _as_float(info.get('size'), mm_order.amount or 0.0)
+
+                        filled_candidates = [
+                            order_status.get('filled'),
+                            info.get('filled_size'),
+                            info.get('executed_value'),
+                        ]
+                        filled = 0.0
+                        for candidate in filled_candidates:
+                            filled = _as_float(candidate, None)
+                            if filled is not None:
+                                break
+                        if filled is None:
+                            remaining_hint = _as_float(order_status.get('remaining'), None)
+                            if remaining_hint is None:
+                                remaining_hint = _as_float(info.get('remaining_size'), 0.0)
+                            filled = max(amount - remaining_hint, 0.0)
+
+                        remaining_candidates = [
+                            order_status.get('remaining'),
+                            info.get('remaining_size'),
+                            amount - filled
+                        ]
+                        remaining = None
+                        for candidate in remaining_candidates:
+                            remaining = _as_float(candidate, None)
+                            if remaining is not None:
+                                break
+                        if remaining is None:
+                            remaining = max(amount - filled, 0.0)
+
+                        if remaining <= 1e-8 and amount > 0 and filled < amount:
+                            filled = amount
+                        if remaining <= 1e-8:
+                            status = 'filled'
+
+                        price = _as_float(order_status.get('price'), mm_order.price)
+                        if price <= 0:
+                            price = _as_float(info.get('price'), mm_order.price)
                         
                         # Track previous filled amount to detect new fills
                         previous_filled = getattr(mm_order, 'filled_amount', 0.0)
@@ -1053,7 +1100,7 @@ class CoinbaseMarketMakingEngine:
                                     self.stats[pair].net_profit_usd -= new_fee
                                     self.net_profit_usd -= new_fee
                                     mm_order.fees_paid += new_fee
-                                if status in ['closed', 'filled']:
+                                if status in ['closed', 'filled', 'done', 'completed']:
                                     mm_order.status = 'filled'
                                     mm_order.filled_at = datetime.now()
                                     self.stats[pair].filled_orders += 1
@@ -1121,7 +1168,7 @@ class CoinbaseMarketMakingEngine:
                                 logger.info(
                                     f"   🔵 [COINBASE] ✅ SELL {'FULLY ' if status in ['closed', 'filled'] else ''}FILLED: {pair} @ ${price:.4f} for {new_filled:.6f} | Gross: ${gross_accum:.4f} | Fees: ${fee_accum:.4f} | Net: ${net_accum:.4f}"
                                 )
-                                if status in ['closed', 'filled']:
+                                if status in ['closed', 'filled', 'done', 'completed']:
                                     mm_order.status = 'filled'
                                     mm_order.filled_at = datetime.now()
                                     self.stats[pair].filled_orders += 1
@@ -1133,7 +1180,7 @@ class CoinbaseMarketMakingEngine:
                             current_fill_rate = self.pair_fill_rates.get(pair, 0.5)
                             self.pair_fill_rates[pair] = current_fill_rate * 0.9 + 0.1
                         
-                        elif status in ['closed', 'filled'] and mm_order.status == 'open':
+                        elif status in ['closed', 'filled', 'done', 'completed'] and mm_order.status == 'open':
                             # Order fully filled but we didn't detect it above (fallback)
                             mm_order.status = 'filled'
                             mm_order.filled_at = datetime.now()
@@ -1211,7 +1258,7 @@ class CoinbaseMarketMakingEngine:
                                 )
                                 self.pair_performance[pair]['total_trades'] += 1
                         
-                        elif status == 'canceled':
+                        elif status in ['canceled', 'cancelled']:
                             mm_order.status = 'canceled'
                             cancel_reason = (
                                 order_status.get('info')
@@ -1405,19 +1452,40 @@ class CoinbaseMarketMakingEngine:
                 self.pending_sell_queue.pop(pair, None)
                 continue
 
+            market_info = exchange.markets.get(pair, {}) or {}
+            limits = market_info.get('limits', {}) or {}
+            exchange_min_cost = limits.get('cost', {}).get('min', 0) or 0
+            min_cost = max(exchange_min_cost, 1.0) if exchange_min_cost > 0 else 1.0
+
+            total_amount = sum(entry.get('amount', 0.0) for entry in entries)
+            weighted_buy_value = sum(entry.get('amount', 0.0) * entry.get('buy_price', 0.0) for entry in entries)
+            weighted_buy_price = (weighted_buy_value / total_amount) if total_amount > 0 else 0.0
+            current_price = await self.get_current_price(pair) or weighted_buy_price
+            aggregated_value = total_amount * max(current_price, weighted_buy_price)
+
+            if total_amount > 0 and aggregated_value >= min_cost:
+                aggregated_success = await self._place_sell_order_for_filled_buy(
+                    pair,
+                    total_amount,
+                    weighted_buy_price or current_price,
+                    allow_queue=False
+                )
+                if aggregated_success:
+                    logger.info(
+                        f"   🔵 [COINBASE] {pair}: Cleared pending queue with aggregated sell "
+                        f"{total_amount:.6f} (~${aggregated_value:.2f})"
+                    )
+                    self.pending_sell_queue.pop(pair, None)
+                    continue
+
             remaining: List[Dict[str, Any]] = []
             for entry in entries:
                 amount = entry.get('amount', 0.0)
                 buy_price = entry.get('buy_price', 0.0)
                 retry_count = entry.get('retry_count', 0)
 
-                market_info = exchange.markets.get(pair, {})
-                limits = market_info.get('limits', {})
-                exchange_min_cost = limits.get('cost', {}).get('min', 0) or 0
-                min_cost = max(exchange_min_cost, 1.0) if exchange_min_cost > 0 else 1.0
-                estimated_value = amount * (buy_price or 0.0)
+                estimated_value = amount * max(current_price, buy_price)
                 if estimated_value < min_cost * 0.9:
-                    # Too small to sell yet, keep accumulating
                     entry['retry_count'] = retry_count + 1
                     if entry['retry_count'] % 10 == 0:
                         logger.info(
@@ -1581,11 +1649,18 @@ class CoinbaseMarketMakingEngine:
                     logger.info(f"      Skip reasons this cycle: {error_breakdown}")
                 pending_items = sum(len(entries) for entries in self.pending_sell_queue.values())
                 if pending_items:
-                    pending_value_usd = sum(
-                        sum(entry.get('amount', 0.0) * entry.get('buy_price', 0.0) for entry in entries)
-                        for entries in self.pending_sell_queue.values()
-                    )
-                    logger.info(f"      Pending sell queue: {pending_items} entries (~${pending_value_usd:.2f} not yet listed)")
+                    pending_details = []
+                    for pending_pair, entries in self.pending_sell_queue.items():
+                        pair_amount = sum(entry.get('amount', 0.0) for entry in entries)
+                        pair_value = sum(
+                            entry.get('amount', 0.0) * entry.get('buy_price', 0.0)
+                            for entry in entries
+                        )
+                        pending_details.append(f"{pending_pair}:{pair_amount:.4f} (~${pair_value:.2f})")
+                    detail_preview = "; ".join(pending_details[:5])
+                    if len(pending_details) > 5:
+                        detail_preview += "; ..."
+                    logger.info(f"      Pending sell queue: {pending_items} entries [{detail_preview}]")
                 active_cooldowns = {
                     pair: reason for pair, (until, reason) in self.pair_cooldowns.items() if until > datetime.now()
                 }
