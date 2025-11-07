@@ -604,12 +604,20 @@ class GeminiMarketMakingEngine:
             
             pending_entries = self.pending_sell_queue.get(pair, [])
             if pending_entries:
-                pending_value = sum(entry.get('amount', 0.0) * (current_price or 0.0) for entry in pending_entries)
-                logger.info(
-                    f"   🟢 [GEMINI] ⏭️ Skipping {pair} - pending sell queue size {len(pending_entries)} (~${pending_value:.2f})"
+                pending_value = sum(
+                    entry.get('amount', 0.0) * max(current_price or 0.0, entry.get('buy_price', 0.0))
+                    for entry in pending_entries
                 )
-                self._register_failure(pair, 'pending_inventory', f"pending value ${pending_value:.2f}")
-                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'pending_sell_queue'}
+                if pending_value >= self.min_order_value_usd:
+                    logger.info(
+                        f"   🟢 [GEMINI] ⏭️ Skipping {pair} - pending sell queue size {len(pending_entries)} (~${pending_value:.2f})"
+                    )
+                    self._register_failure(pair, 'pending_inventory', f"pending value ${pending_value:.2f}")
+                    return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'pending_sell_queue'}
+                else:
+                    logger.info(
+                        f"   🟢 [GEMINI] {pair}: Pending queue ${pending_value:.2f} below threshold, continuing to quote both sides"
+                    )
 
             # Get market info for precision requirements FIRST (before calculating order amount)
             exchange = self.exchange_manager.get_exchange('gemini')
