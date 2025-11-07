@@ -736,11 +736,11 @@ class GeminiMarketMakingEngine:
             
             # Check minimum order size (recalculate after rounding)
             min_order_value = order_amount * buy_price
-            if min_order_value < min_cost:
+            if min_order_value < min_buy_cost:
                 # Try to increase order amount to meet minimum
                 # 🔵 CRITICAL FIX: Prevent division by zero
                 if buy_price > 0:
-                    required_amount = min_cost / buy_price
+                    required_amount = min_buy_cost / buy_price
                     if required_amount > order_amount:
                         order_amount = round(required_amount, amount_precision)
                         min_order_value = order_amount * buy_price
