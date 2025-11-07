@@ -99,6 +99,7 @@ class GeminiMarketMakingEngine:
         # 🟢 IMPROVEMENT: Track fill rates for pairs (focus on pairs that actually fill)
         self.pair_fill_rates: Dict[str, float] = {}  # pair -> fill_rate (0-1)
         self.last_buy_prices: Dict[str, float] = defaultdict(lambda: 0.0)
+        self.pair_anomaly_counters: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
         
         # Running state
         self.running = False
@@ -706,48 +707,49 @@ class GeminiMarketMakingEngine:
                     logger.info(
                         f"   🟢 [GEMINI] {pair}: ⏭️ Skipping sell order - inventory {inventory:.6f} ({inventory * sell_price:.2f}) < minimum requirement {required_amount:.6f} ({min_cost:.2f})"
                     )
-                else:
-                    sell_amount = inventory
-                    logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE SELL ORDER... (Inventory: {inventory:.6f})")
-                    try:
-                        # 🔵 CRITICAL FIX: Validate sell order parameters
-                        if sell_amount is None or sell_amount <= 0:
-                            logger.error(f"   🟢 [GEMINI] ❌ Invalid sell_amount: {sell_amount}")
-                            raise ValueError(f"Invalid sell_amount: {sell_amount}")
-                        if sell_price is None or sell_price <= 0:
-                            logger.error(f"   🟢 [GEMINI] ❌ Invalid sell_price: {sell_price}")
-                            raise ValueError(f"Invalid sell_price: {sell_price}")
-                        
-                        logger.debug(f"   🟢 [GEMINI] {pair}: Creating sell order - amount={sell_amount:.6f}, price=${sell_price:.6f}")
-                        sell_order = await self.exchange_manager.create_order(
-                            exchange_id='gemini',
-                            symbol=pair,
-                            order_type='limit',
+                    return
+
+                sell_amount = inventory
+                logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE SELL ORDER... (Inventory: {inventory:.6f})")
+                try:
+                    # 🔵 CRITICAL FIX: Validate sell order parameters
+                    if sell_amount is None or sell_amount <= 0:
+                        logger.error(f"   🟢 [GEMINI] ❌ Invalid sell_amount: {sell_amount}")
+                        raise ValueError(f"Invalid sell_amount: {sell_amount}")
+                    if sell_price is None or sell_price <= 0:
+                        logger.error(f"   🟢 [GEMINI] ❌ Invalid sell_price: {sell_price}")
+                        raise ValueError(f"Invalid sell_price: {sell_price}")
+                    
+                    logger.debug(f"   🟢 [GEMINI] {pair}: Creating sell order - amount={sell_amount:.6f}, price=${sell_price:.6f}")
+                    sell_order = await self.exchange_manager.create_order(
+                        exchange_id='gemini',
+                        symbol=pair,
+                        order_type='limit',
+                        side='sell',
+                        amount=sell_amount,
+                        price=sell_price
+                    )
+                    logger.debug(f"   🟢 [GEMINI] {pair}: Sell order response = {sell_order}")
+                    
+                    if sell_order and sell_order.get('id'):
+                        sell_order_id = sell_order.get('id')
+                        sell_mm_order = MarketMakingOrder(
+                            pair=pair,
                             side='sell',
+                            order_id=sell_order_id,
+                            price=sell_price,
                             amount=sell_amount,
-                            price=sell_price
+                            status='open'
                         )
-                        logger.debug(f"   🟢 [GEMINI] {pair}: Sell order response = {sell_order}")
-                        
-                        if sell_order and sell_order.get('id'):
-                            sell_order_id = sell_order.get('id')
-                            sell_mm_order = MarketMakingOrder(
-                                pair=pair,
-                                side='sell',
-                                order_id=sell_order_id,
-                                price=sell_price,
-                                amount=sell_amount,
-                                status='open'
-                            )
-                            self.active_orders[pair].append(sell_mm_order)
-                            orders_placed += 1
-                            logger.info(f"   🟢 [GEMINI] ✅✅✅ SELL ORDER PLACED SUCCESSFULLY: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} (${sell_amount * sell_price:.2f}) | Order ID: {sell_order_id}")
-                        else:
-                            logger.warning(f"   🟢 [GEMINI] ⚠️ Sell order creation returned no ID: {sell_order}")
-                    except Exception as e:
-                        logger.error(f"   🟢 [GEMINI] ❌ FAILED TO PLACE SELL ORDER for {pair}: {type(e).__name__}: {e}")
-                        import traceback
-                        logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
+                        self.active_orders[pair].append(sell_mm_order)
+                        orders_placed += 1
+                        logger.info(f"   🟢 [GEMINI] ✅✅✅ SELL ORDER PLACED SUCCESSFULLY: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} (${sell_amount * sell_price:.2f}) | Order ID: {sell_order_id}")
+                    else:
+                        logger.warning(f"   🟢 [GEMINI] ⚠️ Sell order creation returned no ID: {sell_order}")
+                except Exception as e:
+                    logger.error(f"   🟢 [GEMINI] ❌ FAILED TO PLACE SELL ORDER for {pair}: {type(e).__name__}: {e}")
+                    import traceback
+                    logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
             else:
                 if inventory is None or inventory <= 0:
                     logger.debug(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping sell order - no inventory")
