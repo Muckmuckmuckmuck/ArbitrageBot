@@ -11,6 +11,7 @@ import asyncio
 import logging
 import time
 from typing import Dict, List, Optional, Tuple
+from decimal import Decimal
 import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -51,6 +52,7 @@ class MarketMakingOrder:
     created_at: datetime = field(default_factory=datetime.now)
     filled_at: Optional[datetime] = None
     filled_amount: float = 0.0  # Track partial fills - amount that has been filled so far
+    fees_paid: float = 0.0
 
 @dataclass
 class MarketMakingStats:
@@ -63,6 +65,8 @@ class MarketMakingStats:
     net_profit_usd: float = 0.0
     avg_spread_captured: float = 0.0
     win_rate: float = 0.0
+    wins: int = 0
+    losses: int = 0
 
 class GeminiMarketMakingEngine:
     """Market-making engine for Gemini exchange"""
@@ -102,6 +106,8 @@ class GeminiMarketMakingEngine:
         self.last_buy_prices: Dict[str, float] = defaultdict(lambda: 0.0)
         self.pair_anomaly_counters: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self.min_volume_usd = 50000.0
+        self.net_profit_usd: float = 0.0
+        self.position_tracker: Dict[str, List[Dict[str, float]]] = defaultdict(list)
         
         # Running state
         self.running = False
@@ -932,13 +938,27 @@ class GeminiMarketMakingEngine:
                             
                             if mm_order.side == 'buy':
                                 # Buy order got filled (partially or fully)
+                                total_fee = float(order_status.get('fee', {}).get('cost', 0) or 0)
+                                fee_per_unit = (total_fee / filled) if filled > 0 else 0.0
+                                if new_filled > 0:
+                                    new_fee = fee_per_unit * new_filled
+                                    cost_value = price * new_filled
+                                    self.position_tracker[pair].append({
+                                        'amount': new_filled,
+                                        'cost': cost_value,
+                                        'fees': new_fee
+                                    })
+                                    self.stats[pair].total_fees_usd += new_fee
+                                    self.stats[pair].net_profit_usd -= new_fee
+                                    self.net_profit_usd -= new_fee
+                                    mm_order.fees_paid += new_fee
+                                    self.last_buy_prices[pair] = price
                                 if status in ['closed', 'filled']:
                                     mm_order.status = 'filled'
                                     mm_order.filled_at = datetime.now()
                                     self.stats[pair].filled_orders += 1
                                     self.stats[pair].total_orders += 1
                                     filled_count += 1
-                                    self.last_buy_prices[pair] = price
                                     logger.info(f"   🟢 [GEMINI] ✅✅✅ BUY FULLY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
                                 else:
                                     # Partial fill
@@ -947,7 +967,6 @@ class GeminiMarketMakingEngine:
                                     # 🟢 CRITICAL: Immediately sell the NEW amount that was just filled
                                     if new_filled > 0:
                                         try:
-                                            self.last_buy_prices[pair] = price
                                             await self._place_sell_order_for_filled_buy(pair, new_filled, price)
                                         except Exception as e:
                                             logger.error(f"   🟢 [GEMINI] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
@@ -956,20 +975,50 @@ class GeminiMarketMakingEngine:
                             
                             elif mm_order.side == 'sell':
                                 # Sell order got filled (partially or fully)
+                                total_fee = float(order_status.get('fee', {}).get('cost', 0) or 0)
+                                fee_per_unit = (total_fee / filled) if filled > 0 else 0.0
+                                remaining = new_filled
+                                gross_accum = 0.0
+                                fee_accum = 0.0
+                                net_accum = 0.0
+                                while remaining > 1e-12 and self.position_tracker[pair]:
+                                    lot = self.position_tracker[pair][0]
+                                    lot_amount = lot['amount']
+                                    take = min(remaining, lot_amount)
+                                    proportion = take / lot_amount if lot_amount > 0 else 0
+                                    cost_value = lot['cost'] * proportion
+                                    buy_fee = lot['fees'] * proportion
+                                    sell_fee = fee_per_unit * take
+                                    revenue = price * take
+                                    gross = revenue - cost_value
+                                    fees_total = buy_fee + sell_fee
+                                    net = gross - fees_total
+                                    gross_accum += gross
+                                    fee_accum += fees_total
+                                    net_accum += net
+                                    lot['amount'] -= take
+                                    lot['cost'] -= cost_value
+                                    lot['fees'] -= buy_fee
+                                    if lot['amount'] <= 1e-12:
+                                        self.position_tracker[pair].pop(0)
+                                    remaining -= take
+                                if remaining > 1e-12:
+                                    logger.warning(f"   🟢 [GEMINI] ⚠️ {pair}: Sell filled {new_filled:.6f} but only matched {new_filled-remaining:.6f} from inventory tracker")
+                                self.stats[pair].total_profit_usd += gross_accum
+                                self.stats[pair].total_fees_usd += fee_accum
+                                self.stats[pair].net_profit_usd += net_accum
+                                self.net_profit_usd += net_accum
+                                if net_accum >= 0:
+                                    self.stats[pair].wins += 1
+                                else:
+                                    self.stats[pair].losses += 1
+                                logger.info(f"   🟢 [GEMINI] ✅ SELL {'FULLY ' if status in ['closed','filled'] else ''}FILLED: {pair} @ ${price:.4f} for {new_filled:.6f} | Gross: ${gross_accum:.4f} | Fees: ${fee_accum:.4f} | Net: ${net_accum:.4f}")
                                 if status in ['closed', 'filled']:
                                     mm_order.status = 'filled'
                                     mm_order.filled_at = datetime.now()
                                     self.stats[pair].filled_orders += 1
                                     self.stats[pair].total_orders += 1
                                     filled_count += 1
-                                    spread_profit = (price - mm_order.price) * filled if mm_order.side == 'sell' else 0
-                                    logger.info(f"   🟢 [GEMINI] ✅✅✅ SELL FULLY FILLED: {pair} @ ${price:.4f} for {filled:.6f} | Profit: ${spread_profit:.2f}")
-                                    self.stats[pair].total_profit_usd += spread_profit
-                                else:
-                                    # Partial fill
-                                    spread_profit = (price - mm_order.price) * new_filled
-                                    logger.info(f"   🟢 [GEMINI] ✅ SELL PARTIALLY FILLED: {pair} @ ${price:.4f} - {new_filled:.6f} filled (total: {filled:.6f}/{mm_order.amount:.6f}) | Profit: ${spread_profit:.2f}")
-                                    self.stats[pair].total_profit_usd += spread_profit
                             
                             # Update fill rate
                             current_fill_rate = self.pair_fill_rates.get(pair, 0.5)
@@ -986,14 +1035,12 @@ class GeminiMarketMakingEngine:
                             if mm_order.side == 'buy':
                                 logger.info(f"   🟢 [GEMINI] ✅✅✅ BUY FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
                                 try:
-                                    self.last_buy_prices[pair] = price
                                     await self._place_sell_order_for_filled_buy(pair, filled, price)
                                 except Exception as e:
                                     logger.error(f"   🟢 [GEMINI] ❌ ERROR placing sell order after buy fill: {type(e).__name__}: {e}")
                             else:
-                                spread_profit = (price - mm_order.price) * filled if mm_order.side == 'sell' else 0
-                                logger.info(f"   🟢 [GEMINI] ✅ SELL FILLED: {pair} @ ${price:.4f} for {filled:.6f} | Profit: ${spread_profit:.2f}")
-                                self.stats[pair].total_profit_usd += spread_profit
+                                logger.info(f"   🟢 [GEMINI] ✅ SELL FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
+                                self.stats[pair].total_profit_usd += (price - mm_order.price) * filled
                         
                         elif status == 'canceled':
                             mm_order.status = 'canceled'
@@ -1260,17 +1307,25 @@ class GeminiMarketMakingEngine:
                 
                 # Summary stats
                 total_profit = sum(s.total_profit_usd for s in self.stats.values())
+                total_fees = sum(s.total_fees_usd for s in self.stats.values())
+                total_net = sum(s.net_profit_usd for s in self.stats.values())
                 total_orders = sum(s.total_orders for s in self.stats.values())
                 total_filled = sum(s.filled_orders for s in self.stats.values())
-                
+                total_wins = sum(s.wins for s in self.stats.values())
+                total_losses = sum(s.losses for s in self.stats.values())
+                win_denom = total_wins + total_losses
+                 
                 logger.info("")
                 logger.info(f"   🟢 [GEMINI] CYCLE SUMMARY:")
                 logger.info(f"      Orders placed this cycle: {total_orders_placed}")
                 logger.info(f"      Orders filled this cycle: {total_orders_filled}")
-                logger.info(f"      Total profit (all-time): ${total_profit:.2f}")
+                logger.info(f"      Gross profit (all-time): ${total_profit:.2f}")
+                logger.info(f"      Fees paid (all-time): ${total_fees:.2f}")
+                logger.info(f"      Net profit (all-time): ${total_net:.2f}")
                 logger.info(f"      Total orders (all-time): {total_orders}")
                 logger.info(f"      Total filled (all-time): {total_filled}")
-                logger.info(f"      Win rate: {(total_filled / total_orders * 100) if total_orders > 0 else 0:.1f}%")
+                logger.info(f"      Wins / Losses: {total_wins} / {total_losses}")
+                logger.info(f"      Win rate: {(total_wins / win_denom * 100) if win_denom > 0 else 0:.1f}%")
                 logger.info("=" * 80)
                 
                 # Wait before next update cycle
