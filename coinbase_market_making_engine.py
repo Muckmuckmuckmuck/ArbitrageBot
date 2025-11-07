@@ -628,33 +628,56 @@ class CoinbaseMarketMakingEngine:
                         logger.error(f"   🔵 [COINBASE] ❌ FAILED TO PLACE BUY ORDER: {e}")
             
             # Place sell order (if we have inventory)
-            if inventory is not None and inventory > order_amount * 0.5:
-                try:
-                    sell_amount = min(order_amount, inventory)
-                    sell_order = await self.exchange_manager.create_order(
-                        exchange_id='coinbase',
-                        symbol=pair,
-                        order_type='limit',
-                        side='sell',
-                        amount=sell_amount,
-                        price=sell_price
+            if inventory is not None and inventory > 0:
+                min_amount_limit = market_info.get('limits', {}).get('amount', {}).get('min', 0) or 0
+                required_amount_for_value = (min_cost / sell_price) if sell_price and sell_price > 0 else 0
+                required_amount = max(min_amount_limit, required_amount_for_value)
+
+                if inventory < required_amount:
+                    logger.info(
+                        f"   🔵 [COINBASE] {pair}: ⏭️ Skipping sell order - inventory {inventory:.6f} ({inventory * sell_price:.2f}) < minimum requirement {required_amount:.6f} ({min_cost:.2f})"
                     )
-                    
-                    if sell_order and sell_order.get('id'):
-                        sell_order_id = sell_order.get('id')
-                        sell_mm_order = MarketMakingOrder(
-                            pair=pair,
+                else:
+                    sell_amount = inventory
+                    logger.info(f"   🔵 [COINBASE] {pair}: 📝 ATTEMPTING TO PLACE SELL ORDER... (Inventory: {inventory:.6f})")
+                    try:
+                        # 🔵 CRITICAL FIX: Validate sell order parameters
+                        if sell_amount is None or sell_amount <= 0:
+                            logger.error(f"   🔵 [COINBASE] ❌ Invalid sell_amount: {sell_amount}")
+                            raise ValueError(f"Invalid sell_amount: {sell_amount}")
+                        if sell_price is None or sell_price <= 0:
+                            logger.error(f"   🔵 [COINBASE] ❌ Invalid sell_price: {sell_price}")
+                            raise ValueError(f"Invalid sell_price: {sell_price}")
+                        
+                        logger.debug(f"   🔵 [COINBASE] {pair}: Creating sell order - amount={sell_amount:.6f}, price=${sell_price:.6f}")
+                        sell_order = await self.exchange_manager.create_order(
+                            exchange_id='coinbase',
+                            symbol=pair,
+                            order_type='limit',
                             side='sell',
-                            order_id=sell_order_id,
-                            price=sell_price,
                             amount=sell_amount,
-                            status='open'
+                            price=sell_price
                         )
-                        self.active_orders[pair].append(sell_mm_order)
-                        orders_placed += 1
-                        logger.info(f"   🔵 [COINBASE] ✅ SELL ORDER PLACED: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} | Order ID: {sell_order_id}")
-                except Exception as e:
-                    logger.error(f"   🔵 [COINBASE] ❌ FAILED TO PLACE SELL ORDER: {e}")
+                        logger.debug(f"   🔵 [COINBASE] {pair}: Sell order response = {sell_order}")
+                        
+                        if sell_order and sell_order.get('id'):
+                            sell_order_id = sell_order.get('id')
+                            sell_mm_order = MarketMakingOrder(
+                                pair=pair,
+                                side='sell',
+                                order_id=sell_order_id,
+                                price=sell_price,
+                                amount=sell_amount,
+                                status='open'
+                            )
+                            self.active_orders[pair].append(sell_mm_order)
+                            orders_placed += 1
+                            logger.info(f"   🔵 [COINBASE] ✅✅✅ SELL ORDER PLACED SUCCESSFULLY: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} (${sell_amount * sell_price:.2f}) | Order ID: {sell_order_id}")
+                            self.pair_performance[pair]['total_trades'] += 1
+                        else:
+                            logger.warning(f"   🔵 [COINBASE] ⚠️ Sell order creation returned no ID: {sell_order}")
+                    except Exception as e:
+                        logger.error(f"   🔵 [COINBASE] ❌ FAILED TO PLACE SELL ORDER for {pair}: {type(e).__name__}: {e}")
             
             # Check for filled orders
             orders_filled = await self.check_and_update_orders(pair)
@@ -679,8 +702,8 @@ class CoinbaseMarketMakingEngine:
         now = datetime.now()
         for order in open_orders:
             age_seconds = (now - order.created_at).total_seconds()
-            if age_seconds > 300:  # 5 minutes (increased to give more time to fill)
-                return True, f"order {order.order_id} age {age_seconds:.0f}s > 300s"
+            if age_seconds > 900:  # 15 minutes to allow fills
+                return True, f"order {order.order_id} age {age_seconds:.0f}s > 900s"
         
         # Check if prices have moved significantly
         try:
@@ -918,12 +941,17 @@ class CoinbaseMarketMakingEngine:
             sell_amount = round(sell_amount, amount_precision)
             
             # Check minimum order size
-            min_cost = market_info.get('limits', {}).get('cost', {}).get('min', 1.0)
-            min_amount = market_info.get('limits', {}).get('amount', {}).get('min', 0.0)
-            
+            limits = market_info.get('limits', {})
+            exchange_min_cost = limits.get('cost', {}).get('min')
+            min_cost = exchange_min_cost if exchange_min_cost and exchange_min_cost > 0 else 1.0
+            min_amount = limits.get('amount', {}).get('min', 0.0) or 0.0
+
             if sell_amount * sell_price < min_cost:
-                logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: Sell order value ${sell_amount * sell_price:.2f} < minimum ${min_cost:.2f}, skipping")
-                return
+                if inventory * sell_price >= min_cost:
+                    sell_amount = inventory
+                else:
+                    logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: Sell order value ${sell_amount * sell_price:.2f} < minimum ${min_cost:.2f}, skipping")
+                    return
             
             if sell_amount < min_amount:
                 logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: Sell amount {sell_amount:.6f} < minimum {min_amount:.6f}, skipping")

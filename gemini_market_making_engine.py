@@ -694,19 +694,19 @@ class GeminiMarketMakingEngine:
                 logger.info(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping buy order - inventory {inventory_value_str} >= max ${max_inventory:.2f}")
             
             # Place sell order (if we have inventory)
-            # 🔵 CRITICAL FIX: Use actual inventory, not order_amount (which might be 0 if buy was skipped)
-            # Only place sell order if we have sufficient inventory
             if inventory is not None and inventory > 0:
-                # Calculate sell amount based on available inventory, not order_amount
-                # Use a reasonable sell amount (e.g., 50% of inventory or minimum order size)
-                min_sell_amount = min(inventory * 0.5, inventory)  # Sell up to 50% of inventory
-                
-                # Check if we have enough for minimum order
-                if min_sell_amount * sell_price >= min_cost:
+                min_amount_limit = market_info.get('limits', {}).get('amount', {}).get('min', 0) or 0
+                required_amount_for_value = (min_cost / sell_price) if sell_price and sell_price > 0 else 0
+                required_amount = max(min_amount_limit, required_amount_for_value)
+
+                if inventory < required_amount:
+                    logger.info(
+                        f"   🟢 [GEMINI] {pair}: ⏭️ Skipping sell order - inventory {inventory:.6f} ({inventory * sell_price:.2f}) < minimum requirement {required_amount:.6f} ({min_cost:.2f})"
+                    )
+                else:
+                    sell_amount = inventory
                     logger.info(f"   🟢 [GEMINI] {pair}: 📝 ATTEMPTING TO PLACE SELL ORDER... (Inventory: {inventory:.6f})")
                     try:
-                        sell_amount = min(min_sell_amount, inventory)
-                        
                         # 🔵 CRITICAL FIX: Validate sell order parameters
                         if sell_amount is None or sell_amount <= 0:
                             logger.error(f"   🟢 [GEMINI] ❌ Invalid sell_amount: {sell_amount}")
@@ -745,8 +745,6 @@ class GeminiMarketMakingEngine:
                         logger.error(f"   🟢 [GEMINI] ❌ FAILED TO PLACE SELL ORDER for {pair}: {type(e).__name__}: {e}")
                         import traceback
                         logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
-                else:
-                    logger.debug(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping sell order - order value ${min_sell_amount * sell_price:.2f} < minimum ${min_cost:.2f}")
             else:
                 if inventory is None or inventory <= 0:
                     logger.debug(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping sell order - no inventory")
@@ -788,8 +786,8 @@ class GeminiMarketMakingEngine:
         now = datetime.now()
         for order in open_orders:
             age_seconds = (now - order.created_at).total_seconds()
-            if age_seconds > 300:  # 5 minutes (increased to give more time to fill)
-                return True, f"order {order.order_id} age {age_seconds:.0f}s > 300s"
+            if age_seconds > 900:  # 15 minutes to allow fills
+                return True, f"order {order.order_id} age {age_seconds:.0f}s > 900s"
         
         # Check if prices have moved significantly
         try:
@@ -1026,12 +1024,17 @@ class GeminiMarketMakingEngine:
             sell_amount = round(sell_amount, amount_precision)
             
             # Check minimum order size
-            min_cost = market_info.get('limits', {}).get('cost', {}).get('min', 5.0)
-            min_amount = market_info.get('limits', {}).get('amount', {}).get('min', 0.0)
-            
+            limits = market_info.get('limits', {})
+            exchange_min_cost = limits.get('cost', {}).get('min')
+            min_cost = exchange_min_cost if exchange_min_cost and exchange_min_cost > 0 else 1.0
+            min_amount = limits.get('amount', {}).get('min', 0.0) or 0.0
+
             if sell_amount * sell_price < min_cost:
-                logger.warning(f"   🟢 [GEMINI] ⚠️ {pair}: Sell order value ${sell_amount * sell_price:.2f} < minimum ${min_cost:.2f}, skipping")
-                return
+                if inventory * sell_price >= min_cost:
+                    sell_amount = inventory
+                else:
+                    logger.warning(f"   🟢 [GEMINI] ⚠️ {pair}: Sell order value ${sell_amount * sell_price:.2f} < minimum ${min_cost:.2f}, skipping")
+                    return
             
             if sell_amount < min_amount:
                 logger.warning(f"   🟢 [GEMINI] ⚠️ {pair}: Sell amount {sell_amount:.6f} < minimum {min_amount:.6f}, skipping")
