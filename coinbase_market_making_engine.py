@@ -301,12 +301,15 @@ class CoinbaseMarketMakingEngine:
             balance = await self.exchange_manager.fetch_balance('coinbase')
             free_balance = balance.get('free', {})
             exchange = self.exchange_manager.get_exchange('coinbase')
+            logger.info("   🔵 [COINBASE] 🔁 Checking account inventory for outstanding positions...")
             
             # Check all currencies (not just trading pairs)
+            tradable_found = False
             for currency, amount in free_balance.items():
                 # Skip quote currencies (cash)
                 if currency in ['USD', 'USDT', 'USDC', 'GUSD'] or amount <= 0:
                     continue
+                tradable_found = True
                 
                 # Try to find a trading pair for this currency
                 for quote in ['USD', 'USDC', 'USDT']:
@@ -329,7 +332,9 @@ class CoinbaseMarketMakingEngine:
                         existing_orders = self.active_orders.get(pair, [])
                         open_sell_orders = [o for o in existing_orders if o.side == 'sell' and o.status == 'open']
                         if open_sell_orders:
-                            logger.debug(f"   🔵 [COINBASE] {pair}: Already have open sell order, skipping")
+                            logger.info(
+                                f"   🔵 [COINBASE] {pair}: Existing sell order already open (count={len(open_sell_orders)}), skipping forced sell"
+                            )
                             break
                         
                         # Calculate sell amount (use all available inventory)
@@ -343,7 +348,9 @@ class CoinbaseMarketMakingEngine:
                         # Check minimum order size
                         order_value = sell_amount * sell_price
                         if order_value < min_cost:
-                            logger.debug(f"   🔵 [COINBASE] {pair}: Inventory value ${order_value:.2f} < minimum ${min_cost:.2f}, skipping")
+                            logger.info(
+                                f"   🔵 [COINBASE] {pair}: Inventory value ${order_value:.2f} below minimum ${min_cost:.2f}, keeping position"
+                            )
                             break
                         
                         # Place sell order
@@ -374,6 +381,8 @@ class CoinbaseMarketMakingEngine:
                             logger.error(f"   🔵 [COINBASE] ❌ Failed to sell inventory {pair}: {type(e).__name__}: {e}")
                         
                         break  # Found a working pair, move to next currency
+            if not tradable_found:
+                logger.info("   🔵 [COINBASE] No non-cash balances detected for forced selling.")
         except Exception as e:
             logger.error(f"   🔵 [COINBASE] ❌ Error selling all inventory: {type(e).__name__}: {e}")
     
@@ -440,12 +449,12 @@ class CoinbaseMarketMakingEngine:
             
             # 🔵 SMART: Only cancel/update orders if prices have moved significantly
             # This prevents canceling orders that are about to fill
-            should_update_orders = await self.should_update_pair_orders(pair, dynamic_spacing)
+            should_update_orders, update_reason = await self.should_update_pair_orders(pair, dynamic_spacing)
             if should_update_orders:
-                logger.debug(f"   🔵 [COINBASE] {pair}: Prices moved significantly, updating orders")
-                await self.cancel_pair_orders(pair)
+                logger.info(f"   🔵 [COINBASE] {pair}: Updating existing orders - Reason: {update_reason}")
+                await self.cancel_pair_orders(pair, reason=f"update_required: {update_reason}")
             else:
-                logger.debug(f"   🔵 [COINBASE] {pair}: Existing orders still competitive, keeping them")
+                logger.info(f"   🔵 [COINBASE] {pair}: Keeping existing orders - Reason: {update_reason}")
                 # Check for fills on existing orders
                 filled = await self.check_and_update_orders(pair)
                 return {'success': True, 'orders_placed': 0, 'orders_filled': filled, 'error': None}
@@ -656,30 +665,22 @@ class CoinbaseMarketMakingEngine:
             logger.error(f"   🔵 [COINBASE] ❌ ERROR placing market-making orders for {pair}: {e}")
             return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': str(e)}
     
-    async def should_update_pair_orders(self, pair: str, target_spacing: float) -> bool:
-        """
-        Determine if existing orders should be updated
-        Returns True if:
-        - No existing orders
-        - Orders are older than 2 minutes
-        - Prices have moved significantly (>0.5% away from current market)
-        """
+    async def should_update_pair_orders(self, pair: str, target_spacing: float) -> Tuple[bool, str]:
+        """Determine if existing orders should be updated. Returns (should_update, reason)."""
         existing_orders = self.active_orders.get(pair, [])
         if not existing_orders:
-            return True  # No orders, need to place new ones
+            return True, "no existing orders"
         
-        # Check if any orders are still open
         open_orders = [o for o in existing_orders if o.status == 'open']
         if not open_orders:
-            return True  # No open orders, need to place new ones
+            return True, "all orders closed"
         
         # Check order age - if older than 5 minutes, update them (increased from 2 to 5 minutes)
         now = datetime.now()
         for order in open_orders:
             age_seconds = (now - order.created_at).total_seconds()
             if age_seconds > 300:  # 5 minutes (increased to give more time to fill)
-                logger.debug(f"   🔵 [COINBASE] {pair}: Order {order.order_id} is {age_seconds:.0f}s old, updating")
-                return True
+                return True, f"order {order.order_id} age {age_seconds:.0f}s > 300s"
         
         # Check if prices have moved significantly
         try:
@@ -688,7 +689,7 @@ class CoinbaseMarketMakingEngine:
             current_ask = ticker.get('ask', 0) or 0
             
             if current_bid <= 0 or current_ask <= 0:
-                return True  # Can't check, update anyway
+                return True, "missing bid/ask data"
             
             for order in open_orders:
                 if order.price > 0:
@@ -699,20 +700,23 @@ class CoinbaseMarketMakingEngine:
                         price_diff_pct = abs((current_ask - order.price) / current_ask) * 100
                     
                     if price_diff_pct > 1.0:  # More than 1.0% away (increased from 0.5% to prevent premature cancellation)
-                        logger.debug(f"   🔵 [COINBASE] {pair}: Order {order.order_id} price {price_diff_pct:.2f}% away from market, updating")
-                        return True
+                        return True, f"order {order.order_id} price drift {price_diff_pct:.2f}%"
         except Exception as e:
             logger.debug(f"   🔵 [COINBASE] Error checking price movement for {pair}: {e}")
-            # On error, don't update (keep existing orders)
-            return False
+            return True, f"error checking price drift: {e}"
         
         # Orders are still competitive, keep them
-        return False
+        return False, "orders still competitive"
     
-    async def cancel_pair_orders(self, pair: str):
-        """Cancel all active orders for a pair"""
+    async def cancel_pair_orders(self, pair: str, reason: str = "unspecified"):
+        """Cancel all active orders for a pair with detailed logging"""
         try:
             orders_to_cancel = self.active_orders[pair].copy()
+            open_orders = [o for o in orders_to_cancel if o.status == 'open']
+            if not open_orders:
+                logger.info(f"   🔵 [COINBASE] {pair}: No open orders to cancel (reason: {reason})")
+                return
+            logger.info(f"   🔵 [COINBASE] {pair}: Canceling {len(open_orders)} order(s) - Reason: {reason}")
             for mm_order in orders_to_cancel:
                 if mm_order.order_id and mm_order.status == 'open':
                     try:
@@ -722,16 +726,19 @@ class CoinbaseMarketMakingEngine:
                             pair
                         )
                         mm_order.status = 'canceled'
-                        logger.debug(f"   🔵 [COINBASE] Canceled order {mm_order.order_id} for {pair}")
+                        logger.info(
+                            f"   🔵 [COINBASE] ❎ ORDER CANCELED: {pair} | ID {mm_order.order_id} | "
+                            f"Side: {mm_order.side} | Price: ${mm_order.price:.6f} | Amount: {mm_order.amount:.6f}"
+                        )
                     except Exception as e:
-                        logger.debug(f"   🔵 [COINBASE] Error canceling order {mm_order.order_id}: {e}")
+                        logger.error(f"   🔵 [COINBASE] ❌ Failed to cancel order {mm_order.order_id} for {pair}: {e}")
             
             self.active_orders[pair] = [
                 o for o in self.active_orders[pair] 
                 if o.status == 'open' or o.status == 'filled'
             ]
         except Exception as e:
-            logger.debug(f"   🔵 [COINBASE] Error canceling orders for {pair}: {e}")
+            logger.error(f"   🔵 [COINBASE] ❌ Error canceling orders for {pair}: {e}")
     
     async def check_and_update_orders(self, pair: str) -> int:
         """Check order status and update if needed. Returns count of filled orders."""
@@ -833,10 +840,26 @@ class CoinbaseMarketMakingEngine:
                         
                         elif status == 'canceled':
                             mm_order.status = 'canceled'
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                            cancel_reason = (
+                                order_status.get('info')
+                                or order_status.get('reason')
+                                or order_status.get('message')
+                                or 'exchange_cancelled'
+                            )
+                            logger.warning(
+                                f"   🔵 [COINBASE] ⚠️ ORDER CANCELED BY EXCHANGE: {pair} | ID {mm_order.order_id} | "
+                                f"Side: {mm_order.side} | Filled: {filled:.6f} | Remaining: {remaining:.6f} | Reason: {cancel_reason}"
+                            )
+                        else:
+                            mm_order.status = status
+                            logger.info(
+                                f"   🔵 [COINBASE] ℹ️ ORDER STATUS CHECK: {pair} | ID {mm_order.order_id} | "
+                                f"Side: {mm_order.side} | Status: {status} | Filled: {filled:.6f} | Remaining: {remaining:.6f}"
+                            )
+                    except Exception as e:
+                        logger.error(f"   🔵 [COINBASE] ❌ Error checking order {mm_order.order_id} for {pair}: {e}")
+        except Exception as e:
+            logger.error(f"   🔵 [COINBASE] ❌ Error updating orders for {pair}: {e}")
         
         return filled_count
     
@@ -993,7 +1016,7 @@ class CoinbaseMarketMakingEngine:
             
             # Cancel all orders
             for pair in self.available_pairs:
-                await self.cancel_pair_orders(pair)
+                await self.cancel_pair_orders(pair, reason="flatten_positions")
             
             logger.info(f"   🔵 [COINBASE] ✅ Flattened {flattened_count} positions, canceled all orders")
             self.last_flatten_time = datetime.now()
