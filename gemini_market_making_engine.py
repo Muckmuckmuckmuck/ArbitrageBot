@@ -77,8 +77,8 @@ class GeminiMarketMakingEngine:
         exchange_manager: CoinbaseGeminiExchangeManager,
         capital_per_pair: float = 60.0,  # $60 per pair to sustain larger orders
         grid_spacing_percent: float = 0.20,  # 0.20% spacing
-        order_size_percent: float = 0.10,  # 10% of capital per order (~$6)
-        min_spread_percent: float = 0.45,  # Skip if spread < 0.45% (covers fees + buffer)
+        order_size_percent: float = 0.12,  # 12% of capital per order (~$7)
+        min_spread_percent: float = 0.35,  # Skip if spread < 0.35% (covers fees + buffer)
         max_inventory_percent: float = 0.25,  # Max 25% in one asset
         requote_interval_seconds: int = 15,  # Update orders every 15s
         stop_loss_percent: float = 0.02,  # -2% stop loss
@@ -90,15 +90,18 @@ class GeminiMarketMakingEngine:
         self.capital_per_pair = capital_per_pair
         self.grid_spacing_percent = grid_spacing_percent
         self.order_size_percent = order_size_percent
-        self.maker_fee_percent = 0.35  # Estimated maker fee (bps)
+        self.maker_fee_percent = 0.10  # Estimated maker fee (percent)
+        self.taker_fee_percent = 0.35  # Conservative fallback for forced exits
         self.min_order_value_usd = 5.00
-        effective_min_spread = max(min_spread_percent, (self.maker_fee_percent * 2) + 0.10)
-        self.min_spread_percent = effective_min_spread
+        self.min_profit_buffer_percent = 0.15  # Cushion beyond fees
+        self.min_spread_percent = max(
+            min_spread_percent,
+            (self.maker_fee_percent + self.taker_fee_percent) + self.min_profit_buffer_percent
+        )
         self.max_inventory_percent = max_inventory_percent
         self.requote_interval_seconds = requote_interval_seconds
         self.stop_loss_percent = stop_loss_percent
         self.take_profit_interval_minutes = take_profit_interval_minutes
-        self.min_profit_buffer_percent = max(self.min_spread_percent * 0.6, self.maker_fee_percent * 1.25)  # Ensure at least ~fee coverage
         self.max_volatility_percent = max_volatility_percent
         self.min_depth_usd = min_depth_usd
         
@@ -121,6 +124,10 @@ class GeminiMarketMakingEngine:
         self.pair_cooldowns: Dict[str, Tuple[datetime, str]] = {}
         self.failure_threshold = 3
         self.failure_cooldown_minutes = 5
+
+        # Running state
+        self.running = False
+        self.last_flatten_time = datetime.now()
         
     def _reset_failures(self, pair: str):
         if pair in self.pair_failure_counts:
@@ -542,10 +549,13 @@ class GeminiMarketMakingEngine:
             # 🟢 IMPROVEMENT: Dynamic grid spacing based on spread
             spread = await self.get_spread(pair)
             logger.debug(f"   🟢 [GEMINI] {pair}: Current spread = {spread}%")
+            spread_msg = f"{spread:.3f}%" if spread is not None else "None"
+            logger.info(
+                f"   🟢 [GEMINI] {pair}: Spread snapshot | raw={spread_msg} | threshold={self.min_spread_percent:.2f}%"
+            )
             
             # If spread is too low BUT we have open orders, keep checking them for fills
             if (spread is None or spread <= 0 or spread < self.min_spread_percent) and open_orders:
-                spread_msg = f"{spread:.3f}%" if spread is not None else "None"
                 logger.info(f"   🟢 [GEMINI] {pair}: Spread {spread_msg} < minimum {self.min_spread_percent:.2f}%, but keeping {len(open_orders)} open order(s) to check for fills")
                 # Check existing orders for fills, don't cancel them
                 filled = await self.check_and_update_orders(pair)
@@ -1461,6 +1471,9 @@ class GeminiMarketMakingEngine:
         logger.info("=" * 80)
         
         self.running = True
+        if not hasattr(self, 'last_flatten_time') or self.last_flatten_time is None:
+            self.last_flatten_time = datetime.now()
+
         cycle_count = 0
         
         while self.running:
@@ -1499,6 +1512,7 @@ class GeminiMarketMakingEngine:
                 
                 total_orders_placed = 0
                 total_orders_filled = 0
+                cycle_errors: Dict[str, int] = defaultdict(int)
                 
                 for i in range(0, len(pairs_to_process), pairs_per_batch):
                     batch = pairs_to_process[i:i+pairs_per_batch]
@@ -1517,6 +1531,9 @@ class GeminiMarketMakingEngine:
                         if isinstance(result, dict):
                             total_orders_placed += result.get('orders_placed', 0)
                             total_orders_filled += result.get('orders_filled', 0)
+                            error_key = result.get('error')
+                            if error_key:
+                                cycle_errors[error_key] += 1
                     
                     # Wait 1 second between batches to respect rate limit
                     if i + pairs_per_batch < len(pairs_to_process):
@@ -1536,6 +1553,24 @@ class GeminiMarketMakingEngine:
                 logger.info(f"   🟢 [GEMINI] CYCLE SUMMARY:")
                 logger.info(f"      Orders placed this cycle: {total_orders_placed}")
                 logger.info(f"      Orders filled this cycle: {total_orders_filled}")
+                if cycle_errors:
+                    error_breakdown = ", ".join(f"{key}:{count}" for key, count in sorted(cycle_errors.items()))
+                    logger.info(f"      Skip reasons this cycle: {error_breakdown}")
+                pending_items = sum(len(entries) for entries in self.pending_sell_queue.values())
+                if pending_items:
+                    pending_value_usd = sum(
+                        sum(entry.get('amount', 0.0) * entry.get('buy_price', 0.0) for entry in entries)
+                        for entries in self.pending_sell_queue.values()
+                    )
+                    logger.info(f"      Pending sell queue: {pending_items} entries (~${pending_value_usd:.2f} not yet listed)")
+                active_cooldowns = {
+                    pair: reason for pair, (until, reason) in self.pair_cooldowns.items() if until > datetime.now()
+                }
+                if active_cooldowns:
+                    cooldown_summary = ", ".join(
+                        f"{pair}({reason})" for pair, reason in sorted(active_cooldowns.items())
+                    )
+                    logger.info(f"      Active cooldowns: {cooldown_summary}")
                 logger.info(f"      Gross profit (all-time): ${total_profit:.2f}")
                 logger.info(f"      Fees paid (all-time): ${total_fees:.2f}")
                 logger.info(f"      Net profit (all-time): ${total_net:.2f}")
@@ -1568,7 +1603,8 @@ class GeminiMarketMakingEngine:
             if isinstance(result, dict):
                 orders_placed = result.get('orders_placed', 0)
                 orders_filled = result.get('orders_filled', 0) + filled_count
-                return {'orders_placed': orders_placed, 'orders_filled': orders_filled}
+                error_key = result.get('error')
+                return {'orders_placed': orders_placed, 'orders_filled': orders_filled, 'error': error_key}
             else:
                 # Legacy support (shouldn't happen)
                 return {'orders_placed': 0, 'orders_filled': filled_count}
@@ -1577,7 +1613,7 @@ class GeminiMarketMakingEngine:
             import traceback
             logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
             # Don't raise - continue with other pairs
-            return {'orders_placed': 0, 'orders_filled': 0}
+            return {'orders_placed': 0, 'orders_filled': 0, 'error': 'exception'}
     
     def stop(self):
         """Stop the market-making engine"""

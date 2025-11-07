@@ -70,7 +70,7 @@ class DualStrategyBot:
                 capital_per_pair=75.0,  # $75 per pair to support >$5 quotes
                 grid_spacing_percent=0.20,  # 0.20% base spacing (dynamically adjusted)
                 order_size_percent=0.12,  # 12% of capital per order ≈ $9 per order
-                min_spread_percent=1.40,  # 🔵 1.40% minimum - covers maker/taker + profit buffer
+                min_spread_percent=0.95,  # 🔵 Effective minimum spread after fees/buffer
                 max_inventory_percent=0.25,  # Max 25% in one asset
                 requote_interval_seconds=15,  # Update every 15s
                 stop_loss_percent=0.02,  # -2% stop loss
@@ -96,7 +96,7 @@ class DualStrategyBot:
                     capital_per_pair=60.0,  # $60 per pair
                     grid_spacing_percent=0.20,  # 0.20% base spacing (dynamically adjusted)
                     order_size_percent=0.12,  # 12% of capital per order ≈ $7
-                    min_spread_percent=0.50,  # 🟢 0.50% minimum (covers maker fees + buffer)
+                    min_spread_percent=0.35,  # 🟢 0.35% minimum (covers maker fees + buffer)
                     max_inventory_percent=0.25,  # Max 25% in one asset
                     requote_interval_seconds=15,  # Update every 15s
                     stop_loss_percent=0.02,  # -2% stop loss

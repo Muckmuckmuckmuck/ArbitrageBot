@@ -78,7 +78,7 @@ class CoinbaseMarketMakingEngine:
         capital_per_pair: float = 75.0,  # $75 per pair to support larger quotes
         grid_spacing_percent: float = 0.20,  # 0.20% spacing
         order_size_percent: float = 0.12,  # 12% of capital per order (~$9)
-        min_spread_percent: float = 1.40,  # Skip if spread < 1.40% (covers fees + buffer)
+        min_spread_percent: float = 0.95,  # Skip if effective spread < 0.95% (covers maker fees + buffer)
         max_inventory_percent: float = 0.25,  # Max 25% in one asset
         requote_interval_seconds: int = 15,  # Update orders every 15s
         stop_loss_percent: float = 0.02,  # -2% stop loss
@@ -90,18 +90,21 @@ class CoinbaseMarketMakingEngine:
         self.capital_per_pair = capital_per_pair
         self.grid_spacing_percent = grid_spacing_percent
         self.order_size_percent = order_size_percent
-        self.maker_fee_percent = 0.60  # Estimated combined maker/taker load (bps)
+        self.maker_fee_percent = 0.35  # Estimated maker fee in percent
+        self.taker_fee_percent = 0.35  # Estimated taker fee (fallback / crosses)
         self.min_order_value_usd = 5.00
         self.min_inventory_sell_value_usd = 5.00
-        effective_min_spread = max(min_spread_percent, (self.maker_fee_percent * 2) + 0.20)
-        self.min_spread_percent = effective_min_spread
+        self.min_profit_buffer_percent = 0.25  # Additional cushion beyond fees
+        self.min_spread_percent = max(
+            min_spread_percent,
+            self.maker_fee_percent + self.taker_fee_percent + self.min_profit_buffer_percent
+        )
         self.max_inventory_percent = max_inventory_percent
         self.requote_interval_seconds = requote_interval_seconds
         self.stop_loss_percent = stop_loss_percent
         self.take_profit_interval_minutes = take_profit_interval_minutes
         self.min_spacing_percent = 0.50  # Minimum spacing to ensure profitability (percent)
         self.max_spacing_percent = 1.50  # Cap spacing to avoid quoting too far away
-        self.min_profit_buffer_percent = max(self.min_spread_percent * 0.6, self.maker_fee_percent * 1.25)
         self.min_volume_usd = 200000.0
         self.max_volatility_percent = max_volatility_percent
         self.min_depth_usd = min_depth_usd
@@ -583,10 +586,13 @@ class CoinbaseMarketMakingEngine:
             dynamic_spacing = min(dynamic_spacing, self.max_spacing_percent)
 
             effective_spread = (spread or 0) + (2 * dynamic_spacing)
+            spread_msg = f"{spread:.3f}%" if spread is not None else "None"
+            logger.info(
+                f"   🔵 [COINBASE] {pair}: Spread snapshot | raw={spread_msg} | effective={effective_spread:.3f}% | threshold={self.min_spread_percent:.2f}%"
+            )
             
             # If effective spread is too low BUT we have open orders, keep checking them for fills
             if (spread is None or spread <= 0 or effective_spread < self.min_spread_percent) and open_orders:
-                spread_msg = f"{spread:.3f}%" if spread is not None else "None"
                 logger.info(f"   🔵 [COINBASE] {pair}: Effective spread {effective_spread:.3f}% (raw {spread_msg}) < minimum {self.min_spread_percent:.2f}%, but keeping {len(open_orders)} open order(s) to check for fills")
                 # Check existing orders for fills, don't cancel them
                 filled = await self.check_and_update_orders(pair)
@@ -594,7 +600,6 @@ class CoinbaseMarketMakingEngine:
             
             # If effective spread is too low and no open orders, skip entirely
             if spread is None or spread <= 0 or effective_spread < self.min_spread_percent:
-                spread_msg = f"{spread:.3f}%" if spread is not None else "None"
                 logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - effective spread {effective_spread:.3f}% (raw {spread_msg}) < minimum {self.min_spread_percent:.2f}%")
                 return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'spread_too_tight'}
             
@@ -1471,6 +1476,9 @@ class CoinbaseMarketMakingEngine:
         logger.info("=" * 80)
         
         self.running = True
+        if not hasattr(self, 'last_flatten_time') or self.last_flatten_time is None:
+            self.last_flatten_time = datetime.now()
+
         cycle_count = 0
         
         while self.running:
@@ -1505,6 +1513,7 @@ class CoinbaseMarketMakingEngine:
                 
                 total_orders_placed = 0
                 total_orders_filled = 0
+                cycle_errors: Dict[str, int] = defaultdict(int)
                 # Process each pair
                 for pair in pairs_to_process:
                     if not self.running:
@@ -1514,6 +1523,9 @@ class CoinbaseMarketMakingEngine:
                     if isinstance(result, dict):
                         total_orders_placed += result.get('orders_placed', 0)
                         total_orders_filled += result.get('orders_filled', 0)
+                        error_key = result.get('error')
+                        if error_key:
+                            cycle_errors[error_key] += 1
                     await asyncio.sleep(1)  # Small delay between pairs
                 total_profit = sum(s.total_profit_usd for s in self.stats.values())
                 total_fees = sum(s.total_fees_usd for s in self.stats.values())
@@ -1527,6 +1539,24 @@ class CoinbaseMarketMakingEngine:
                 logger.info(f"   🔵 [COINBASE] CYCLE SUMMARY:")
                 logger.info(f"      Orders placed this cycle: {total_orders_placed}")
                 logger.info(f"      Orders filled this cycle: {total_orders_filled}")
+                if cycle_errors:
+                    error_breakdown = ", ".join(f"{key}:{count}" for key, count in sorted(cycle_errors.items()))
+                    logger.info(f"      Skip reasons this cycle: {error_breakdown}")
+                pending_items = sum(len(entries) for entries in self.pending_sell_queue.values())
+                if pending_items:
+                    pending_value_usd = sum(
+                        sum(entry.get('amount', 0.0) * entry.get('buy_price', 0.0) for entry in entries)
+                        for entries in self.pending_sell_queue.values()
+                    )
+                    logger.info(f"      Pending sell queue: {pending_items} entries (~${pending_value_usd:.2f} not yet listed)")
+                active_cooldowns = {
+                    pair: reason for pair, (until, reason) in self.pair_cooldowns.items() if until > datetime.now()
+                }
+                if active_cooldowns:
+                    cooldown_summary = ", ".join(
+                        f"{pair}({reason})" for pair, reason in sorted(active_cooldowns.items())
+                    )
+                    logger.info(f"      Active cooldowns: {cooldown_summary}")
                 logger.info(f"      Gross profit (all-time): ${total_profit:.2f}")
                 logger.info(f"      Fees paid (all-time): ${total_fees:.2f}")
                 logger.info(f"      Net profit (all-time): ${total_net:.2f}")
