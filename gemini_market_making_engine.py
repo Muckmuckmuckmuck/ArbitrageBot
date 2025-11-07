@@ -99,13 +99,21 @@ class GeminiMarketMakingEngine:
             min_spread_percent,
             (self.maker_fee_percent + self.taker_fee_percent) + self.min_profit_buffer_percent
         )
-        self.balance_buffer_multiplier = 1.20
         self.max_inventory_percent = max_inventory_percent
         self.requote_interval_seconds = requote_interval_seconds
         self.stop_loss_percent = stop_loss_percent
         self.take_profit_interval_minutes = take_profit_interval_minutes
         self.max_volatility_percent = max_volatility_percent
-        self.min_depth_usd = min_depth_usd
+        self.min_depth_usd = max(min_depth_usd, 100000.0)
+        self.min_volume_usd = 300000.0
+        self.min_fill_rate_threshold = 0.20
+        self.fill_rate_blacklist_minutes = 30
+        self.max_pair_loss_usd = -4.0
+        self.max_global_loss_usd = -12.0
+        self.inside_quote_volume_threshold = 1500.0
+        self.inside_quote_improve_bps = 3.0
+        self.micro_reprice_threshold = 0.15
+        self.inventory_max_age_minutes = 45
         
         # Active orders tracking
         self.active_orders: Dict[str, List[MarketMakingOrder]] = defaultdict(list)
@@ -118,14 +126,24 @@ class GeminiMarketMakingEngine:
         self.pair_fill_rates: Dict[str, float] = {}  # pair -> fill_rate (0-1)
         self.last_buy_prices: Dict[str, float] = defaultdict(lambda: 0.0)
         self.pair_anomaly_counters: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        self.min_volume_usd = 50000.0
         self.net_profit_usd: float = 0.0
         self.position_tracker: Dict[str, List[Dict[str, float]]] = defaultdict(list)
         self.pending_sell_queue: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        self.pair_performance: Dict[str, Dict[str, float]] = defaultdict(lambda: {
+            'total_profit': 0.0,
+            'total_trades': 0.0,
+            'avg_spread': 0.0,
+            'fill_rate': 0.5,
+        })
+        self.pair_spread_overrides: Dict[str, float] = {}
+        self.pair_skip_until: Dict[str, datetime] = {}
+        self.pair_last_inventory_timestamp: Dict[str, datetime] = {}
         self.pair_failure_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        self.pair_cooldown_multipliers: Dict[str, int] = defaultdict(lambda: 1)
         self.pair_cooldowns: Dict[str, Tuple[datetime, str]] = {}
         self.failure_threshold = 3
         self.failure_cooldown_minutes = 5
+        self.global_loss_pause_until: Optional[datetime] = None
 
         # Running state
         self.running = False
@@ -136,17 +154,22 @@ class GeminiMarketMakingEngine:
             self.pair_failure_counts[pair].clear()
         if pair in self.pair_cooldowns and self.pair_cooldowns[pair][0] <= datetime.now():
             self.pair_cooldowns.pop(pair, None)
+        if pair in self.pair_cooldown_multipliers:
+            self.pair_cooldown_multipliers[pair] = 1
 
     def _register_failure(self, pair: str, failure_type: str, detail: str):
         counts = self.pair_failure_counts[pair]
         counts[failure_type] += 1
         logger.debug(f"   🟢 [GEMINI] {pair}: Failure '{failure_type}' count -> {counts[failure_type]} ({detail})")
         if counts[failure_type] >= self.failure_threshold:
-            cooldown_until = datetime.now() + timedelta(minutes=self.failure_cooldown_minutes)
+            multiplier = min(4, self.pair_cooldown_multipliers[pair] + 1)
+            self.pair_cooldown_multipliers[pair] = multiplier
+            cooldown_minutes = self.failure_cooldown_minutes * multiplier
+            cooldown_until = datetime.now() + timedelta(minutes=cooldown_minutes)
             self.pair_cooldowns[pair] = (cooldown_until, failure_type)
             counts[failure_type] = 0
             logger.warning(
-                f"   🟢 [GEMINI] ⏸️ Cooling down {pair} for {self.failure_cooldown_minutes}m after repeated '{failure_type}' failures ({detail})"
+                f"   🟢 [GEMINI] ⏸️ Cooling down {pair} for {cooldown_minutes}m after repeated '{failure_type}' failures ({detail})"
             )
 
     def _is_on_cooldown(self, pair: str) -> Optional[Tuple[datetime, str]]:
@@ -175,7 +198,7 @@ class GeminiMarketMakingEngine:
         logger.info("   🟢 [GEMINI] 🔍 DISCOVERING SUITABLE PAIRS...")
         exchange = self.exchange_manager.get_exchange('gemini')
         suitable_pairs = []
-        volume_threshold = min_volume_usd if min_volume_usd is not None else self.min_volume_usd
+        volume_threshold = max(self.min_volume_usd, min_volume_usd if min_volume_usd is not None else self.min_volume_usd)
         base_order_budget = self.capital_per_pair * self.order_size_percent
         
         # Scan all markets
@@ -234,9 +257,12 @@ class GeminiMarketMakingEngine:
                     
                     spread = ((ask - bid) / mid) * 100
                     
+                    if spread < self.min_spread_percent:
+                        continue
+
                     # Calculate suitability score
                     # Higher volume = better, wider spread = better (up to a point)
-                    volume_score = min(volume_24h / 500000.0, 1.0)  # Normalize to $500k (lower for Gemini)
+                    volume_score = min(volume_24h / 3000000.0, 1.0)  # Normalize to $3M
                     spread_score = min(spread / 1.0, 1.0)  # Normalize to 1% spread
                     score = (volume_score * 0.6) + (spread_score * 0.4)  # 60% volume, 40% spread
                     
@@ -408,6 +434,33 @@ class GeminiMarketMakingEngine:
                 return False, metrics, f"depth ${depth_usd:.0f} < minimum ${self.min_depth_usd:.0f}"
 
         return True, metrics, "market healthy"
+
+    def _compute_required_spread(
+        self,
+        pair: str,
+        market_metrics: Dict[str, Optional[float]],
+        fill_rate: float
+    ) -> float:
+        base_requirement = (
+            self.maker_fee_percent
+            + self.taker_fee_percent
+            + self.min_profit_buffer_percent
+        )
+
+        volatility = market_metrics.get('volatility') or 0.0
+        volatility_component = min(volatility * 0.7, 1.8)
+
+        fill_component = 0.0
+        if fill_rate < 0.3:
+            fill_component = (0.3 - fill_rate) * 0.9
+
+        override = self.pair_spread_overrides.get(pair)
+
+        required = base_requirement + volatility_component + fill_component
+        if override is not None:
+            required = max(required, override)
+
+        return max(self.min_spread_percent, required)
     
     async def get_inventory_balance(self, base_currency: str) -> float:
         """Get current inventory balance for a base currency"""
@@ -527,6 +580,7 @@ class GeminiMarketMakingEngine:
                         
                         # Place sell order
                         try:
+                            self.pair_last_inventory_timestamp[pair] = datetime.now()
                             logger.info(f"   🟢 [GEMINI] 💰 SELLING INVENTORY: {pair} - {sell_amount:.6f} {currency} @ ${sell_price:.6f} (${order_value:.2f})")
                             sell_order = await self.exchange_manager.create_order(
                                 exchange_id='gemini',
@@ -578,46 +632,53 @@ class GeminiMarketMakingEngine:
                 return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'cooldown'}
 
             logger.info(f"   🟢 [GEMINI] 🔍 PROCESSING {pair}...")
-            
-            # 🟢 IMPROVEMENT: Skip low volume pairs
+
+            now = datetime.now()
+            allow_new_buys = True
+
+            if self.net_profit_usd <= self.max_global_loss_usd:
+                if not self.global_loss_pause_until or self.global_loss_pause_until <= now:
+                    self.global_loss_pause_until = now + timedelta(minutes=15)
+                    logger.warning(
+                        f"   🟢 [GEMINI] ⛔ Pausing new buys for 15 minutes - engine net ${self.net_profit_usd:.2f} <= max loss ${self.max_global_loss_usd:.2f}"
+                    )
+                allow_new_buys = False
+
+            if self.global_loss_pause_until and now >= self.global_loss_pause_until and self.net_profit_usd > (self.max_global_loss_usd * 0.5):
+                logger.info("   🟢 [GEMINI] ✅ Global loss pause lifted - profitability recovered")
+                self.global_loss_pause_until = None
+
+            skip_until = self.pair_skip_until.get(pair)
+            if skip_until:
+                if skip_until > now:
+                    logger.info(
+                        f"   🟢 [GEMINI] ⏭️ Skipping {pair} until {skip_until.strftime('%H:%M:%S')} (pair on cooldown)"
+                    )
+                    return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'pair_blacklist'}
+                self.pair_skip_until.pop(pair, None)
+
             try:
                 ticker = await self.exchange_manager.fetch_ticker('gemini', pair)
-                volume_24h = ticker.get('quoteVolume', 0) or (ticker.get('volume', 0) * ticker.get('last', 0))
-                logger.debug(f"   🟢 [GEMINI] {pair}: 24h volume = ${volume_24h:.2f}")
-                if volume_24h < 10000:  # Less than $10k volume
-                    logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - low volume: ${volume_24h:.0f} < $10,000")
+                volume_24h = ticker.get('quoteVolume') or ticker.get('quote_volume')
+                if not volume_24h:
+                    base_volume = ticker.get('volume') or ticker.get('baseVolume')
+                    last_price_tmp = ticker.get('last') or ticker.get('close')
+                    if base_volume and last_price_tmp:
+                        volume_24h = base_volume * last_price_tmp
+                if volume_24h and volume_24h < self.min_volume_usd:
+                    logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - low volume: ${volume_24h:.0f} < ${self.min_volume_usd:,.0f}")
                     return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'low_volume'}
             except Exception as e:
-                logger.warning(f"   🟢 [GEMINI] ⚠️ Volume check failed for {pair}: {e}")
-                pass  # Continue if volume check fails
-            
-            # 🟢 CRITICAL: Check for existing orders FIRST before spread check
-            # If we have open orders, check them for fills even if spread is low
+                logger.debug(f"   🟢 [GEMINI] Volume check failed for {pair}: {e}")
+
             existing_orders = self.active_orders.get(pair, [])
             open_orders = [o for o in existing_orders if o.status == 'open']
-            
-            # 🟢 IMPROVEMENT: Dynamic grid spacing based on spread
+
             spread = await self.get_spread(pair)
-            logger.debug(f"   🟢 [GEMINI] {pair}: Current spread = {spread}%")
-            spread_msg = f"{spread:.3f}%" if spread is not None else "None"
-            logger.info(
-                f"   🟢 [GEMINI] {pair}: Spread snapshot | raw={spread_msg} | threshold={self.min_spread_percent:.2f}%"
-            )
-            
-            # If spread is too low BUT we have open orders, keep checking them for fills
-            if (spread is None or spread <= 0 or spread < self.min_spread_percent) and open_orders:
-                logger.info(f"   🟢 [GEMINI] {pair}: Spread {spread_msg} < minimum {self.min_spread_percent:.2f}%, but keeping {len(open_orders)} open order(s) to check for fills")
-                # Check existing orders for fills, don't cancel them
-                filled = await self.check_and_update_orders(pair)
-                return {'success': True, 'orders_placed': 0, 'orders_filled': filled, 'error': None}
-            
-            # If spread is too low and no open orders, skip entirely
-            if spread is None or spread <= 0 or spread < self.min_spread_percent:
-                spread_msg = f"{spread:.3f}%" if spread is not None else "None"
-                logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - spread {spread_msg} < minimum {self.min_spread_percent:.2f}%")
-                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'spread_too_tight'}
-            
-            # Get current price
+            base_spacing = (spread * 0.5) if spread and spread > 0 else self.grid_spacing_percent
+            dynamic_spacing = max(0.12, min(base_spacing, 0.6))
+            effective_spread = (spread or 0) + (2 * dynamic_spacing)
+
             current_price = await self.get_current_price(pair)
             logger.debug(f"   🟢 [GEMINI] {pair}: Current price = ${current_price}")
             if current_price is None or current_price <= 0:
@@ -631,26 +692,52 @@ class GeminiMarketMakingEngine:
                     + (f" | metrics: {market_metrics}" if any(market_metrics.values()) else "")
                 )
                 return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'market_unhealthy'}
-            else:
-                if any(market_metrics.values()):
-                    logger.debug(f"   🟢 [GEMINI] {pair}: Market metrics {market_metrics}")
-            
-            # 🟢 IMPROVEMENT: Use 50% of current spread as grid spacing (max 0.5%, min 0.15%)
-            dynamic_spacing = min(max(spread * 0.5, 0.15), 0.5)
-            logger.debug(f"   🟢 [GEMINI] {pair}: Spread {spread:.3f}% → Dynamic spacing {dynamic_spacing:.3f}%")
-            
-            # 🟢 SMART: Only cancel/update orders if prices have moved significantly
-            # This prevents canceling orders that are about to fill
+            elif any(market_metrics.values()):
+                logger.debug(f"   🟢 [GEMINI] {pair}: Market metrics {market_metrics}")
+
+            fill_rate = self.pair_fill_rates.get(pair, 0.5)
+            required_spread = self._compute_required_spread(pair, market_metrics, fill_rate)
+
+            pair_stats = self.stats.get(pair)
+            if pair_stats and pair_stats.net_profit_usd <= self.max_pair_loss_usd:
+                allow_new_buys = False
+                blacklist_until = datetime.now() + timedelta(minutes=self.fill_rate_blacklist_minutes)
+                self.pair_skip_until[pair] = blacklist_until
+                logger.warning(
+                    f"   🟢 [GEMINI] ⚠️ Pausing new buys for {pair} (net ${pair_stats.net_profit_usd:.2f} <= max pair loss ${self.max_pair_loss_usd:.2f}) until {blacklist_until.strftime('%H:%M:%S')}"
+                )
+
+            spread_msg = f"{spread:.3f}%" if spread is not None else "None"
+            logger.info(
+                f"   🟢 [GEMINI] {pair}: Spread snapshot | raw={spread_msg} | effective={effective_spread:.3f}% | threshold={required_spread:.2f}%"
+            )
+
+            if fill_rate < self.min_fill_rate_threshold and not open_orders:
+                allow_new_buys = False
+                blacklist_until = datetime.now() + timedelta(minutes=self.fill_rate_blacklist_minutes)
+                self.pair_skip_until[pair] = blacklist_until
+                logger.info(
+                    f"   🟢 [GEMINI] ⏸️ {pair}: Fill rate {fill_rate:.2f} below {self.min_fill_rate_threshold:.2f} - pausing new buys until {blacklist_until.strftime('%H:%M:%S')}"
+                )
+
+            if (spread is None or spread <= 0 or effective_spread < required_spread) and open_orders:
+                logger.info(f"   🟢 [GEMINI] {pair}: Effective spread {effective_spread:.3f}% (raw {spread_msg}) < minimum {required_spread:.2f}%, but keeping {len(open_orders)} open order(s) to check for fills")
+                filled = await self.check_and_update_orders(pair)
+                return {'success': True, 'orders_placed': 0, 'orders_filled': filled, 'error': None}
+
+            if spread is None or spread <= 0 or effective_spread < required_spread:
+                logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - effective spread {effective_spread:.3f}% (raw {spread_msg}) < minimum {required_spread:.2f}%")
+                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'spread_too_tight'}
+
             should_update_orders, update_reason = await self.should_update_pair_orders(pair, dynamic_spacing)
             if should_update_orders:
                 logger.info(f"   🟢 [GEMINI] {pair}: Updating existing orders - Reason: {update_reason}")
                 await self.cancel_pair_orders(pair, reason=f"update_required: {update_reason}")
             else:
                 logger.info(f"   🟢 [GEMINI] {pair}: Keeping existing orders - Reason: {update_reason}")
-                # Check for fills on existing orders
                 filled = await self.check_and_update_orders(pair)
                 return {'success': True, 'orders_placed': 0, 'orders_filled': filled, 'error': None}
-            
+
             pending_entries = self.pending_sell_queue.get(pair, [])
             if pending_entries:
                 pending_value = sum(
@@ -699,7 +786,7 @@ class GeminiMarketMakingEngine:
 
             quote_currency = pair.split('/')[1]
             quote_balance_cached: Optional[float] = None
-            if quote_currency in ['USD', 'USDC', 'GUSD']:
+            if allow_new_buys and quote_currency in ['USD', 'USDC', 'GUSD']:
                 quote_balance_cached = await self.get_inventory_balance(quote_currency)
                 if quote_balance_cached is None:
                     quote_balance_cached = 0.0
@@ -710,56 +797,60 @@ class GeminiMarketMakingEngine:
                     )
                     return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'insufficient_balance_soft'}
             
-            # 🟢 IMPROVEMENT: Adjust order size based on spread
+            # 🟢 IMPROVEMENT: Adjust order size based on spread, fills, and profitability
             base_currency = pair.split('/')[0]
-            if spread and self.min_spread_percent > 0:
-                # Scale order size: wider spread = larger orders (max 2x, min 0.5x)
-                spread_multiplier = min(max(spread / self.min_spread_percent, 0.5), 2.0)
-                order_value_usd = self.capital_per_pair * self.order_size_percent * spread_multiplier
-                logger.debug(f"   🟢 [GEMINI] {pair}: Spread {spread:.3f}% → Order size multiplier {spread_multiplier:.2f}x → Order value: ${order_value_usd:.2f}")
-            else:
-                order_value_usd = self.capital_per_pair * self.order_size_percent
+            spread_for_multiplier = spread if spread and spread > 0 else required_spread
+            spread_multiplier = min(max(spread_for_multiplier / required_spread, 0.5), 2.0)
+            fill_rate_multiplier = 0.6 + fill_rate
 
-            order_value_usd = max(order_value_usd, min_target_order_value)
-            
-            # Calculate order amount from USD value
-            # 🔵 CRITICAL FIX: Prevent division by zero
-            if current_price <= 0:
-                logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - invalid current price: {current_price}")
-                return False
-            
-            order_amount = order_value_usd / current_price
-            
-            # Ensure order value meets minimum cost requirement
-            logger.debug(f"   🟢 [GEMINI] {pair}: Order value = ${order_value_usd:.2f}, min buy cost = ${min_buy_cost:.2f}")
-            if order_value_usd < min_buy_cost:
-                logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order value ${order_value_usd:.2f} < minimum ${min_buy_cost:.2f}")
-                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_value_too_small'}
-            
-            # Round amounts to exchange precision (but ensure it's not 0)
-            order_amount = round(order_amount, amount_precision)
+            pair_perf = self.pair_performance[pair]
+            total_profit = pair_perf.get('total_profit', 0.0)
+            profit_multiplier = 1.0
+            if total_profit > 4:
+                profit_multiplier = min(1.5, 1.0 + total_profit / 18.0)
+            elif total_profit < -3:
+                profit_multiplier = max(0.55, 1.0 + total_profit / 18.0)
+
+            order_value_usd = 0.0
+            order_amount = 0.0
+
+            if allow_new_buys:
+                order_value_usd = (
+                    self.capital_per_pair
+                    * self.order_size_percent
+                    * spread_multiplier
+                    * fill_rate_multiplier
+                    * profit_multiplier
+                )
+                order_value_usd = min(order_value_usd, self.capital_per_pair * 0.85)
+                order_value_usd = max(order_value_usd, min_target_order_value)
+
+                if order_value_usd < min_buy_cost:
+                    logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order value ${order_value_usd:.2f} < minimum ${min_buy_cost:.2f}")
+                    return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_value_too_small'}
+
+                order_amount = order_value_usd / current_price
+                order_amount = round(order_amount, amount_precision)
             
             # 🔵 CRITICAL FIX: If rounding caused amount to become 0, recalculate
-            logger.debug(f"   🟢 [GEMINI] {pair}: Order amount after rounding = {order_amount}, min amount = {min_amount}")
-            if order_amount <= 0:
-                # Try to use minimum amount if available
-                if min_amount > 0:
+            if allow_new_buys:
+                logger.debug(f"   🟢 [GEMINI] {pair}: Order amount after rounding = {order_amount}, min amount = {min_amount}")
+                if order_amount <= 0:
+                    if min_amount > 0:
+                        order_amount = min_amount
+                        order_value_usd = order_amount * current_price
+                        if order_value_usd < min_buy_cost:
+                            logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - minimum amount value ${order_value_usd:.2f} < floor ${min_buy_cost:.2f}")
+                            return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_amount_too_small'}
+                        logger.info(f"   🟢 [GEMINI] {pair}: Using minimum amount {min_amount} after rounding to 0")
+                    else:
+                        logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order amount too small after rounding: {order_amount}")
+                        return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'amount_too_small_after_rounding'}
+                
+                if min_amount > 0 and order_amount < min_amount:
                     order_amount = min_amount
                     order_value_usd = order_amount * current_price
-                    if order_value_usd < min_buy_cost:
-                        logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - minimum amount value ${order_value_usd:.2f} < floor ${min_buy_cost:.2f}")
-                        return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_amount_too_small'}
-                    logger.info(f"   🟢 [GEMINI] {pair}: Using minimum amount {min_amount} after rounding to 0")
-                else:
-                    logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order amount too small after rounding: {order_amount}")
-                    return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'amount_too_small_after_rounding'}
-            
-            # Ensure order amount meets minimum amount requirement
-            if min_amount > 0 and order_amount < min_amount:
-                # Increase order amount to meet minimum
-                order_amount = min_amount
-                order_value_usd = order_amount * current_price
-                logger.debug(f"   🟢 [GEMINI] {pair}: Adjusted order amount to minimum {min_amount}")
+                    logger.debug(f"   🟢 [GEMINI] {pair}: Adjusted order amount to minimum {min_amount}")
             
             # 🟢 DYNAMIC PRICING: Get fresh bid/ask every time for real-time adjustment
             ticker = await self.exchange_manager.fetch_ticker('gemini', pair)
@@ -812,23 +903,75 @@ class GeminiMarketMakingEngine:
             # 🟢 NO ROUNDING: Use exact calculated prices (exchange will handle precision)
             # Prices are already calculated with proper precision from market data
             # Exchange manager will apply necessary precision for API requirements
+            top_bid_price = top_bid_volume = top_ask_price = top_ask_volume = None
+            try:
+                order_book = await self.exchange_manager.fetch_order_book('gemini', pair, limit=5)
+                bids = order_book.get('bids', []) or []
+                asks = order_book.get('asks', []) or []
+                if bids:
+                    top_bid_price, top_bid_volume = bids[0][0], bids[0][1]
+                if asks:
+                    top_ask_price, top_ask_volume = asks[0][0], asks[0][1]
+            except Exception as depth_error:
+                logger.debug(f"   🟢 [GEMINI] Depth fetch (inside quote adjust) failed for {pair}: {depth_error}")
+                bids = asks = []
+
+            inside_improve = self.inside_quote_improve_bps / 10000.0
+            if top_ask_price and top_ask_volume and top_ask_volume < self.inside_quote_volume_threshold:
+                min_sell_floor = current_price * (1 + required_spread / 100)
+                candidate_sell = top_ask_price * (1 - inside_improve)
+                min_profitable_price = self._get_min_profitable_sell_price(
+                    pair,
+                    fallback_buy_price=self.last_buy_prices.get(pair, sell_price)
+                )
+                adjusted_sell = max(
+                    min_sell_floor,
+                    min_profitable_price or min_sell_floor,
+                    min(sell_price, candidate_sell)
+                )
+                if adjusted_sell > sell_price * 0.995:
+                    logger.debug(
+                        f"   🟢 [GEMINI] {pair}: Inside-quote sell adjustment {sell_price:.6f} → {adjusted_sell:.6f} (top ask vol {top_ask_volume:.2f})"
+                    )
+                    sell_price = adjusted_sell
+
+            if top_bid_price and top_bid_volume and top_bid_volume < self.inside_quote_volume_threshold:
+                candidate_buy = top_bid_price * (1 + inside_improve)
+                max_buy_ceiling = sell_price * (1 - max(dynamic_spacing / 100, 0.001))
+                candidate_buy = min(candidate_buy, max_buy_ceiling)
+                if candidate_buy > buy_price:
+                    logger.debug(
+                        f"   🟢 [GEMINI] {pair}: Inside-quote buy adjustment {buy_price:.6f} → {candidate_buy:.6f} (top bid vol {top_bid_volume:.2f})"
+                    )
+                    buy_price = candidate_buy
+
+            min_sell_price_with_buffer = current_price * (1 + required_spread / 100)
+            min_profitable_price = self._get_min_profitable_sell_price(
+                pair,
+                fallback_buy_price=self.last_buy_prices.get(pair, sell_price)
+            )
+            if min_profitable_price:
+                sell_price = max(sell_price, min_profitable_price)
+            sell_price = max(sell_price, min_sell_price_with_buffer)
+
+            if sell_price <= buy_price:
+                sell_price = buy_price * (1 + max(dynamic_spacing / 100, 0.0015))
             
             # Check minimum order size (recalculate after rounding)
-            min_order_value = order_amount * buy_price
-            if min_order_value < min_buy_cost:
-                # Try to increase order amount to meet minimum
-                # 🔵 CRITICAL FIX: Prevent division by zero
-                if buy_price > 0:
-                    required_amount = min_buy_cost / buy_price
-                    if required_amount > order_amount:
-                        order_amount = round(required_amount, amount_precision)
-                        min_order_value = order_amount * buy_price
-                        logger.debug(f"   🟢 [GEMINI] {pair}: Increased order amount to meet minimum cost")
-                
-                # Final check
+            if allow_new_buys and order_amount > 0:
+                min_order_value = order_amount * buy_price
                 if min_order_value < min_buy_cost:
-                    logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order value ${min_order_value:.2f} < minimum ${min_buy_cost:.2f} (after rounding)")
-                    return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_value_too_small_after_rounding'}
+                    if buy_price > 0:
+                        required_amount = min_buy_cost / buy_price
+                        if required_amount > order_amount:
+                            order_amount = round(required_amount, amount_precision)
+                            min_order_value = order_amount * buy_price
+                            logger.debug(f"   🟢 [GEMINI] {pair}: Increased order amount to meet minimum cost")
+                    if min_order_value < min_buy_cost:
+                        logger.info(f"   🟢 [GEMINI] ⏭️ Skipping {pair} - order value ${min_order_value:.2f} < minimum ${min_buy_cost:.2f} (after rounding)")
+                        return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_value_too_small_after_rounding'}
+            else:
+                order_amount = 0.0
             
             # Check inventory limits
             inventory = await self.get_inventory_balance(base_currency)
@@ -847,7 +990,7 @@ class GeminiMarketMakingEngine:
             
             # Place buy order (if not over-inventoried)
             # 🔵 CRITICAL FIX: Ensure inventory_value is not None before comparison
-            if inventory_value is not None and inventory_value < max_inventory:
+            if allow_new_buys and inventory_value is not None and inventory_value < max_inventory:
                 # 🟢 CRITICAL: Check balance and dynamically size order
                 quote_currency = pair.split('/')[1]
                 if quote_balance_cached is None:
@@ -932,6 +1075,8 @@ class GeminiMarketMakingEngine:
                         logger.error(f"   🟢 [GEMINI] ❌ FAILED TO PLACE BUY ORDER for {pair}: {type(e).__name__}: {e}")
                         import traceback
                         logger.debug(f"   🟢 [GEMINI] Traceback: {traceback.format_exc()}")
+            elif not allow_new_buys:
+                logger.info(f"   🟢 [GEMINI] {pair}: Buy side paused by risk filters; monitoring inventory only")
             else:
                 inventory_value_str = f"${inventory_value:.2f}" if inventory_value is not None else "None"
                 logger.info(f"   🟢 [GEMINI] {pair}: ⏭️ Skipping buy order - inventory {inventory_value_str} >= max ${max_inventory:.2f}")
@@ -1059,9 +1204,10 @@ class GeminiMarketMakingEngine:
             top_bid_volume = bids[0][1] if bids else 0
             top_ask_volume = asks[0][1] if asks else 0
 
-            buy_drift_threshold = 0.2
-            sell_drift_threshold = max(0.6, self.min_spread_percent * 3)
-            sell_grace_period = 240  # seconds
+            drift_floor = max(self.micro_reprice_threshold, target_spacing * 0.6)
+            buy_drift_threshold = drift_floor
+            sell_drift_threshold = max(drift_floor * 1.8, target_spacing * 1.4)
+            sell_grace_period = 150  # seconds
 
             for order in open_orders:
                 if order.price <= 0:
@@ -1073,18 +1219,18 @@ class GeminiMarketMakingEngine:
                     price_diff_pct = abs((current_bid - order.price) / current_bid) * 100
                     if order.price >= current_ask:
                         return True, f"buy order {order.order_id} price {order.price} >= current ask {current_ask}"
-                    if top_ask_volume > top_bid_volume * 3 and price_diff_pct < 0.5:
+                    if top_ask_volume > top_bid_volume * 3 and price_diff_pct < 0.45:
                         return True, f"heavy ask pressure ({top_ask_volume:.0f} vs {top_bid_volume:.0f})"
                     drift_threshold = buy_drift_threshold
                 else:
                     price_diff_pct = abs((current_ask - order.price) / current_ask) * 100
                     if order.price <= current_bid:
                         return True, f"sell order {order.order_id} price {order.price} <= current bid {current_bid}"
-                    if top_bid_volume > top_ask_volume * 3 and price_diff_pct < 0.5:
+                    if top_bid_volume > top_ask_volume * 3 and price_diff_pct < 0.4:
                         return True, f"heavy bid pressure ({top_bid_volume:.0f} vs {top_ask_volume:.0f})"
                     drift_threshold = sell_drift_threshold
 
-                    if order_age < sell_grace_period and price_diff_pct < drift_threshold * 1.5:
+                    if order_age < sell_grace_period and price_diff_pct < max(drift_threshold, self.micro_reprice_threshold * 2):
                         continue
 
                 if price_diff_pct > drift_threshold:
@@ -1284,6 +1430,7 @@ class GeminiMarketMakingEngine:
                                 self.stats[pair].total_fees_usd += fee_accum
                                 self.stats[pair].net_profit_usd += net_accum
                                 self.net_profit_usd += net_accum
+                                self.pair_performance[pair]['total_profit'] += net_accum
                                 if net_accum >= 0:
                                     self.stats[pair].wins += 1
                                 else:
@@ -1295,6 +1442,11 @@ class GeminiMarketMakingEngine:
                                     self.stats[pair].filled_orders += 1
                                     self.stats[pair].total_orders += 1
                                     filled_count += 1
+                                    self.pair_performance[pair]['total_trades'] += 1
+                                    if not self.position_tracker[pair]:
+                                        self.pair_last_inventory_timestamp.pop(pair, None)
+                                elif not self.position_tracker[pair]:
+                                    self.pair_last_inventory_timestamp.pop(pair, None)
                             
                             # Update fill rate
                             current_fill_rate = self.pair_fill_rates.get(pair, 0.5)
@@ -1319,6 +1471,10 @@ class GeminiMarketMakingEngine:
                             else:
                                 logger.info(f"   🟢 [GEMINI] ✅ SELL FILLED: {pair} @ ${price:.4f} for {filled:.6f}")
                                 self.stats[pair].total_profit_usd += (price - mm_order.price) * filled
+                                self.pair_performance[pair]['total_profit'] += (price - mm_order.price) * filled
+                                self.pair_performance[pair]['total_trades'] += 1
+                                if not self.position_tracker[pair]:
+                                    self.pair_last_inventory_timestamp.pop(pair, None)
                         
                         elif status in ['canceled', 'cancelled']:
                             mm_order.status = 'canceled'
@@ -1367,6 +1523,7 @@ class GeminiMarketMakingEngine:
 
             if inventory <= 0:
                 if allow_queue:
+                    self.pair_last_inventory_timestamp[pair] = datetime.now()
                     self.pending_sell_queue[pair].append({
                         'amount': filled_amount,
                         'buy_price': buy_price,
@@ -1376,6 +1533,7 @@ class GeminiMarketMakingEngine:
                     logger.warning(f"   🟢 [GEMINI] ⚠️ {pair}: Inventory not yet available after buy fill ({filled_amount:.6f}). Queued for retry.")
                 return False
 
+            self.pair_last_inventory_timestamp[pair] = datetime.now()
             sell_amount = min(filled_amount, inventory)
             leftover_amount = max(filled_amount - sell_amount, 0.0)
 
@@ -1430,6 +1588,7 @@ class GeminiMarketMakingEngine:
             order_value = sell_amount * sell_price
             if order_value < min_cost or sell_amount < min_amount:
                 if allow_queue:
+                    self.pair_last_inventory_timestamp[pair] = datetime.now()
                     self.pending_sell_queue[pair].append({
                         'amount': filled_amount,
                         'buy_price': buy_price,
@@ -1600,6 +1759,23 @@ class GeminiMarketMakingEngine:
                 inventory = await self.get_inventory_balance(base_currency)
                 
                 if inventory > 0:
+                    last_inventory_time = self.pair_last_inventory_timestamp.get(pair)
+                    inventory_age_minutes = None
+                    if last_inventory_time:
+                        inventory_age_minutes = (datetime.now() - last_inventory_time).total_seconds() / 60
+
+                    spread = await self.get_spread(pair)
+                    fill_rate = self.pair_fill_rates.get(pair, 0.5)
+                    market_ok, market_metrics, _ = await self._evaluate_market_health(pair)
+                    required_spread = self._compute_required_spread(pair, market_metrics, fill_rate)
+
+                    flatten_due_to_age = inventory_age_minutes is not None and inventory_age_minutes >= self.inventory_max_age_minutes
+                    flatten_due_to_spread = spread is not None and spread < required_spread
+                    flatten_due_to_risk = self.net_profit_usd <= self.max_global_loss_usd
+
+                    if not (flatten_due_to_age or flatten_due_to_spread or flatten_due_to_risk or not market_ok):
+                        continue
+
                     # Get current price
                     current_price = await self.get_current_price(pair)
                     if current_price and current_price > 0:
@@ -1610,13 +1786,13 @@ class GeminiMarketMakingEngine:
                             fallback_buy_price=self.last_buy_prices.get(pair, current_price)
                         )
 
-                        if min_profitable_price and current_price < min_profitable_price:
+                        if min_profitable_price and current_price < min_profitable_price and not flatten_due_to_risk:
                             logger.info(
                                 f"   🟢 [GEMINI] Skipping flatten {pair} - current price ${current_price:.4f} below profitable threshold ${min_profitable_price:.4f}"
                             )
                             continue
 
-                        baseline_price = current_price * (1 + max(self.min_profit_buffer_percent / 100.0, 0.0015))
+                        baseline_price = current_price * (1 + max(required_spread / 100.0, self.min_profit_buffer_percent / 100.0, 0.0015))
                         if min_profitable_price:
                             sell_price = max(min_profitable_price, baseline_price)
                         else:

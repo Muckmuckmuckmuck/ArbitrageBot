@@ -106,9 +106,17 @@ class CoinbaseMarketMakingEngine:
         self.take_profit_interval_minutes = take_profit_interval_minutes
         self.min_spacing_percent = 0.50  # Minimum spacing to ensure profitability (percent)
         self.max_spacing_percent = 1.50  # Cap spacing to avoid quoting too far away
-        self.min_volume_usd = 200000.0
+        self.min_volume_usd = 500000.0
         self.max_volatility_percent = max_volatility_percent
-        self.min_depth_usd = min_depth_usd
+        self.min_depth_usd = max(min_depth_usd, 150000.0)
+        self.min_fill_rate_threshold = 0.25
+        self.fill_rate_blacklist_minutes = 30
+        self.max_pair_loss_usd = -5.0
+        self.max_global_loss_usd = -15.0
+        self.inside_quote_volume_threshold = 3000.0
+        self.inside_quote_improve_bps = 2.0  # 0.02%
+        self.micro_reprice_threshold = 0.12  # 0.12% drift triggers reprice
+        self.inventory_max_age_minutes = 45
 
         # Active orders tracking
         self.active_orders: Dict[str, List[MarketMakingOrder]] = defaultdict(list)
@@ -129,7 +137,11 @@ class CoinbaseMarketMakingEngine:
             'avg_spread': 0.0,
             'fill_rate': 0.5
         })
+        self.pair_spread_overrides: Dict[str, float] = {}
+        self.pair_skip_until: Dict[str, datetime] = {}
+        self.pair_last_inventory_timestamp: Dict[str, datetime] = {}
         self.pair_failure_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        self.pair_cooldown_multipliers: Dict[str, int] = defaultdict(lambda: 1)
         self.pair_cooldowns: Dict[str, Tuple[datetime, str]] = {}
         self.failure_threshold = 3
         self.failure_cooldown_minutes = 5
@@ -140,23 +152,29 @@ class CoinbaseMarketMakingEngine:
         self.net_profit_usd: float = 0.0
         self.total_fees_usd: float = 0.0
         self.position_tracker: Dict[str, List[Dict[str, float]]] = defaultdict(list)
+        self.global_loss_pause_until: Optional[datetime] = None
         
     def _reset_failures(self, pair: str):
         if pair in self.pair_failure_counts:
             self.pair_failure_counts[pair].clear()
         if pair in self.pair_cooldowns and self.pair_cooldowns[pair][0] <= datetime.now():
             self.pair_cooldowns.pop(pair, None)
+        if pair in self.pair_cooldown_multipliers:
+            self.pair_cooldown_multipliers[pair] = 1
 
     def _register_failure(self, pair: str, failure_type: str, detail: str):
         counts = self.pair_failure_counts[pair]
         counts[failure_type] += 1
         logger.debug(f"   🔵 [COINBASE] {pair}: Failure '{failure_type}' count -> {counts[failure_type]} ({detail})")
         if counts[failure_type] >= self.failure_threshold:
-            cooldown_until = datetime.now() + timedelta(minutes=self.failure_cooldown_minutes)
+            multiplier = min(4, self.pair_cooldown_multipliers[pair] + 1)
+            self.pair_cooldown_multipliers[pair] = multiplier
+            cooldown_minutes = self.failure_cooldown_minutes * multiplier
+            cooldown_until = datetime.now() + timedelta(minutes=cooldown_minutes)
             self.pair_cooldowns[pair] = (cooldown_until, failure_type)
             counts[failure_type] = 0
             logger.warning(
-                f"   🔵 [COINBASE] ⏸️ Cooling down {pair} for {self.failure_cooldown_minutes}m after repeated '{failure_type}' failures ({detail})"
+                f"   🔵 [COINBASE] ⏸️ Cooling down {pair} for {cooldown_minutes}m after repeated '{failure_type}' failures ({detail})"
             )
 
     def _is_on_cooldown(self, pair: str) -> Optional[Tuple[datetime, str]]:
@@ -181,7 +199,7 @@ class CoinbaseMarketMakingEngine:
         logger.info("   🔵 [COINBASE] 🔍 DISCOVERING SUITABLE PAIRS...")
         exchange = self.exchange_manager.get_exchange('coinbase')
         suitable_pairs = []
-        volume_threshold = min_volume_usd if min_volume_usd is not None else self.min_volume_usd
+        volume_threshold = max(self.min_volume_usd, min_volume_usd if min_volume_usd is not None else self.min_volume_usd)
         base_order_budget = self.capital_per_pair * self.order_size_percent
         
         # Scan all markets
@@ -241,10 +259,12 @@ class CoinbaseMarketMakingEngine:
                         continue
                     
                     spread = ((ask - bid) / mid) * 100
+                    if spread < self.min_spread_percent:
+                        continue
                     
                     # Calculate suitability score
                     # Higher volume = better, wider spread = better (up to a point)
-                    volume_score = min(volume_24h / 1000000.0, 1.0)  # Normalize to $1M
+                    volume_score = min(volume_24h / 5000000.0, 1.0)  # Normalize to $5M
                     spread_score = min(spread / 2.0, 1.0)  # Normalize to 2% spread
                     score = (volume_score * 0.6) + (spread_score * 0.4)  # 60% volume, 40% spread
                     
@@ -417,6 +437,33 @@ class CoinbaseMarketMakingEngine:
                 return False, metrics, f"depth ${depth_usd:.0f} < minimum ${self.min_depth_usd:.0f}"
 
         return True, metrics, "market healthy"
+
+    def _compute_required_spread(
+        self,
+        pair: str,
+        market_metrics: Dict[str, Optional[float]],
+        fill_rate: float
+    ) -> float:
+        base_requirement = (
+            self.maker_fee_percent
+            + self.taker_fee_percent
+            + self.min_profit_buffer_percent
+        )
+
+        volatility = market_metrics.get('volatility') or 0.0
+        volatility_component = min(volatility * 0.6, 1.5)
+
+        fill_component = 0.0
+        if fill_rate < 0.35:
+            fill_component = (0.35 - fill_rate) * 0.8  # encourage better edge when fills are scarce
+
+        override = self.pair_spread_overrides.get(pair)
+
+        required = base_requirement + volatility_component + fill_component
+        if override is not None:
+            required = max(required, override)
+
+        return max(self.min_spread_percent, required)
     
     async def get_inventory_balance(self, base_currency: str) -> float:
         """Get current inventory balance for a base currency"""
@@ -537,6 +584,7 @@ class CoinbaseMarketMakingEngine:
                         
                         # Place sell order
                         try:
+                            self.pair_last_inventory_timestamp[pair] = datetime.now()
                             logger.info(f"   🔵 [COINBASE] 💰 SELLING INVENTORY: {pair} - {sell_amount:.6f} {currency} @ ${sell_price:.6f} (${order_value:.2f})")
                             sell_order = await self.exchange_manager.create_order(
                                 exchange_id='coinbase',
@@ -584,6 +632,30 @@ class CoinbaseMarketMakingEngine:
                 return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'cooldown'}
 
             logger.info(f"   🔵 [COINBASE] 🔍 PROCESSING {pair}...")
+
+            now = datetime.now()
+            allow_new_buys = True
+
+            if self.net_profit_usd <= self.max_global_loss_usd:
+                if not self.global_loss_pause_until or self.global_loss_pause_until <= now:
+                    self.global_loss_pause_until = now + timedelta(minutes=15)
+                    logger.warning(
+                        f"   🔵 [COINBASE] ⛔ Pausing new buys for 15 minutes - engine net ${self.net_profit_usd:.2f} <= max loss ${self.max_global_loss_usd:.2f}"
+                    )
+                allow_new_buys = False
+
+            if self.global_loss_pause_until and now >= self.global_loss_pause_until and self.net_profit_usd > (self.max_global_loss_usd * 0.5):
+                logger.info("   🔵 [COINBASE] ✅ Global loss pause lifted - profitability recovered")
+                self.global_loss_pause_until = None
+
+            skip_until = self.pair_skip_until.get(pair)
+            if skip_until:
+                if skip_until > now:
+                    logger.info(
+                        f"   🔵 [COINBASE] ⏭️ Skipping {pair} until {skip_until.strftime('%H:%M:%S')} (focus on higher quality pairs)"
+                    )
+                    return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'pair_blacklist'}
+                self.pair_skip_until.pop(pair, None)
             
             # Get current price first (needed for volume calculation)
             current_price = await self.get_current_price(pair)
@@ -622,6 +694,18 @@ class CoinbaseMarketMakingEngine:
                 logger.debug(f"   🔵 [COINBASE] Volume check failed for {pair}: {e} - continuing anyway")
                 pass  # Continue if volume check fails - major pairs have volume
             
+            fill_rate = self.pair_fill_rates.get(pair, 0.5)
+            required_spread = self._compute_required_spread(pair, market_metrics, fill_rate)
+
+            pair_stats = self.stats.get(pair)
+            if pair_stats and pair_stats.net_profit_usd <= self.max_pair_loss_usd:
+                allow_new_buys = False
+                blacklist_until = datetime.now() + timedelta(minutes=self.fill_rate_blacklist_minutes)
+                self.pair_skip_until[pair] = blacklist_until
+                logger.warning(
+                    f"   🔵 [COINBASE] ⚠️ Skipping new buys for {pair} (net ${pair_stats.net_profit_usd:.2f} <= max pair loss ${self.max_pair_loss_usd:.2f}) until {blacklist_until.strftime('%H:%M:%S')}"
+                )
+
             # 🔵 CRITICAL: Check for existing orders FIRST before spread check
             # If we have open orders, check them for fills even if spread is low
             existing_orders = self.active_orders.get(pair, [])
@@ -638,19 +722,27 @@ class CoinbaseMarketMakingEngine:
             effective_spread = (spread or 0) + (2 * dynamic_spacing)
             spread_msg = f"{spread:.3f}%" if spread is not None else "None"
             logger.info(
-                f"   🔵 [COINBASE] {pair}: Spread snapshot | raw={spread_msg} | effective={effective_spread:.3f}% | threshold={self.min_spread_percent:.2f}%"
+                f"   🔵 [COINBASE] {pair}: Spread snapshot | raw={spread_msg} | effective={effective_spread:.3f}% | threshold={required_spread:.2f}%"
             )
             
+            if fill_rate < self.min_fill_rate_threshold and not open_orders:
+                allow_new_buys = False
+                blacklist_until = datetime.now() + timedelta(minutes=self.fill_rate_blacklist_minutes)
+                self.pair_skip_until[pair] = blacklist_until
+                logger.info(
+                    f"   🔵 [COINBASE] ⏸️ {pair}: Fill rate {fill_rate:.2f} below {self.min_fill_rate_threshold:.2f} - pausing new buys until {blacklist_until.strftime('%H:%M:%S')}"
+                )
+
             # If effective spread is too low BUT we have open orders, keep checking them for fills
-            if (spread is None or spread <= 0 or effective_spread < self.min_spread_percent) and open_orders:
-                logger.info(f"   🔵 [COINBASE] {pair}: Effective spread {effective_spread:.3f}% (raw {spread_msg}) < minimum {self.min_spread_percent:.2f}%, but keeping {len(open_orders)} open order(s) to check for fills")
+            if (spread is None or spread <= 0 or effective_spread < required_spread) and open_orders:
+                logger.info(f"   🔵 [COINBASE] {pair}: Effective spread {effective_spread:.3f}% (raw {spread_msg}) < minimum {required_spread:.2f}%, but keeping {len(open_orders)} open order(s) to check for fills")
                 # Check existing orders for fills, don't cancel them
                 filled = await self.check_and_update_orders(pair)
                 return {'success': True, 'orders_placed': 0, 'orders_filled': filled, 'error': None}
             
             # If effective spread is too low and no open orders, skip entirely
-            if spread is None or spread <= 0 or effective_spread < self.min_spread_percent:
-                logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - effective spread {effective_spread:.3f}% (raw {spread_msg}) < minimum {self.min_spread_percent:.2f}%")
+            if spread is None or spread <= 0 or effective_spread < required_spread:
+                logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - effective spread {effective_spread:.3f}% (raw {spread_msg}) < minimum {required_spread:.2f}%")
                 return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'spread_too_tight'}
             
             # 🔵 SMART: Only cancel/update orders if prices have moved significantly
@@ -710,7 +802,7 @@ class CoinbaseMarketMakingEngine:
 
             quote_currency = pair.split('/')[1]
             quote_balance_cached: Optional[float] = None
-            if quote_currency in ['USD', 'USDC', 'USDT']:
+            if allow_new_buys and quote_currency in ['USD', 'USDC', 'USDT']:
                 quote_balance_cached = await self.get_inventory_balance(quote_currency)
                 if quote_balance_cached is None:
                     quote_balance_cached = 0.0
@@ -721,34 +813,51 @@ class CoinbaseMarketMakingEngine:
                     )
                     return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'insufficient_balance_soft'}
             
-            # 🔵 DYNAMIC: Adjust order size based on spread and performance
+            # 🔵 DYNAMIC: Adjust order size based on spread, fill quality, and profitability
             base_currency = pair.split('/')[0]
-            spread_multiplier = min(max(spread / self.min_spread_percent, 0.5), 2.0)
-            
-            # Adjust based on fill rate (pairs with higher fill rates get larger orders)
-            fill_rate = self.pair_fill_rates.get(pair, 0.5)
-            fill_rate_multiplier = 0.5 + fill_rate  # 0.5x to 1.5x based on fill rate
-            
-            order_value_usd = self.capital_per_pair * self.order_size_percent * spread_multiplier * fill_rate_multiplier
-            order_value_usd = max(order_value_usd, min_target_order_value)
-            
-            order_amount = order_value_usd / current_price
-            
-            if order_value_usd < min_buy_cost:
-                logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - order value ${order_value_usd:.2f} < minimum ${min_buy_cost:.2f}")
-                return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_value_too_small'}
-            
-            order_amount = round(order_amount, amount_precision)
-            if order_amount <= 0:
-                if min_amount > 0:
-                    order_amount = min_amount
-                    order_value_usd = order_amount * current_price
-                    if order_value_usd < min_buy_cost:
-                        logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - min order amount still below floor (${order_value_usd:.2f} < ${min_buy_cost:.2f})")
+            spread_for_multiplier = spread if spread and spread > 0 else required_spread
+            spread_multiplier = min(max(spread_for_multiplier / required_spread, 0.5), 2.0)
+
+            fill_rate_multiplier = 0.6 + fill_rate  # 0.6x to 1.6x based on fill rate
+
+            pair_perf = self.pair_performance[pair]
+            total_profit = pair_perf.get('total_profit', 0.0)
+            profit_multiplier = 1.0
+            if total_profit > 5:
+                profit_multiplier = min(1.6, 1.0 + (total_profit / 20.0))
+            elif total_profit < -3:
+                profit_multiplier = max(0.55, 1.0 + (total_profit / 20.0))
+
+            order_value_usd = 0.0
+            order_amount = 0.0
+
+            if allow_new_buys:
+                order_value_usd = (
+                    self.capital_per_pair
+                    * self.order_size_percent
+                    * spread_multiplier
+                    * fill_rate_multiplier
+                    * profit_multiplier
+                )
+                order_value_usd = min(order_value_usd, self.capital_per_pair * 0.9)
+                order_value_usd = max(order_value_usd, min_target_order_value)
+
+                if order_value_usd < min_buy_cost:
+                    logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - order value ${order_value_usd:.2f} < minimum ${min_buy_cost:.2f}")
+                    return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_value_too_small'}
+
+                order_amount = order_value_usd / current_price
+                order_amount = round(order_amount, amount_precision)
+                if order_amount <= 0:
+                    if min_amount > 0:
+                        order_amount = min_amount
+                        order_value_usd = order_amount * current_price
+                        if order_value_usd < min_buy_cost:
+                            logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - min order amount still below floor (${order_value_usd:.2f} < ${min_buy_cost:.2f})")
+                            return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_amount_too_small'}
+                    else:
+                        logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - order amount too small after rounding")
                         return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_amount_too_small'}
-                else:
-                    logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - order amount too small after rounding")
-                    return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_amount_too_small'}
             
             # 🔵 DYNAMIC PRICING: Get fresh bid/ask every time for real-time adjustment
             ticker = await self.exchange_manager.fetch_ticker('coinbase', pair)
@@ -793,6 +902,43 @@ class CoinbaseMarketMakingEngine:
             # 🔵 NO ROUNDING: Use exact calculated prices (exchange will handle precision)
             # Prices are already calculated with proper precision from market data
             
+            top_bid_price = top_bid_volume = top_ask_price = top_ask_volume = None
+            try:
+                order_book = await self.exchange_manager.fetch_order_book('coinbase', pair, limit=5)
+                bids = order_book.get('bids', []) or []
+                asks = order_book.get('asks', []) or []
+                if bids:
+                    top_bid_price, top_bid_volume = bids[0][0], bids[0][1]
+                if asks:
+                    top_ask_price, top_ask_volume = asks[0][0], asks[0][1]
+            except Exception as depth_error:
+                logger.debug(f"   🔵 [COINBASE] Depth fetch (inside quote adjust) failed for {pair}: {depth_error}")
+                bids = asks = []
+
+            inside_improve = self.inside_quote_improve_bps / 10000.0
+            if top_ask_price and top_ask_volume and top_ask_volume < self.inside_quote_volume_threshold:
+                min_sell_floor = current_price * (1 + required_spread / 100)
+                candidate_sell = top_ask_price * (1 - inside_improve)
+                adjusted_sell = max(min_sell_floor, min(sell_price, candidate_sell))
+                if adjusted_sell > sell_price * 0.995:  # avoid huge drops
+                    logger.debug(
+                        f"   🔵 [COINBASE] {pair}: Inside-quote sell adjustment {sell_price:.6f} → {adjusted_sell:.6f} (top ask vol {top_ask_volume:.2f})"
+                    )
+                    sell_price = adjusted_sell
+
+            if top_bid_price and top_bid_volume and top_bid_volume < self.inside_quote_volume_threshold:
+                candidate_buy = top_bid_price * (1 + inside_improve)
+                max_buy_ceiling = sell_price * (1 - max(dynamic_spacing / 100, 0.001))
+                candidate_buy = min(candidate_buy, max_buy_ceiling)
+                if candidate_buy > buy_price:
+                    logger.debug(
+                        f"   🔵 [COINBASE] {pair}: Inside-quote buy adjustment {buy_price:.6f} → {candidate_buy:.6f} (top bid vol {top_bid_volume:.2f})"
+                    )
+                    buy_price = candidate_buy
+
+            if sell_price <= buy_price:
+                sell_price = buy_price * (1 + max(dynamic_spacing / 100, 0.0015))
+
             # Get inventory
             inventory = await self.get_inventory_balance(base_currency)
             quote_currency = pair.split('/')[1]
@@ -989,9 +1135,10 @@ class CoinbaseMarketMakingEngine:
             top_bid_volume = bids[0][1] if bids else 0
             top_ask_volume = asks[0][1] if asks else 0
 
-            buy_drift_threshold = 0.25
-            sell_drift_threshold = max(0.6, self.min_spread_percent * 3)
-            sell_grace_period = 180
+            drift_floor = max(self.micro_reprice_threshold, target_spacing * 0.5)
+            buy_drift_threshold = drift_floor
+            sell_drift_threshold = max(drift_floor * 1.8, target_spacing * 1.2)
+            sell_grace_period = 120
 
             for order in open_orders:
                 if order.price <= 0:
@@ -1003,18 +1150,18 @@ class CoinbaseMarketMakingEngine:
                     price_diff_pct = abs((current_bid - order.price) / current_bid) * 100
                     if order.price >= current_ask:
                         return True, f"buy order {order.order_id} price {order.price} >= current ask {current_ask}"
-                    if top_ask_volume > top_bid_volume * 3 and price_diff_pct < 0.5:
+                    if top_ask_volume > top_bid_volume * 3 and price_diff_pct < 0.4:
                         return True, f"heavy ask pressure ({top_ask_volume:.4f} vs {top_bid_volume:.4f})"
                     drift_threshold = buy_drift_threshold
                 else:
                     price_diff_pct = abs((current_ask - order.price) / current_ask) * 100
                     if order.price <= current_bid:
                         return True, f"sell order {order.order_id} price {order.price} <= current bid {current_bid}"
-                    if top_bid_volume > top_ask_volume * 3 and price_diff_pct < 0.5:
+                    if top_bid_volume > top_ask_volume * 3 and price_diff_pct < 0.35:
                         return True, f"heavy bid pressure ({top_bid_volume:.4f} vs {top_ask_volume:.4f})"
                     drift_threshold = sell_drift_threshold
 
-                    if order_age < sell_grace_period and price_diff_pct < drift_threshold * 1.5:
+                    if order_age < sell_grace_period and price_diff_pct < max(drift_threshold, self.micro_reprice_threshold * 2):
                         continue
 
                 if price_diff_pct > drift_threshold:
@@ -1214,6 +1361,7 @@ class CoinbaseMarketMakingEngine:
                                 self.stats[pair].total_fees_usd += fee_accum
                                 self.stats[pair].net_profit_usd += net_accum
                                 self.net_profit_usd += net_accum
+                                self.pair_performance[pair]['total_profit'] += net_accum
                                 if net_accum >= 0:
                                     self.stats[pair].wins += 1
                                 else:
@@ -1227,6 +1375,8 @@ class CoinbaseMarketMakingEngine:
                                     self.stats[pair].filled_orders += 1
                                     self.stats[pair].total_orders += 1
                                     filled_count += 1
+                                    if not self.position_tracker[pair]:
+                                        self.pair_last_inventory_timestamp.pop(pair, None)
                                     self.pair_performance[pair]['total_trades'] += 1
                             
                             # Update fill rate
@@ -1302,6 +1452,7 @@ class CoinbaseMarketMakingEngine:
                                 self.stats[pair].total_fees_usd += fee_accum
                                 self.stats[pair].net_profit_usd += net_accum
                                 self.net_profit_usd += net_accum
+                                self.pair_performance[pair]['total_profit'] += net_accum
                                 if net_accum >= 0:
                                     self.stats[pair].wins += 1
                                 else:
@@ -1309,6 +1460,8 @@ class CoinbaseMarketMakingEngine:
                                 logger.info(
                                     f"   🔵 [COINBASE] ✅ SELL FILLED: {pair} @ ${price:.4f} for {filled:.6f} | Gross: ${gross_accum:.4f} | Fees: ${fee_accum:.4f} | Net: ${net_accum:.4f}"
                                 )
+                                if not self.position_tracker[pair]:
+                                    self.pair_last_inventory_timestamp.pop(pair, None)
                                 self.pair_performance[pair]['total_trades'] += 1
                         
                         elif status in ['canceled', 'cancelled']:
@@ -1365,6 +1518,8 @@ class CoinbaseMarketMakingEngine:
                     })
                     logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: Inventory not ready after buy fill ({filled_amount:.6f}). Queued for retry.")
                 return False
+
+            self.pair_last_inventory_timestamp[pair] = datetime.now()
 
             sell_amount = min(filled_amount, inventory)
             leftover_amount = max(filled_amount - sell_amount, 0.0)
@@ -1585,6 +1740,23 @@ class CoinbaseMarketMakingEngine:
                 inventory = await self.get_inventory_balance(base_currency)
                 
                 if inventory and inventory > 0:
+                    last_inventory_time = self.pair_last_inventory_timestamp.get(pair)
+                    inventory_age_minutes = None
+                    if last_inventory_time:
+                        inventory_age_minutes = (datetime.now() - last_inventory_time).total_seconds() / 60
+
+                    spread = await self.get_spread(pair)
+                    fill_rate = self.pair_fill_rates.get(pair, 0.5)
+                    market_ok, market_metrics, _ = await self._evaluate_market_health(pair)
+                    required_spread = self._compute_required_spread(pair, market_metrics, fill_rate)
+
+                    flatten_due_to_age = inventory_age_minutes is not None and inventory_age_minutes >= self.inventory_max_age_minutes
+                    flatten_due_to_spread = spread is not None and spread < required_spread
+                    flatten_due_to_risk = self.net_profit_usd <= self.max_global_loss_usd
+
+                    if not (flatten_due_to_age or flatten_due_to_spread or flatten_due_to_risk or not market_ok):
+                        continue
+
                     current_price = await self.get_current_price(pair)
                     if current_price and current_price > 0:
                         # Check if position is large enough to flatten (must meet minimum order size)
@@ -1606,13 +1778,13 @@ class CoinbaseMarketMakingEngine:
                             fallback_buy_price=self.last_buy_prices.get(pair, current_price)
                         )
 
-                        if min_profitable_price and current_price < min_profitable_price:
+                        if min_profitable_price and current_price < min_profitable_price and not flatten_due_to_risk:
                             logger.info(
                                 f"   🔵 [COINBASE] Skipping flatten {pair} - current price ${current_price:.4f} below profitable threshold ${min_profitable_price:.4f}"
                             )
                             continue
 
-                        baseline_price = current_price * (1 + max(self.min_profit_buffer_percent / 100.0, 0.0015))
+                        baseline_price = current_price * (1 + max(required_spread / 100.0, self.min_profit_buffer_percent / 100.0, 0.0015))
                         if min_profitable_price:
                             sell_price = max(min_profitable_price, baseline_price)
                         else:
