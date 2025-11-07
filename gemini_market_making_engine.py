@@ -100,6 +100,7 @@ class GeminiMarketMakingEngine:
         self.pair_fill_rates: Dict[str, float] = {}  # pair -> fill_rate (0-1)
         self.last_buy_prices: Dict[str, float] = defaultdict(lambda: 0.0)
         self.pair_anomaly_counters: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        self.min_volume_usd = 50000.0
         
         # Running state
         self.running = False
@@ -107,7 +108,7 @@ class GeminiMarketMakingEngine:
         
     async def discover_suitable_pairs(
         self,
-        min_volume_usd: float = 10000.0,  # $10k minimum 24h volume (lower for Gemini)
+        min_volume_usd: Optional[float] = None,
         max_pairs: int = 50,  # Top 50 pairs
     ) -> List[Tuple[str, float, float, float]]:
         """
@@ -117,6 +118,8 @@ class GeminiMarketMakingEngine:
         logger.info("   🟢 [GEMINI] 🔍 DISCOVERING SUITABLE PAIRS...")
         exchange = self.exchange_manager.get_exchange('gemini')
         suitable_pairs = []
+        volume_threshold = min_volume_usd if min_volume_usd is not None else self.min_volume_usd
+        base_order_budget = self.capital_per_pair * self.order_size_percent
         
         # Scan all markets
         for symbol, market_info in exchange.markets.items():
@@ -145,7 +148,21 @@ class GeminiMarketMakingEngine:
                         if base_volume and last_price:
                             volume_24h = base_volume * last_price
                     
-                    if not volume_24h or volume_24h < min_volume_usd:
+                    if not volume_24h or volume_24h < volume_threshold:
+                        continue
+                    if not last_price or last_price <= 0:
+                        continue
+                    
+                    limits = market_info.get('limits', {})
+                    min_cost = limits.get('cost', {}).get('min', 0) or 0
+                    min_amount = limits.get('amount', {}).get('min', 0) or 0
+                    est_order_value = base_order_budget
+                    est_order_amount = est_order_value / last_price
+                    if min_cost and est_order_value < min_cost * 1.1:
+                        logger.debug(f"   🟢 [GEMINI] Skipping {symbol} - min order cost ${min_cost:.2f} > target order value ${est_order_value:.2f}")
+                        continue
+                    if min_amount and est_order_amount < min_amount * 1.1:
+                        logger.debug(f"   🟢 [GEMINI] Skipping {symbol} - min order amount {min_amount:.6f} > target amount {est_order_amount:.6f}")
                         continue
                     
                     # Get spread
@@ -198,7 +215,7 @@ class GeminiMarketMakingEngine:
         
         # 🟢 DYNAMIC: Discover all suitable pairs
         discovered_pairs = await self.discover_suitable_pairs(
-            min_volume_usd=10000.0,  # $10k minimum volume (lower for Gemini)
+            min_volume_usd=self.min_volume_usd,
             max_pairs=50  # Top 50 pairs
         )
         

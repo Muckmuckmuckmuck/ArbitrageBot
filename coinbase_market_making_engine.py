@@ -94,6 +94,7 @@ class CoinbaseMarketMakingEngine:
         self.min_spacing_percent = 0.50  # Minimum spacing to ensure profitability (percent)
         self.max_spacing_percent = 1.50  # Cap spacing to avoid quoting too far away
         self.min_profit_buffer_percent = max(min_spread_percent * 0.5, 0.6)
+        self.min_volume_usd = 200000.0
 
         # Active orders tracking
         self.active_orders: Dict[str, List[MarketMakingOrder]] = defaultdict(list)
@@ -120,7 +121,7 @@ class CoinbaseMarketMakingEngine:
         
     async def discover_suitable_pairs(
         self,
-        min_volume_usd: float = 50000.0,  # $50k minimum 24h volume
+        min_volume_usd: Optional[float] = None,
         max_pairs: int = 50,  # Top 50 pairs
     ) -> List[Tuple[str, float, float, float]]:
         """
@@ -130,6 +131,8 @@ class CoinbaseMarketMakingEngine:
         logger.info("   🔵 [COINBASE] 🔍 DISCOVERING SUITABLE PAIRS...")
         exchange = self.exchange_manager.get_exchange('coinbase')
         suitable_pairs = []
+        volume_threshold = min_volume_usd if min_volume_usd is not None else self.min_volume_usd
+        base_order_budget = self.capital_per_pair * self.order_size_percent
         
         # Scan all markets
         for symbol, market_info in exchange.markets.items():
@@ -157,8 +160,24 @@ class CoinbaseMarketMakingEngine:
                         last_price = ticker.get('last') or ticker.get('close')
                         if base_volume and last_price:
                             volume_24h = base_volume * last_price
+                    else:
+                        last_price = ticker.get('last') or ticker.get('close')
                     
-                    if not volume_24h or volume_24h < min_volume_usd:
+                    if not volume_24h or volume_24h < volume_threshold:
+                        continue
+                    if not last_price or last_price <= 0:
+                        continue
+                    
+                    limits = market_info.get('limits', {})
+                    min_cost = limits.get('cost', {}).get('min', 0) or 0
+                    min_amount = limits.get('amount', {}).get('min', 0) or 0
+                    est_order_value = base_order_budget
+                    est_order_amount = est_order_value / last_price
+                    if min_cost and est_order_value < min_cost * 1.1:
+                        logger.debug(f"   🔵 [COINBASE] Skipping {symbol} - min order cost ${min_cost:.2f} > target order value ${est_order_value:.2f}")
+                        continue
+                    if min_amount and est_order_amount < min_amount * 1.1:
+                        logger.debug(f"   🔵 [COINBASE] Skipping {symbol} - min order amount {min_amount:.6f} > target amount {est_order_amount:.6f}")
                         continue
                     
                     # Get spread
@@ -211,7 +230,7 @@ class CoinbaseMarketMakingEngine:
         
         # 🔵 DYNAMIC: Discover all suitable pairs
         discovered_pairs = await self.discover_suitable_pairs(
-            min_volume_usd=50000.0,  # $50k minimum volume
+            min_volume_usd=self.min_volume_usd,
             max_pairs=50  # Top 50 pairs
         )
         
