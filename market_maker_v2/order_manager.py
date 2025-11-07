@@ -6,7 +6,6 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from pathlib import Path
 from typing import Dict, List, Optional
 
 from .config import PathsConfig, StrategyToggles
@@ -115,10 +114,16 @@ class OrderManager:
         client: ExchangeClient,
         paths: PathsConfig,
         toggles: StrategyToggles,
+        maker_fee_bps: Decimal,
+        taker_fee_bps: Decimal,
+        simulate_mode: bool = False,
     ) -> None:
         self.client = client
         self.store = OrderStore(paths)
         self.toggles = toggles
+        self.maker_fee_bps = maker_fee_bps
+        self.taker_fee_bps = taker_fee_bps
+        self.simulate_mode = simulate_mode
         self._lock = asyncio.Lock()
 
     async def place_limit_order(
@@ -131,12 +136,31 @@ class OrderManager:
         async with self._lock:
             if amount <= 0:
                 raise ValueError("amount must be positive")
+
+            created_at = time.time()
+            if self.simulate_mode:
+                client_order_id = f"sim-{side}-{created_at}"
+                record = OrderRecord(
+                    client_order_id=client_order_id,
+                    exchange_order_id=client_order_id,
+                    symbol=symbol,
+                    side=side,
+                    price=price,
+                    amount=amount,
+                    filled=Decimal("0"),
+                    status="open",
+                    created_at=created_at,
+                    updated_at=created_at,
+                )
+                self.store.upsert(record)
+                return record
+
             params = {}
             if self.toggles.enable_post_only:
                 params["post_only"] = True
             response = await self.client.create_limit_order(symbol, side, amount, price, params=params)
             record = OrderRecord(
-                client_order_id=response.get("clientOrderId") or response.get("id") or str(time.time()),
+                client_order_id=response.get("clientOrderId") or response.get("id") or f"{side}-{created_at}",
                 exchange_order_id=response.get("id"),
                 symbol=symbol,
                 side=side,
@@ -144,7 +168,7 @@ class OrderManager:
                 amount=Decimal(str(response.get("amount", amount))),
                 filled=Decimal(str(response.get("filled", "0"))),
                 status=response.get("status", "open"),
-                created_at=time.time(),
+                created_at=created_at,
                 updated_at=time.time(),
             )
             self.store.upsert(record)
@@ -152,7 +176,10 @@ class OrderManager:
 
     async def cancel_order(self, symbol: str, order: OrderRecord) -> None:
         async with self._lock:
-            if not order.exchange_order_id:
+            if self.simulate_mode or not order.exchange_order_id:
+                order.status = "cancelled"
+                order.updated_at = time.time()
+                self.store.upsert(order)
                 return
             try:
                 await self.client.cancel_order(order.exchange_order_id, symbol)
@@ -170,8 +197,21 @@ class OrderManager:
     async def reconcile(self, symbol: str) -> List[OrderRecord]:
         """Reconcile stored orders with exchange state."""
         async with self._lock:
+            if self.simulate_mode:
+                # Nothing to fetch; return current open records
+                return self.store.fetch_open(symbol)
+
             open_orders_resp = await self.client.fetch_open_orders(symbol)
             open_by_id = {order["id"]: order for order in open_orders_resp}
+            trades = await self.client.fetch_my_trades(symbol)
+            fills_by_order: Dict[str, Decimal] = {}
+            for trade in trades:
+                order_id = trade.get("order")
+                if not order_id:
+                    continue
+                amount = Decimal(str(trade.get("amount", "0")))
+                fills_by_order[order_id] = fills_by_order.get(order_id, Decimal("0")) + amount
+
             reconciled: List[OrderRecord] = []
             for record in self.store.fetch_open(symbol):
                 exchange_payload = None
@@ -183,17 +223,40 @@ class OrderManager:
                     record.filled = Decimal(str(exchange_payload.get("filled", record.filled)))
                     record.status = exchange_payload.get("status", record.status)
                 else:
-                    # order no longer open, fetch final trades
-                    trades = await self.client.fetch_my_trades(symbol)
-                    filled_amount = sum(
-                        Decimal(str(trade.get("amount", "0")))
-                        for trade in trades
-                        if trade.get("order") == record.exchange_order_id
-                    )
+                    filled_amount = fills_by_order.get(record.exchange_order_id or "", record.filled)
                     record.filled = filled_amount
                     record.status = "filled" if filled_amount >= record.amount else "cancelled"
                 record.updated_at = time.time()
                 self.store.upsert(record)
                 reconciled.append(record)
             return reconciled
+
+    def get(self, client_order_id: str) -> Optional[OrderRecord]:
+        row = self.store.conn.execute(
+            "SELECT * FROM orders WHERE client_order_id=?", (client_order_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return self.store._row_to_record(row)
+
+    def mark_filled(self, record: OrderRecord, fill_price: Optional[Decimal] = None) -> OrderRecord:
+        record.filled = record.amount
+        if fill_price is not None:
+            record.price = fill_price
+        record.status = "filled"
+        record.updated_at = time.time()
+        self.store.upsert(record)
+        return record
+
+    def mark_partially_filled(self, record: OrderRecord, filled_amount: Decimal, fill_price: Decimal) -> OrderRecord:
+        record.filled = filled_amount
+        record.price = fill_price
+        record.status = "partially_filled"
+        record.updated_at = time.time()
+        self.store.upsert(record)
+        return record
+
+    def fee_for(self, side: str, amount: Decimal, price: Decimal, maker: bool = True) -> Decimal:
+        bps = self.maker_fee_bps if maker else self.taker_fee_bps
+        return amount * price * (bps / Decimal("10000"))
 

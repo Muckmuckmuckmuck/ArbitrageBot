@@ -46,6 +46,8 @@ class MarketMakerBot:
         self._running = True
         logger.info("Starting market maker v2...")
 
+        simulate = self.config.strategy.simulate_mode
+
         for exchange_name, exchange_cfg in self.config.exchanges.items():
             client = ExchangeClient(exchange_cfg)
             self.exchange_clients[exchange_name] = client
@@ -53,9 +55,24 @@ class MarketMakerBot:
             for pair_cfg in exchange_cfg.markets:
                 base, quote = self._split_symbol(pair_cfg.symbol)
                 market_data = MarketDataFeed(client, pair_cfg.symbol)
-                inventory = InventoryManager(client, base_currency=base, quote_currency=quote, risk=self.config.risk)
+                inventory = InventoryManager(
+                    client,
+                    base_currency=base,
+                    quote_currency=quote,
+                    risk=self.config.risk,
+                    simulate_mode=simulate,
+                    initial_base=Decimal("0"),
+                    initial_quote=capital,
+                )
                 quoter = Quoter(pair_cfg, capital)
-                order_manager = OrderManager(client, self.config.paths, self.config.strategy)
+                order_manager = OrderManager(
+                    client,
+                    self.config.paths,
+                    self.config.strategy,
+                    maker_fee_bps=exchange_cfg.maker_fee_bps,
+                    taker_fee_bps=exchange_cfg.taker_fee_bps,
+                    simulate_mode=simulate,
+                )
                 runtime = PairRuntime(
                     cfg=pair_cfg,
                     market_data=market_data,
@@ -102,10 +119,13 @@ class MarketMakerBot:
             return
 
         volatility = runtime.market_data.volatility.volatility()
+        if self.config.strategy.simulate_mode:
+            self._simulate_fills(runtime, snapshot)
         pause_reason = runtime.inventory.should_pause(snapshot.mid_price, volatility)
         if pause_reason:
             logger.warning("Pausing %s: %s", runtime.cfg.symbol, pause_reason)
             await runtime.order_manager.cancel_all(runtime.cfg.symbol)
+            runtime.active_orders.clear()
             return
 
         now = time.time()
@@ -115,7 +135,10 @@ class MarketMakerBot:
 
         if now - runtime.last_reconcile_time >= 5:
             await runtime.order_manager.reconcile(runtime.cfg.symbol)
+            self._handle_order_updates(runtime)
             runtime.last_reconcile_time = now
+        else:
+            self._handle_order_updates(runtime)
 
     async def _refresh_quotes(
         self,
@@ -141,6 +164,7 @@ class MarketMakerBot:
         )
 
         await runtime.order_manager.cancel_all(runtime.cfg.symbol)
+        runtime.active_orders.clear()
 
         try:
             bid_order = await runtime.order_manager.place_limit_order(
@@ -167,4 +191,41 @@ class MarketMakerBot:
         resolved = symbol.replace("-", "/")
         base, quote = resolved.split("/")
         return base, quote
+
+    def _simulate_fills(self, runtime: PairRuntime, snapshot) -> None:
+        if not self.config.strategy.simulate_mode:
+            return
+        for side, order in list(runtime.active_orders.items()):
+            if order.status != "open":
+                continue
+            if side == "buy" and snapshot.best_ask <= order.price:
+                updated = runtime.order_manager.mark_filled(order, snapshot.best_ask)
+                runtime.active_orders[side] = updated
+            elif side == "sell" and snapshot.best_bid >= order.price:
+                updated = runtime.order_manager.mark_filled(order, snapshot.best_bid)
+                runtime.active_orders[side] = updated
+
+    def _handle_order_updates(self, runtime: PairRuntime) -> None:
+        snapshot = runtime.market_data.snapshot
+        if snapshot is None:
+            return
+        for side, order in list(runtime.active_orders.items()):
+            latest = runtime.order_manager.get(order.client_order_id)
+            if latest is None:
+                runtime.active_orders.pop(side, None)
+                continue
+            runtime.active_orders[side] = latest
+            if latest.status in {"filled", "cancelled"}:
+                runtime.active_orders.pop(side, None)
+                if latest.status == "filled":
+                    fee = runtime.order_manager.fee_for(side, latest.amount, latest.price, maker=True)
+                    runtime.inventory.apply_fill(side, latest.amount, latest.price, fee)
+                    logger.info(
+                        "Filled %s %s @ %s amount=%s",
+                        runtime.cfg.symbol,
+                        side,
+                        latest.price,
+                        latest.amount,
+                    )
+                    runtime.last_quote_time = 0
 

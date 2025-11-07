@@ -4,7 +4,7 @@ import asyncio
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Dict, Optional
+from typing import Optional
 
 from .config import RiskConfig
 from .exchange import ExchangeClient, ExchangeError
@@ -39,6 +39,9 @@ class InventoryManager:
         quote_currency: str,
         risk: RiskConfig,
         poll_interval: float = 10.0,
+        simulate_mode: bool = False,
+        initial_base: Decimal = Decimal("0"),
+        initial_quote: Decimal = Decimal("0"),
     ) -> None:
         self.client = client
         self.base_currency = base_currency
@@ -49,9 +52,20 @@ class InventoryManager:
         self._running = False
         self._task: Optional[asyncio.Task[None]] = None
         self._error: Optional[str] = None
+        self.simulate_mode = simulate_mode
+        if simulate_mode:
+            self.snapshot = PositionSnapshot(
+                symbol=f"{base_currency}/{quote_currency}",
+                base_balance=initial_base,
+                quote_balance=initial_quote,
+                timestamp=time.time(),
+            )
 
     async def start(self) -> None:
         if self._running:
+            return
+        if self.simulate_mode:
+            # No background polling in simulation mode
             return
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
@@ -91,6 +105,21 @@ class InventoryManager:
             return Decimal("0")
         imbalance = self.snapshot.imbalance_pct(mid_price)
         return max(min(imbalance, Decimal("0.5")), Decimal("-0.5"))
+
+    def apply_fill(self, side: str, amount: Decimal, price: Decimal, fee: Decimal) -> None:
+        if self.snapshot is None:
+            return
+        base = self.snapshot.base_balance
+        quote = self.snapshot.quote_balance
+        if side == "buy":
+            base += amount
+            quote -= amount * price + fee
+        else:
+            base -= amount
+            quote += amount * price - fee
+        self.snapshot.base_balance = base
+        self.snapshot.quote_balance = quote
+        self.snapshot.timestamp = time.time()
 
     def should_pause(self, mid_price: Decimal, volatility: Decimal) -> Optional[str]:
         """Return reason to pause or None."""
