@@ -17,7 +17,8 @@ import time
 import json
 import aiohttp
 import asyncio
-from typing import Dict, Optional, List, Tuple
+from datetime import datetime
+from typing import Dict, Optional, List, Tuple, Any
 from coinbase_gemini_config import Config
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class CoinbaseGeminiExchangeManager:
         self.coinbase = None
         self.gemini = None
         self.exchanges = {}
+        self._price_cache: Dict[str, Dict[str, Tuple[float, float]]] = {}
         
     async def initialize(self):
         """Initialize both exchanges with API keys"""
@@ -130,6 +132,108 @@ class CoinbaseGeminiExchangeManager:
     def is_exchange_available(self, exchange_id: str) -> bool:
         """Check if an exchange is available"""
         return exchange_id in self.exchanges and self.exchanges[exchange_id] is not None
+
+    async def _get_price_in_usd(self, exchange_id: str, asset: str, visited: Optional[set] = None) -> Optional[float]:
+        asset = asset.upper()
+        stable_map = {
+            'USD': 1.0,
+            'USDC': 1.0,
+            'USDT': 1.0,
+            'GUSD': 1.0,
+        }
+        if asset in stable_map:
+            return stable_map[asset]
+        if visited is None:
+            visited = set()
+        key = (exchange_id, asset)
+        if key in visited:
+            return None
+        visited.add(key)
+
+        now = time.time()
+        cache = self._price_cache.setdefault(exchange_id, {})
+        if asset in cache:
+            cached_price, cached_ts = cache[asset]
+            if now - cached_ts < 30:
+                return cached_price
+
+        if not self.is_exchange_available(exchange_id):
+            return None
+        exchange = self.get_exchange(exchange_id)
+        preferred_quotes = ['USD', 'USDC', 'USDT', 'GUSD']
+        for quote in preferred_quotes:
+            symbol = f"{asset}/{quote}"
+            if symbol in exchange.markets:
+                try:
+                    ticker = await self.fetch_ticker(exchange_id, symbol)
+                    price = ticker.get('last') or ticker.get('close') or ticker.get('bid') or ticker.get('ask')
+                    if not price or price <= 0:
+                        continue
+                    if quote != 'USD':
+                        quote_price = await self._get_price_in_usd(exchange_id, quote, visited)
+                        if not quote_price:
+                            continue
+                        price *= quote_price
+                    cache[asset] = (price, now)
+                    return price
+                except Exception as e:
+                    logger.debug(f"   {exchange_id.upper()} pricing {asset}/{quote} failed: {e}")
+                    continue
+
+        # Fallback: try other exchange if available
+        other_exchange = EXCHANGE_GEMINI if exchange_id == EXCHANGE_COINBASE else EXCHANGE_COINBASE
+        if self.is_exchange_available(other_exchange):
+            try:
+                price = await self._get_price_in_usd(other_exchange, asset, visited)
+                if price:
+                    cache[asset] = (price, now)
+                    return price
+            except Exception:
+                pass
+        return None
+
+    async def compute_portfolio_snapshot(self, exchange_filter: Optional[List[str]] = None) -> Dict[str, Any]:
+        exchanges_to_check = exchange_filter if exchange_filter else [EXCHANGE_COINBASE, EXCHANGE_GEMINI]
+        snapshot: Dict[str, Any] = {
+            'timestamp': datetime.utcnow().isoformat(),
+            'total_value_usd': 0.0,
+            'exchanges': {}
+        }
+        for exchange_id in exchanges_to_check:
+            if not self.is_exchange_available(exchange_id):
+                continue
+            try:
+                balance = await self.fetch_balance(exchange_id)
+            except Exception as e:
+                logger.error(f"   Error computing snapshot for {exchange_id}: {e}")
+                continue
+            exchange_snapshot = {
+                'total_value_usd': 0.0,
+                'stable_value_usd': 0.0,
+                'crypto_value_usd': 0.0,
+                'assets': []
+            }
+            total_balances = balance.get('total', {}) or {}
+            for asset, total_amount in total_balances.items():
+                if not total_amount or total_amount == 0:
+                    continue
+                price_usd = await self._get_price_in_usd(exchange_id, asset)
+                value_usd = price_usd * total_amount if price_usd else 0.0
+                asset_entry = {
+                    'asset': asset,
+                    'amount': total_amount,
+                    'price_usd': price_usd,
+                    'value_usd': value_usd
+                }
+                exchange_snapshot['assets'].append(asset_entry)
+                exchange_snapshot['total_value_usd'] += value_usd
+                if asset.upper() in {'USD', 'USDC', 'USDT', 'GUSD'}:
+                    exchange_snapshot['stable_value_usd'] += value_usd
+                else:
+                    exchange_snapshot['crypto_value_usd'] += value_usd
+            snapshot['exchanges'][exchange_id] = exchange_snapshot
+            snapshot['total_value_usd'] += exchange_snapshot['total_value_usd']
+        return snapshot
     
     async def fetch_balance(self, exchange_id: str) -> Dict:
         """
@@ -584,7 +688,6 @@ class CoinbaseGeminiExchangeManager:
         # ====================================================================
         # 🔵 COINBASE-SPECIFIC: Network parameter handling
         # ====================================================================
-        # Build params dict
         fetch_params = {}
         if params:
             fetch_params.update(params)

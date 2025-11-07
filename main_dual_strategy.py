@@ -42,6 +42,10 @@ class DualStrategyBot:
         self.gemini_market_making_engine = None
         self.running = False
         self.shutdown_event = asyncio.Event()
+        self.portfolio_baseline = None
+        self.portfolio_peak_value = None
+        self.portfolio_monitor_task = None
+        self.portfolio_monitor_interval = 180  # seconds
         
     async def initialize(self):
         """Initialize both market making strategies"""
@@ -163,6 +167,9 @@ class DualStrategyBot:
             tasks.append(gemini_task)
         else:
             logger.info("   ⚠️ Gemini market-making strategy not started - Gemini unavailable")
+
+        # Start portfolio monitor
+        self.portfolio_monitor_task = asyncio.create_task(self.monitor_portfolio())
         
         # Wait for shutdown signal or any task to complete/fail
         try:
@@ -203,6 +210,8 @@ class DualStrategyBot:
             coinbase_task.cancel()
             if self.gemini_market_making_engine:
                 gemini_task.cancel()
+            if self.portfolio_monitor_task:
+                self.portfolio_monitor_task.cancel()
             
             # Wait for cancellation
             try:
@@ -219,12 +228,60 @@ class DualStrategyBot:
                     pass
                 except Exception as e:
                     logger.debug(f"Gemini task error during cleanup: {e}")
+            if self.portfolio_monitor_task:
+                try:
+                    await self.portfolio_monitor_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.debug(f"Portfolio monitor error during cleanup: {e}")
             
             logger.info("✅ Both market making strategies stopped")
     
     def stop(self):
         """Stop the bot"""
         self.shutdown_event.set()
+
+    async def monitor_portfolio(self):
+        """Periodically log comprehensive portfolio analytics."""
+        while not self.exchange_manager:
+            await asyncio.sleep(1)
+        while True:
+            try:
+                snapshot = await self.exchange_manager.compute_portfolio_snapshot()
+                total_value = snapshot.get('total_value_usd', 0.0)
+                if self.portfolio_baseline is None:
+                    self.portfolio_baseline = total_value
+                    self.portfolio_peak_value = total_value
+                    logger.info(
+                        f"💰 Portfolio baseline established: ${total_value:,.2f}"
+                    )
+                delta = total_value - self.portfolio_baseline
+                delta_pct = (delta / self.portfolio_baseline * 100) if self.portfolio_baseline else 0.0
+                if self.portfolio_peak_value is None or total_value > self.portfolio_peak_value:
+                    self.portfolio_peak_value = total_value
+                drawdown = ((total_value - self.portfolio_peak_value) / self.portfolio_peak_value * 100) if self.portfolio_peak_value else 0.0
+                coinbase_realized = getattr(self.coinbase_market_making_engine, 'net_profit_usd', 0.0) if self.coinbase_market_making_engine else 0.0
+                gemini_realized = getattr(self.gemini_market_making_engine, 'net_profit_usd', 0.0) if self.gemini_market_making_engine else 0.0
+                logger.info("📈 PORTFOLIO SNAPSHOT")
+                logger.info(
+                    f"   Total value: ${total_value:,.2f} | Δ vs start: ${delta:,.2f} ({delta_pct:+.2f}%)"
+                )
+                logger.info(
+                    f"   Realized PnL -> Coinbase: ${coinbase_realized:.2f}, Gemini: ${gemini_realized:.2f}, Combined: ${coinbase_realized + gemini_realized:.2f}"
+                )
+                if drawdown < 0:
+                    logger.info(f"   Drawdown from peak: {drawdown:.2f}%")
+                for exchange_id, data in snapshot.get('exchanges', {}).items():
+                    logger.info(
+                        f"   {exchange_id.upper()} holdings: ${data.get('total_value_usd', 0.0):,.2f} "
+                        f"(stable ${data.get('stable_value_usd', 0.0):,.2f} / crypto ${data.get('crypto_value_usd', 0.0):,.2f})"
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"   ⚠️ Portfolio monitor error: {e}")
+            await asyncio.sleep(self.portfolio_monitor_interval)
 
 async def main():
     """Main entry point"""

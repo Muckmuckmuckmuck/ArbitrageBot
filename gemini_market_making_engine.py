@@ -1473,6 +1473,7 @@ class GeminiMarketMakingEngine:
                 logger.info(f"      Total filled (all-time): {total_filled}")
                 logger.info(f"      Wins / Losses: {total_wins} / {total_losses}")
                 logger.info(f"      Win rate: {(total_wins / win_denom * 100) if win_denom > 0 else 0:.1f}%")
+                logger.info(f"      Engine realized net: ${self.net_profit_usd:.2f}")
                 logger.info("=" * 80)
                 
                 # Wait before next update cycle
