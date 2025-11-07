@@ -94,6 +94,7 @@ class CoinbaseMarketMakingEngine:
         self.taker_fee_percent = 0.35  # Estimated taker fee (fallback / crosses)
         self.min_order_value_usd = 5.00
         self.min_inventory_sell_value_usd = 5.00
+        self.balance_buffer_multiplier = 1.20
         self.min_profit_buffer_percent = 0.25  # Additional cushion beyond fees
         self.min_spread_percent = max(
             min_spread_percent,
@@ -648,6 +649,20 @@ class CoinbaseMarketMakingEngine:
             exchange_min_cost = limits.get('cost', {}).get('min', 0) or 0
             min_cost = max(exchange_min_cost, 1.0) if exchange_min_cost > 0 else 1.0  # Exchange requirement (can be < $5)
             min_buy_cost = max(min_cost, self.min_order_value_usd)
+            min_target_order_value = max(min_buy_cost * self.balance_buffer_multiplier, min_buy_cost)
+
+            quote_currency = pair.split('/')[1]
+            quote_balance_cached: Optional[float] = None
+            if quote_currency in ['USD', 'USDC', 'USDT']:
+                quote_balance_cached = await self.get_inventory_balance(quote_currency)
+                if quote_balance_cached is None:
+                    quote_balance_cached = 0.0
+                if quote_balance_cached < min_target_order_value:
+                    logger.info(
+                        f"   🔵 [COINBASE] ⏭️ Skipping {pair} - soft insufficient {quote_currency} balance "
+                        f"${quote_balance_cached:.2f} < soft floor ${min_target_order_value:.2f}"
+                    )
+                    return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'insufficient_balance_soft'}
             
             # 🔵 DYNAMIC: Adjust order size based on spread and performance
             base_currency = pair.split('/')[0]
@@ -658,13 +673,12 @@ class CoinbaseMarketMakingEngine:
             fill_rate_multiplier = 0.5 + fill_rate  # 0.5x to 1.5x based on fill rate
             
             order_value_usd = self.capital_per_pair * self.order_size_percent * spread_multiplier * fill_rate_multiplier
-            order_value_usd = max(order_value_usd, min_buy_cost)
+            order_value_usd = max(order_value_usd, min_target_order_value)
             
             order_amount = order_value_usd / current_price
             
             if order_value_usd < min_buy_cost:
                 logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - order value ${order_value_usd:.2f} < minimum ${min_buy_cost:.2f}")
-                self._register_failure(pair, 'min_order', f"target ${order_value_usd:.2f} vs min ${min_buy_cost:.2f}")
                 return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_value_too_small'}
             
             order_amount = round(order_amount, amount_precision)
@@ -674,11 +688,9 @@ class CoinbaseMarketMakingEngine:
                     order_value_usd = order_amount * current_price
                     if order_value_usd < min_buy_cost:
                         logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - min order amount still below floor (${order_value_usd:.2f} < ${min_buy_cost:.2f})")
-                        self._register_failure(pair, 'min_order', f"rounded order ${order_value_usd:.2f} below floor")
                         return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_amount_too_small'}
                 else:
                     logger.info(f"   🔵 [COINBASE] ⏭️ Skipping {pair} - order amount too small after rounding")
-                    self._register_failure(pair, 'min_order', 'amount rounded to zero')
                     return {'success': False, 'orders_placed': 0, 'orders_filled': 0, 'error': 'order_amount_too_small'}
             
             # 🔵 DYNAMIC PRICING: Get fresh bid/ask every time for real-time adjustment
@@ -727,7 +739,10 @@ class CoinbaseMarketMakingEngine:
             # Get inventory
             inventory = await self.get_inventory_balance(base_currency)
             quote_currency = pair.split('/')[1]
-            quote_balance = await self.get_inventory_balance(quote_currency)
+            if quote_balance_cached is None:
+                quote_balance = await self.get_inventory_balance(quote_currency)
+            else:
+                quote_balance = quote_balance_cached
             
             # Calculate max inventory
             inventory_value = (inventory * current_price) if inventory else 0
@@ -741,7 +756,6 @@ class CoinbaseMarketMakingEngine:
             
             if quote_balance < min_buy_cost:
                 logger.info(f"   🔵 [COINBASE] ⏭️ Skipping buy order for {pair} - insufficient {quote_currency} balance ${quote_balance:.2f} < minimum order cost ${min_buy_cost:.2f}")
-                self._register_failure(pair, 'insufficient_balance', f"balance ${quote_balance:.2f} < min ${min_buy_cost:.2f}")
                 order_amount = 0
             elif max_inventory > 0 and inventory_value >= max_inventory:
                 logger.info(f"   🔵 [COINBASE] ⏭️ Skipping buy order for {pair} - inventory ${inventory_value:.2f} >= max ${max_inventory:.2f}")
@@ -764,14 +778,12 @@ class CoinbaseMarketMakingEngine:
                     min_order_value = order_amount * buy_price
                     if min_order_value < min_buy_cost:
                         logger.info(f"   🔵 [COINBASE] ⏭️ Skipping buy order for {pair} - adjusted order value ${min_order_value:.2f} < minimum ${min_buy_cost:.2f}")
-                        self._register_failure(pair, 'min_order', f"adjusted order ${min_order_value:.2f} < floor ${min_buy_cost:.2f}")
                         order_amount = 0  # Skip order
                     else:
                         # Round to precision
                         order_amount = round(order_amount, amount_precision)
                         if order_amount <= 0:
                             logger.info(f"   🔵 [COINBASE] ⏭️ Skipping buy order for {pair} - order amount rounded to 0")
-                            self._register_failure(pair, 'min_order', 'amount rounded to zero after balance adjust')
                         else:
                             logger.info(f"   🔵 [COINBASE] {pair}: 📝 ATTEMPTING TO PLACE BUY ORDER... (Balance: ${quote_balance:.2f} {quote_currency}, Order: ${order_amount * buy_price:.2f})")
                 elif max_order_amount >= order_amount:
@@ -780,7 +792,6 @@ class CoinbaseMarketMakingEngine:
                 else:
                     required_value = order_amount * buy_price if order_amount and buy_price else min_buy_cost
                     logger.info(f"   🔵 [COINBASE] ⏭️ Skipping buy order for {pair} - insufficient {quote_currency} balance: ${quote_balance:.2f} < minimum required ${required_value:.2f}")
-                    self._register_failure(pair, 'insufficient_balance', f"balance ${quote_balance:.2f} < required ${required_value:.2f}")
                     order_amount = 0  # Skip order
                 
                 if order_amount > 0:
@@ -1378,6 +1389,8 @@ class CoinbaseMarketMakingEngine:
         if not self.pending_sell_queue:
             return
 
+        exchange = self.exchange_manager.get_exchange('coinbase')
+
         for pair in list(self.pending_sell_queue.keys()):
             entries = self.pending_sell_queue.get(pair, [])
             if not entries:
@@ -1389,6 +1402,22 @@ class CoinbaseMarketMakingEngine:
                 amount = entry.get('amount', 0.0)
                 buy_price = entry.get('buy_price', 0.0)
                 retry_count = entry.get('retry_count', 0)
+
+                market_info = exchange.markets.get(pair, {})
+                limits = market_info.get('limits', {})
+                exchange_min_cost = limits.get('cost', {}).get('min', 0) or 0
+                min_cost = max(exchange_min_cost, 1.0) if exchange_min_cost > 0 else 1.0
+                estimated_value = amount * (buy_price or 0.0)
+                if estimated_value < min_cost * 0.9:
+                    # Too small to sell yet, keep accumulating
+                    entry['retry_count'] = retry_count + 1
+                    if entry['retry_count'] % 10 == 0:
+                        logger.info(
+                            f"   🔵 [COINBASE] Pending sell for {pair} still below minimum (${estimated_value:.2f} < ${min_cost:.2f}); awaiting additional fills"
+                        )
+                    remaining.append(entry)
+                    continue
+
                 success = await self._place_sell_order_for_filled_buy(pair, amount, buy_price, allow_queue=False)
                 if success:
                     continue
