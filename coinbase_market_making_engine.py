@@ -593,7 +593,10 @@ class CoinbaseMarketMakingEngine:
             if quote_balance is None:
                 quote_balance = 0.0
             
-            if inventory_value >= max_inventory:
+            if quote_balance < min_cost:
+                logger.info(f"   🔵 [COINBASE] ⏭️ Skipping buy order for {pair} - insufficient {quote_currency} balance ${quote_balance:.2f} < minimum order cost ${min_cost:.2f}")
+                order_amount = 0
+            elif max_inventory > 0 and inventory_value >= max_inventory:
                 logger.info(f"   🔵 [COINBASE] ⏭️ Skipping buy order for {pair} - inventory ${inventory_value:.2f} >= max ${max_inventory:.2f}")
                 order_amount = 0  # Skip order
             else:
@@ -626,7 +629,6 @@ class CoinbaseMarketMakingEngine:
                     # Have enough balance for full order
                     logger.info(f"   🔵 [COINBASE] {pair}: 📝 ATTEMPTING TO PLACE BUY ORDER... (Balance: ${quote_balance:.2f} {quote_currency}, Required: ${order_amount * buy_price:.2f})")
                 else:
-                    # Not enough balance even for minimum order
                     logger.info(f"   🔵 [COINBASE] ⏭️ Skipping buy order for {pair} - insufficient {quote_currency} balance: ${quote_balance:.2f} < minimum required ${min_cost:.2f}")
                     order_amount = 0  # Skip order
                 
