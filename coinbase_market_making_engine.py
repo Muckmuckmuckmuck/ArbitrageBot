@@ -428,6 +428,45 @@ class CoinbaseMarketMakingEngine:
             logger.debug(f"   Error fetching balance: {e}")
             return 0.0
     
+    def _get_min_profitable_sell_price(
+        self,
+        pair: str,
+        fallback_buy_price: Optional[float] = None,
+        include_buffer: bool = True,
+    ) -> Optional[float]:
+        """
+        Calculate the minimum price that preserves a positive net PnL after fees.
+        Uses tracked inventory lots when available, otherwise falls back to provided price.
+        """
+        lots = self.position_tracker.get(pair, [])
+        total_amount = sum(lot.get('amount', 0.0) for lot in lots)
+        total_cost = sum(lot.get('cost', 0.0) + lot.get('fees', 0.0) for lot in lots)
+
+        used_fallback = False
+
+        if total_amount > 1e-12 and total_cost > 0:
+            avg_cost = total_cost / total_amount
+        elif fallback_buy_price:
+            avg_cost = fallback_buy_price
+            total_amount = 1.0  # Normalise to avoid division by zero
+            used_fallback = True
+        else:
+            return None
+
+        if used_fallback:
+            avg_cost *= (1 + self.maker_fee_percent / 100.0)
+
+        sell_fee_factor = 1.0 - (self.maker_fee_percent / 100.0)
+        if sell_fee_factor <= 0:
+            sell_fee_factor = 0.999  # Safety to avoid division by zero
+
+        breakeven_price = avg_cost / sell_fee_factor
+
+        if include_buffer:
+            breakeven_price *= (1 + self.min_profit_buffer_percent / 100.0)
+
+        return breakeven_price
+
     async def sell_all_inventory(self):
         """Check ALL inventory and place sell orders for any crypto we have"""
         try:
@@ -472,7 +511,17 @@ class CoinbaseMarketMakingEngine:
                         
                         # Calculate sell amount (use all available inventory)
                         sell_amount = amount
-                        sell_price = ask * 0.999  # Slightly below ask to get filled quickly
+
+                        last_buy_price = self.last_buy_prices.get(pair)
+                        min_profitable_price = self._get_min_profitable_sell_price(
+                            pair,
+                            fallback_buy_price=last_buy_price or ask
+                        )
+                        buffer_price = ask * (1 + max(self.min_profit_buffer_percent / 100.0, 0.001))
+                        if min_profitable_price:
+                            sell_price = max(min_profitable_price, buffer_price)
+                        else:
+                            sell_price = buffer_price
                         
                         # Get market limits
                         limits = market_info.get('limits', {})
@@ -853,8 +902,12 @@ class CoinbaseMarketMakingEngine:
                             logger.error(f"   🔵 [COINBASE] ❌ Invalid sell_price: {sell_price}")
                             raise ValueError(f"Invalid sell_price: {sell_price}")
                         
-                        last_buy_price = self.last_buy_prices.get(pair, 0)
-                        min_target_price = last_buy_price * (1 + self.min_profit_buffer_percent / 100) if last_buy_price else 0
+                        last_buy_price = self.last_buy_prices.get(pair)
+                        min_target_price = self._get_min_profitable_sell_price(
+                            pair,
+                            fallback_buy_price=last_buy_price or sell_price
+                        )
+
                         if min_target_price and sell_price < min_target_price:
                             logger.info(
                                 f"   🔵 [COINBASE] {pair}: Raising inventory sell price to maintain profit buffer ({sell_price:.6f} → {min_target_price:.6f})"
@@ -1321,9 +1374,15 @@ class CoinbaseMarketMakingEngine:
 
             min_sell_price_with_buffer = buy_price * (1 + self.min_spread_percent / 100)
             min_profit_price = buy_price * (1 + self.min_profit_buffer_percent / 100)
+            min_profitable_price = self._get_min_profitable_sell_price(pair, fallback_buy_price=buy_price)
 
             if current_ask <= 0:
-                sell_price = max(buy_price * 1.01, min_profit_price, min_sell_price_with_buffer)
+                sell_price = max(
+                    buy_price * 1.01,
+                    min_profit_price,
+                    min_sell_price_with_buffer,
+                    min_profitable_price or 0
+                )
                 logger.warning(f"   🔵 [COINBASE] ⚠️ {pair}: Missing ask, using fallback ${sell_price:.6f}")
             else:
                 spread = await self.get_spread(pair)
@@ -1333,7 +1392,11 @@ class CoinbaseMarketMakingEngine:
                     markup = 0.003
 
                 sell_price = current_ask * (1 + markup)
-                target_price = max(min_sell_price_with_buffer, min_profit_price)
+                target_price = max(
+                    min_sell_price_with_buffer,
+                    min_profit_price,
+                    min_profitable_price or 0
+                )
                 if sell_price < target_price:
                     logger.info(
                         f"   🔵 [COINBASE] {pair}: Raising sell target to maintain buffer ({sell_price:.6f} → {target_price:.6f})"
@@ -1373,7 +1436,7 @@ class CoinbaseMarketMakingEngine:
 
             jitter = (random.random() * 0.0001 - 0.00005) * sell_price
             sell_price += jitter
-            sell_price = max(sell_price, min_profit_price, min_sell_price_with_buffer)
+            sell_price = max(sell_price, min_profit_price, min_sell_price_with_buffer, min_profitable_price or 0)
 
             logger.info(
                 f"   🔵 [COINBASE] 📝 PLACING SELL ORDER for filled buy: {pair} @ ${sell_price:.6f} for {sell_amount:.6f} (${order_value:.2f})"
@@ -1537,7 +1600,23 @@ class CoinbaseMarketMakingEngine:
                             continue
                         
                         sell_amount = inventory * 0.95  # 95% to leave buffer
-                        sell_price = current_price * 0.995  # 0.5% below market to ensure fill
+
+                        min_profitable_price = self._get_min_profitable_sell_price(
+                            pair,
+                            fallback_buy_price=self.last_buy_prices.get(pair, current_price)
+                        )
+
+                        if min_profitable_price and current_price < min_profitable_price:
+                            logger.info(
+                                f"   🔵 [COINBASE] Skipping flatten {pair} - current price ${current_price:.4f} below profitable threshold ${min_profitable_price:.4f}"
+                            )
+                            continue
+
+                        baseline_price = current_price * (1 + max(self.min_profit_buffer_percent / 100.0, 0.0015))
+                        if min_profitable_price:
+                            sell_price = max(min_profitable_price, baseline_price)
+                        else:
+                            sell_price = baseline_price
                         
                         # Ensure order meets minimum
                         if sell_amount * sell_price < min_cost:
