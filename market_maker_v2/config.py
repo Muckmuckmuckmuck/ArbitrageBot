@@ -40,7 +40,7 @@ class StrategyToggles:
     enable_inventory_skew: bool = True
     enable_post_only: bool = True
     enable_rebate_tracking: bool = True
-    simulate_mode: bool = True  # default to paper/sim; disable for live trading
+    simulate_mode: bool = False  # live trading by default; enable for paper mode when needed
 
 
 @dataclass(slots=True)
