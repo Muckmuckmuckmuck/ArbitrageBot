@@ -11,6 +11,7 @@ import asyncio
 import logging
 import time
 from typing import Dict, List, Optional, Tuple
+import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -828,7 +829,7 @@ class GeminiMarketMakingEngine:
                     else:  # sell
                         price_diff_pct = abs((current_ask - order.price) / current_ask) * 100
                     
-                    if price_diff_pct > 0.4:
+                    if price_diff_pct > 0.2:
                         return True, f"order {order.order_id} price drift {price_diff_pct:.2f}%"
         except Exception as e:
             logger.debug(f"   🟢 [GEMINI] Error checking price movement for {pair}: {e}")
@@ -844,9 +845,18 @@ class GeminiMarketMakingEngine:
             if spread_basis > 0:
                 for order in open_orders:
                     if order.side == 'sell' and order.price < best_bid:
-                        return True, f"sell order {order.order_id} below best bid {best_bid:.6f}"
+                        return True, f"sell order {order.order_id} under best bid {best_bid:.6f}"
                     if order.side == 'buy' and order.price > best_ask:
                         return True, f"buy order {order.order_id} above best ask {best_ask:.6f}"
+                top_bid_volume = order_book['bids'][0][1] if order_book.get('bids') else 0
+                top_ask_volume = order_book['asks'][0][1] if order_book.get('asks') else 0
+                if top_bid_volume and top_ask_volume:
+                    imbalance = top_ask_volume / top_bid_volume if top_bid_volume else float('inf')
+                    if imbalance > 3.0:
+                        return True, f"ask pressure imbalance {imbalance:.2f}x"
+                    imbalance = top_bid_volume / top_ask_volume if top_ask_volume else float('inf')
+                    if imbalance > 3.0:
+                        return True, f"bid pressure imbalance {imbalance:.2f}x"
         except Exception as e:
             logger.debug(f"   🟢 [GEMINI] Error checking order book for {pair}: {e}")
 
