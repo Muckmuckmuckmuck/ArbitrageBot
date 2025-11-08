@@ -26,6 +26,7 @@ import sys
 from coinbase_gemini_exchanges import CoinbaseGeminiExchangeManager
 from coinbase_market_making_engine import CoinbaseMarketMakingEngine
 from gemini_market_making_engine import GeminiMarketMakingEngine
+from database_manager import DatabaseManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +39,7 @@ class DualStrategyBot:
     
     def __init__(self):
         self.exchange_manager = None
+        self.db_manager = None
         self.coinbase_market_making_engine = None
         self.gemini_market_making_engine = None
         self.running = False
@@ -59,6 +61,7 @@ class DualStrategyBot:
         # Initialize exchange manager
         self.exchange_manager = CoinbaseGeminiExchangeManager()
         await self.exchange_manager.initialize()
+        self.db_manager = DatabaseManager()
         
         # ====================================================================
         # 🔵 COINBASE STRATEGY: Market Making
@@ -67,16 +70,8 @@ class DualStrategyBot:
         try:
             self.coinbase_market_making_engine = CoinbaseMarketMakingEngine(
                 exchange_manager=self.exchange_manager,
-                capital_per_pair=75.0,  # $75 per pair to support >$5 quotes
-                grid_spacing_percent=0.20,  # 0.20% base spacing (dynamically adjusted)
-                order_size_percent=0.12,  # 12% of capital per order ≈ $9 per order
-                min_spread_percent=0.95,  # 🔵 Effective minimum spread after fees/buffer
-                max_inventory_percent=0.25,  # Max 25% in one asset
-                requote_interval_seconds=15,  # Update every 15s
-                stop_loss_percent=0.02,  # -2% stop loss
-                take_profit_interval_minutes=60,  # Flatten every hour
+                db_manager=self.db_manager,
             )
-            await self.coinbase_market_making_engine.initialize()
             logger.info("   ✅ Coinbase Market-Making Engine initialized successfully")
         except Exception as e:
             logger.error(f"   ❌ Failed to initialize Coinbase Market-Making Engine: {e}")
@@ -93,14 +88,7 @@ class DualStrategyBot:
             try:
                 self.gemini_market_making_engine = GeminiMarketMakingEngine(
                     exchange_manager=self.exchange_manager,
-                    capital_per_pair=60.0,  # $60 per pair
-                    grid_spacing_percent=0.20,  # 0.20% base spacing (dynamically adjusted)
-                    order_size_percent=0.12,  # 12% of capital per order ≈ $7
-                    min_spread_percent=0.35,  # 🟢 0.35% minimum (covers maker fees + buffer)
-                    max_inventory_percent=0.25,  # Max 25% in one asset
-                    requote_interval_seconds=15,  # Update every 15s
-                    stop_loss_percent=0.02,  # -2% stop loss
-                    take_profit_interval_minutes=60,  # Flatten every hour
+                    db_manager=self.db_manager,
                 )
                 await self.gemini_market_making_engine.initialize()
                 logger.info("   ✅ Gemini Market-Making Engine initialized successfully")
@@ -126,9 +114,12 @@ class DualStrategyBot:
         logger.info("\n🚀 Starting Coinbase Market-Making Strategy...")
         
         try:
-            await self.coinbase_market_making_engine.run_market_making_loop()
+            await self.coinbase_market_making_engine.start()
+            while True:
+                await asyncio.sleep(1)
         except asyncio.CancelledError:
             logger.info("   🛑 Coinbase market-making strategy cancelled")
+            await self.coinbase_market_making_engine.stop()
         except Exception as e:
             logger.error(f"❌ Error in Coinbase market-making strategy: {e}")
             import traceback
@@ -146,9 +137,12 @@ class DualStrategyBot:
         logger.info("\n🚀 Starting Gemini Market-Making Strategy...")
         
         try:
-            await self.gemini_market_making_engine.run_market_making_loop()
+            await self.gemini_market_making_engine.start()
+            while True:
+                await asyncio.sleep(1)
         except asyncio.CancelledError:
             logger.info("   🛑 Gemini market-making strategy cancelled")
+            await self.gemini_market_making_engine.stop()
         except Exception as e:
             logger.error(f"❌ Error in Gemini market-making strategy: {e}")
             import traceback
@@ -202,9 +196,9 @@ class DualStrategyBot:
             # Stop both strategies
             self.running = False
             if self.coinbase_market_making_engine:
-                self.coinbase_market_making_engine.stop()
+                await self.coinbase_market_making_engine.stop()
             if self.gemini_market_making_engine:
-                self.gemini_market_making_engine.stop()
+                await self.gemini_market_making_engine.stop()
             
             # Cancel all tasks
             coinbase_task.cancel()
