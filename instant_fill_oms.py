@@ -230,6 +230,26 @@ class InstantFillResponseEngine:
     ) -> Optional[ManagedOrder]:
         return self._orders_by_pair.get((exchange_id, symbol, side))
 
+    def reserved_quote(self, exchange_id: str, quote: str) -> Decimal:
+        total = Decimal("0")
+        for order in self._orders.values():
+            if order.exchange_id != exchange_id or order.side != OrderSide.BUY:
+                continue
+            base, order_quote = order.symbol.split("/")
+            if order_quote == quote:
+                total += order.price * order.amount
+        return total
+
+    def reserved_base(self, exchange_id: str, base: str) -> Decimal:
+        total = Decimal("0")
+        for order in self._orders.values():
+            if order.exchange_id != exchange_id or order.side != OrderSide.SELL:
+                continue
+            order_base, _ = order.symbol.split("/")
+            if order_base == base:
+                total += order.amount
+        return total
+
     async def register_order(self, order: ManagedOrder) -> None:
         key = (order.exchange_id, order.order_id)
         side_key = (order.exchange_id, order.symbol, order.side)
@@ -478,10 +498,18 @@ class DualSideQuoteManager:
         quote_balance = await self._balance_cache.get_balance(cfg.exchange_id, quote)
         base_balance = await self._balance_cache.get_balance(cfg.exchange_id, base)
 
-        max_buy_amount = (quote_balance / (buy_price * Decimal("1.01"))).quantize(Decimal("0.00001")) if buy_price > 0 else Decimal("0")
+        quote_reserved = self._response_engine.reserved_quote(cfg.exchange_id, quote)
+        base_reserved = self._response_engine.reserved_base(cfg.exchange_id, base)
+
+        usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
+        usable_base = max(Decimal("0"), base_balance - base_reserved)
+
+        max_buy_amount = (
+            usable_quote / (buy_price * Decimal("1.01"))
+        ).quantize(Decimal("0.00001")) if buy_price > 0 else Decimal("0")
         buy_amount = min(buy_amount, max_buy_amount)
 
-        sell_amount = min(sell_amount, base_balance.quantize(Decimal("0.00001")))
+        sell_amount = min(sell_amount, usable_base.quantize(Decimal("0.00001")))
 
         need_buy = buy_amount > Decimal("0") and (buy_amount * buy_price) >= cfg.min_notional_usd
         need_sell = sell_amount > Decimal("0") and (sell_amount * sell_price) >= cfg.min_notional_usd
