@@ -419,7 +419,12 @@ class CoinbaseGeminiExchangeManager:
                 
                 # 🔵 COINBASE and 🟢 GEMINI have different minimums - log for debugging
                 # 🔵 CRITICAL FIX: Ensure both values are valid before comparison
-                if min_order_value is not None and min_cost is not None and min_order_value < min_cost:
+                tolerance = max(1e-6, min_cost * 0.0001)
+                if (
+                    min_order_value is not None
+                    and min_cost is not None
+                    and (min_order_value + tolerance) < min_cost
+                ):
                     # 🔵 COINBASE / 🟢 GEMINI: Comprehensive logging with exchange marker
                     logger.error(f"   ❌ [{exchange_id.upper()}] Order validation failed for {symbol}:")
                     logger.error(f"      Exchange: {exchange_id.upper()}")

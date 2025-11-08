@@ -5,7 +5,7 @@ import logging
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from enum import Enum
 from typing import Any, Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -860,6 +860,7 @@ class InstantFillMarketMaker:
         for exchange_id in self._adapter.available_exchanges():
             try:
                 balances = await self._balance_cache.get_balances(exchange_id)
+                raw_balances = await self._adapter.fetch_balance(exchange_id)
             except Exception as exc:
                 logger.debug(
                     "Inventory guard balance fetch failed for %s: %s",
@@ -867,11 +868,14 @@ class InstantFillMarketMaker:
                     exc,
                 )
                 continue
+            free_balances = raw_balances.get("free", {}) if isinstance(raw_balances, dict) else {}
             for currency, raw_amount in balances.items():
-                amount = Decimal(str(raw_amount))
+                total_amount = Decimal(str(raw_amount))
+                free_amount = Decimal(str(free_balances.get(currency, 0)))
+                usable_amount = min(total_amount, free_amount)
                 if (
                     currency in stable_quotes
-                    or amount <= self._inventory_threshold
+                    or usable_amount <= self._inventory_threshold
                 ):
                     continue
                 if self._fill_engine.has_active_sell_order(exchange_id, currency):
@@ -886,12 +890,12 @@ class InstantFillMarketMaker:
                         else len(priority),
                     )
                     for cfg in ordered_configs:
-                        placed = await self._place_inventory_hedge(cfg, amount)
+                        placed = await self._place_inventory_hedge(cfg, usable_amount)
                         if placed:
                             break
                 if not placed:
                     await self._liquidate_asset(
-                        exchange_id, currency, amount, priority
+                        exchange_id, currency, usable_amount, priority
                     )
 
     async def _place_inventory_hedge(self, cfg: PairConfig, amount: Decimal) -> bool:
@@ -919,7 +923,7 @@ class InstantFillMarketMaker:
         if best_bid <= 0:
             return False
 
-        sell_amount = amount.quantize(Decimal("0.00001"))
+        sell_amount = amount.quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
         if sell_amount * best_bid < cfg.min_notional_usd:
             return False
 
@@ -1019,18 +1023,22 @@ class InstantFillMarketMaker:
     async def _flatten_inventory(self, exchange_id: str) -> None:
         try:
             balances = await self._balance_cache.get_balances(exchange_id)
+            raw_balances = await self._adapter.fetch_balance(exchange_id)
         except Exception as exc:
             logger.debug("[CLEANUP] Unable to fetch balances for %s: %s", exchange_id, exc)
             return
 
         stable = {"USD", "USDC", "USDT", "GUSD"}
         quotes_priority = ["USD", "USDC", "USDT", "GUSD"]
+        free_balances = raw_balances.get("free", {}) if isinstance(raw_balances, dict) else {}
 
         for currency, raw_amount in balances.items():
-            amount = Decimal(str(raw_amount))
-            if currency in stable or amount <= Decimal("0.00001"):
+            total_amount = Decimal(str(raw_amount))
+            free_amount = Decimal(str(free_balances.get(currency, 0)))
+            usable_amount = min(total_amount, free_amount)
+            if currency in stable or usable_amount <= Decimal("0.00001"):
                 continue
-            await self._liquidate_asset(exchange_id, currency, amount, quotes_priority)
+            await self._liquidate_asset(exchange_id, currency, usable_amount, quotes_priority)
 
     async def _liquidate_asset(
         self,
@@ -1058,7 +1066,7 @@ class InstantFillMarketMaker:
             if best_bid <= 0:
                 continue
 
-            sell_amount = amount.quantize(Decimal("0.00001"))
+            sell_amount = amount.quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
             sell_value = sell_amount * best_bid
             min_notional = cfg.min_notional_usd if cfg else Decimal("5.00")
             if sell_value < min_notional:
