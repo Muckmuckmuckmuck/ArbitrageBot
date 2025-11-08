@@ -546,8 +546,9 @@ class GeminiMarketMakingEngine:
                         if not ticker:
                             continue
                         
+                        bid = ticker.get('bid', 0) or 0
                         ask = ticker.get('ask', 0) or 0
-                        if ask <= 0:
+                        if bid <= 0 or ask <= 0:
                             continue
                         
                         # Check if we already have an open sell order for this pair
@@ -567,18 +568,20 @@ class GeminiMarketMakingEngine:
                             pair,
                             fallback_buy_price=last_buy_price or ask
                         )
+                        # Use bid as baseline for immediate liquidation; fall back to a slight cross if needed
+                        baseline_price = bid * 0.999  # cross the spread to get filled
                         buffer_price = ask * (1 + max(self.min_profit_buffer_percent / 100.0, 0.001))
                         if min_profitable_price:
-                            sell_price = max(min_profitable_price, buffer_price)
+                            sell_price = max(min_profitable_price, baseline_price)
                         else:
-                            sell_price = buffer_price
+                            sell_price = baseline_price
                         
                         # Get market limits
                         limits = market_info.get('limits', {})
                         min_cost = limits.get('cost', {}).get('min', 1.0) or 1.0
                         
                         # Check minimum order size
-                        order_value = sell_amount * sell_price
+                        order_value = sell_amount * bid
                         if order_value < min_cost:
                             logger.info(
                                 f"   🟢 [GEMINI] {pair}: Inventory value ${order_value:.2f} below minimum ${min_cost:.2f}, keeping position"
@@ -588,28 +591,40 @@ class GeminiMarketMakingEngine:
                         # Place sell order
                         try:
                             self.pair_last_inventory_timestamp[pair] = datetime.now()
-                            logger.info(f"   🟢 [GEMINI] 💰 SELLING INVENTORY: {pair} - {sell_amount:.6f} {currency} @ ${sell_price:.6f} (${order_value:.2f})")
+                            logger.info(
+                                f"   🟢 [GEMINI] 💰 SELLING INVENTORY: {pair} - {sell_amount:.6f} {currency} "
+                                f"via market ~${sell_price:.6f} (bid ${bid:.6f}) => ${order_value:.2f}"
+                            )
                             sell_order = await self.exchange_manager.create_order(
                                 exchange_id='gemini',
                                 symbol=pair,
-                                order_type='limit',
+                                order_type='market',
                                 side='sell',
-                                amount=sell_amount,
-                                price=sell_price
+                                amount=sell_amount
                             )
                             
-                            if sell_order and sell_order.get('id'):
+                            if sell_order:
+                                sell_status = str(sell_order.get('status', '')).lower()
+                                sell_price_used = sell_order.get('price') or sell_price
                                 sell_order_id = sell_order.get('id')
-                                sell_mm_order = MarketMakingOrder(
-                                    pair=pair,
-                                    side='sell',
-                                    order_id=sell_order_id,
-                                    price=sell_price,
-                                    amount=sell_amount,
-                                    status='open'
-                                )
-                                self.active_orders[pair].append(sell_mm_order)
-                                logger.info(f"   🟢 [GEMINI] ✅✅✅ INVENTORY SELL ORDER PLACED: {pair} @ ${sell_price:.4f} for {sell_amount:.6f} | Order ID: {sell_order_id}")
+                                if sell_status in ('closed', 'filled'):
+                                    logger.info(
+                                        f"   🟢 [GEMINI] ✅ INVENTORY FLATTENED: {pair} filled immediately @ ${sell_price_used:.6f}"
+                                    )
+                                elif sell_order_id:
+                                    sell_mm_order = MarketMakingOrder(
+                                        pair=pair,
+                                        side='sell',
+                                        order_id=sell_order_id,
+                                        price=float(sell_price_used),
+                                        amount=sell_amount,
+                                        status='open'
+                                    )
+                                    self.active_orders[pair].append(sell_mm_order)
+                                    logger.info(
+                                        f"   🟢 [GEMINI] ✅ INVENTORY SELL ORDER LIVE: {pair} "
+                                        f"@ ${sell_price_used:.6f} for {sell_amount:.6f} | Order ID: {sell_order_id}"
+                                    )
                         except Exception as e:
                             logger.error(f"   🟢 [GEMINI] ❌ Failed to sell inventory {pair}: {type(e).__name__}: {e}")
                         
