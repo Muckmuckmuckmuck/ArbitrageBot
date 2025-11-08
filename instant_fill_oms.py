@@ -478,8 +478,13 @@ class DualSideQuoteManager:
         quote_balance = await self._balance_cache.get_balance(cfg.exchange_id, quote)
         base_balance = await self._balance_cache.get_balance(cfg.exchange_id, base)
 
-        need_buy = order_value * Decimal("1.05") <= quote_balance
-        need_sell = sell_amount <= base_balance
+        max_buy_amount = (quote_balance / (buy_price * Decimal("1.01"))).quantize(Decimal("0.00001")) if buy_price > 0 else Decimal("0")
+        buy_amount = min(buy_amount, max_buy_amount)
+
+        sell_amount = min(sell_amount, base_balance.quantize(Decimal("0.00001")))
+
+        need_buy = buy_amount > Decimal("0") and (buy_amount * buy_price) >= cfg.min_notional_usd
+        need_sell = sell_amount > Decimal("0") and (sell_amount * sell_price) >= cfg.min_notional_usd
 
         await self._sync_side(cfg, OrderSide.BUY, buy_amount, buy_price, need_buy)
         await self._sync_side(cfg, OrderSide.SELL, sell_amount, sell_price, need_sell)
@@ -519,6 +524,8 @@ class DualSideQuoteManager:
             await self._response_engine.mark_cancelled(
                 cfg.exchange_id, cfg.symbol, side
             )
+            # refresh balances after cancellation to avoid stale locked funds
+            await self._balance_cache.get_balances(cfg.exchange_id)
 
         response = await self._adapter.create_order(
             cfg.exchange_id,
