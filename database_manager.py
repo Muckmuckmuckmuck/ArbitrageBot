@@ -97,10 +97,7 @@ class DatabaseManager:
                     status VARCHAR(20) NOT NULL,
                     strategy VARCHAR(20) NOT NULL,
                     risk_score DECIMAL(10,6) NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    INDEX idx_symbol (symbol),
-                    INDEX idx_timestamp (timestamp),
-                    INDEX idx_profit (profit)
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
@@ -115,9 +112,7 @@ class DatabaseManager:
                     spread_percent DECIMAL(10,6) NOT NULL,
                     timestamp REAL NOT NULL,
                     order_book_depth DECIMAL(20,8) NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    INDEX idx_symbol_exchange (symbol, exchange),
-                    INDEX idx_timestamp (timestamp)
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
@@ -135,8 +130,7 @@ class DatabaseManager:
                     sharpe_ratio DECIMAL(10,6) NOT NULL,
                     win_rate DECIMAL(10,6) NOT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(symbol, date),
-                    INDEX idx_symbol_date (symbol, date)
+                    UNIQUE(symbol, date)
                 )
             """)
             
@@ -151,8 +145,7 @@ class DatabaseManager:
                     correlation_risk DECIMAL(10,6) NOT NULL,
                     liquidity_risk DECIMAL(10,6) NOT NULL,
                     risk_score DECIMAL(10,6) NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    INDEX idx_symbol_timestamp (symbol, timestamp)
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
@@ -167,11 +160,24 @@ class DatabaseManager:
                     actual_value DECIMAL(20,8),
                     error DECIMAL(20,8),
                     timestamp REAL NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    INDEX idx_symbol_model (symbol, model_type),
-                    INDEX idx_timestamp (timestamp)
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # Create indexes separately to satisfy SQLite syntax
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_profit ON trades(profit);")
+
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_market_data_symbol_exchange ON market_data(symbol, exchange);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_market_data_timestamp ON market_data(timestamp);")
+
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_performance_symbol_date ON performance_metrics(symbol, date);")
+
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_symbol_timestamp ON risk_metrics(symbol, timestamp);")
+
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ml_symbol_model ON ml_predictions(symbol, model_type);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ml_timestamp ON ml_predictions(timestamp);")
             
             self.connection.commit()
             logger.info("Database tables created successfully")
