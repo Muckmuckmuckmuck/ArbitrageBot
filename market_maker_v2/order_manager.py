@@ -194,6 +194,25 @@ class OrderManager:
         for order in open_orders:
             await self.cancel_order(symbol, order)
 
+    async def cancel_all_force(self) -> None:
+        rows = self.store.conn.execute("SELECT DISTINCT symbol FROM orders WHERE status IN ('open','partially_filled')").fetchall()
+        for row in rows:
+            symbol = row["symbol"]
+            try:
+                open_orders = await self.client.fetch_open_orders(symbol)
+            except ExchangeError as exc:
+                logger.warning("Failed to fetch open orders for %s during force cancel: %s", symbol, exc)
+                open_orders = []
+            for order in open_orders:
+                try:
+                    await self.client.cancel_order(order.get("id"), symbol)
+                except ExchangeError as exc:
+                    logger.warning("Force cancel failed for %s %s: %s", symbol, order.get("id"), exc)
+            for record in self.store.fetch_open(symbol):
+                record.status = "cancelled"
+                record.updated_at = time.time()
+                self.store.upsert(record)
+
     async def reconcile(self, symbol: str) -> List[OrderRecord]:
         """Reconcile stored orders with exchange state."""
         async with self._lock:

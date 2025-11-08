@@ -107,6 +107,8 @@ class BotConfig:
     @classmethod
     def default(cls) -> "BotConfig":
         """Bootstrap default configuration using environment variables where possible."""
+        exchanges: Dict[str, ExchangeRuntimeConfig] = {}
+
         coinbase = ExchangeRuntimeConfig(
             name="coinbase",
             ccxt_id="coinbaseadvanced",
@@ -123,6 +125,7 @@ class BotConfig:
                 PairConfig(symbol="ETH-USD", base_spread_bps=Decimal("26"), min_order_usd=Decimal("2.0")),
             ],
         )
+        exchanges[coinbase.name] = coinbase
 
         gemini = ExchangeRuntimeConfig(
             name="gemini",
@@ -138,13 +141,9 @@ class BotConfig:
                 PairConfig(symbol="BTC/USD", base_spread_bps=Decimal("28"), min_order_usd=Decimal("5.0")),
             ],
         )
+        exchanges[gemini.name] = gemini
 
-        cfg = cls(
-            exchanges={
-                coinbase.name: coinbase,
-                gemini.name: gemini,
-            }
-        )
+        cfg = cls(exchanges=exchanges)
         cfg.paths.ensure_directories()
         return cfg
 

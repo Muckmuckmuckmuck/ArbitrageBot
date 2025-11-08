@@ -60,6 +60,7 @@ class InventoryManager:
                 quote_balance=initial_quote,
                 timestamp=time.time(),
             )
+        self._pending_force_balance: Optional[tuple[Decimal, Decimal]] = None
 
     async def start(self) -> None:
         if self._running:
@@ -77,24 +78,55 @@ class InventoryManager:
 
     async def _run_loop(self) -> None:
         while self._running:
-            try:
-                balances = await self.client.fetch_balance()
-                free = balances.get("free", {})
-                base_balance = Decimal(str(free.get(self.base_currency, 0)))
-                quote_balance = Decimal(str(free.get(self.quote_currency, 0)))
-                self.snapshot = PositionSnapshot(
-                    symbol=f"{self.base_currency}/{self.quote_currency}",
-                    base_balance=base_balance,
-                    quote_balance=quote_balance,
-                    timestamp=time.time(),
-                )
+            snapshot = await self.fetch_balances()
+            if snapshot is not None:
+                self.snapshot = snapshot
                 self._error = None
-            except ExchangeError as exc:
-                self._error = str(exc)
+            else:
+                self._error = "balance_fetch_failed"
             await asyncio.sleep(self.poll_interval)
 
     def health(self) -> Optional[str]:
         return self._error
+
+    def apply_snapshot(self, base: Decimal, quote: Decimal) -> None:
+        self._pending_force_balance = (base, quote)
+        self.snapshot = PositionSnapshot(
+            symbol=f"{self.base_currency}/{self.quote_currency}",
+            base_balance=base,
+            quote_balance=quote,
+            timestamp=time.time(),
+        )
+
+    async def fetch_balances(self) -> Optional[PositionSnapshot]:
+        try:
+            balances = await self.client.fetch_balance()
+        except ExchangeError as exc:
+            self._error = str(exc)
+            return None
+
+        free = balances.get("free", {})
+        total = balances.get("total", {})
+        base_free = Decimal(str(free.get(self.base_currency, 0)))
+        quote_free = Decimal(str(free.get(self.quote_currency, 0)))
+        base_total = Decimal(str(total.get(self.base_currency, free.get(self.base_currency, 0))))
+        quote_total = Decimal(str(total.get(self.quote_currency, free.get(self.quote_currency, 0))))
+
+        base_balance = base_free
+        quote_balance = quote_free
+        if self._pending_force_balance is not None:
+            base_balance, quote_balance = self._pending_force_balance
+            self._pending_force_balance = None
+
+        snapshot = PositionSnapshot(
+            symbol=f"{self.base_currency}/{self.quote_currency}",
+            base_balance=base_balance,
+            quote_balance=quote_balance,
+            timestamp=time.time(),
+        )
+        self._last_locked_base = base_total - base_free
+        self._last_locked_quote = quote_total - quote_free
+        return snapshot
 
     def compute_skew(self, mid_price: Decimal) -> Decimal:
         """
