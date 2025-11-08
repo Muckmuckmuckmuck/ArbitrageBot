@@ -7,7 +7,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
-from typing import Deque, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from coinbase_gemini_exchanges import CoinbaseGeminiExchangeManager
 from database_manager import DatabaseManager, TradeRecord
@@ -804,6 +804,18 @@ class InstantFillMarketMaker:
             await self._cancel_open_orders(exchange_id)
             await self._flatten_inventory(exchange_id)
             await self._balance_cache.get_balances(exchange_id)
+        self._pair_configs = await self._filter_supported_pairs(self._pair_configs)
+        self._fill_engine = InstantFillResponseEngine(
+            self._adapter,
+            self._db,
+            self._pair_configs,
+        )
+        self._quote_manager = DualSideQuoteManager(
+            self._adapter,
+            self._fill_engine,
+            self._balance_cache,
+            self._pair_configs,
+        )
 
     async def _cancel_open_orders(self, exchange_id: str) -> None:
         try:
@@ -904,5 +916,29 @@ class InstantFillMarketMaker:
             amount,
             exchange_id,
         )
+
+    async def _filter_supported_pairs(
+        self, pair_configs: Sequence[PairConfig]
+    ) -> List[PairConfig]:
+        filtered: List[PairConfig] = []
+        markets_cache: Dict[str, Dict[str, Any]] = {}
+        for cfg in pair_configs:
+            exchange_id = cfg.exchange_id
+            if exchange_id not in markets_cache:
+                try:
+                    exchange = self._adapter._manager.get_exchange(exchange_id)
+                    markets_cache[exchange_id] = exchange.markets
+                except Exception:
+                    markets_cache[exchange_id] = {}
+            markets = markets_cache.get(exchange_id, {})
+            if cfg.symbol in markets:
+                filtered.append(cfg)
+            else:
+                logger.debug(
+                    "[FILTER] Skipping %s on %s (symbol not supported)",
+                    cfg.symbol,
+                    exchange_id,
+                )
+        return filtered
 
 
