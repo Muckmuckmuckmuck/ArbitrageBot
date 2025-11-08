@@ -383,6 +383,42 @@ class InstantFillResponseEngine:
             )
             return
 
+        target_amount = fill.amount.quantize(Decimal("0.00001"))
+        existing = self.get_active_order(
+            filled_order.exchange_id, filled_order.symbol, side
+        )
+        if existing and existing.tag == "hedge":
+            if existing.amount >= target_amount * Decimal("0.999"):
+                logger.debug(
+                    "[OMS] Existing hedge %s %s already covers %.8f",
+                    filled_order.exchange_id,
+                    filled_order.symbol,
+                    target_amount,
+                )
+                return
+            try:
+                await self._adapter.cancel_order(
+                    filled_order.exchange_id, filled_order.symbol, existing.order_id
+                )
+                await self.mark_cancelled(
+                    filled_order.exchange_id, filled_order.symbol, side
+                )
+                logger.debug(
+                    "[OMS] Replacing hedge for %s %s (old %.8f < new %.8f)",
+                    filled_order.exchange_id,
+                    filled_order.symbol,
+                    existing.amount,
+                    target_amount,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "[OMS] Failed to cancel existing hedge %s on %s: %s",
+                    existing.order_id,
+                    filled_order.exchange_id,
+                    exc,
+                )
+                return
+
         try:
             order_book = await self._adapter.fetch_order_book(
                 filled_order.exchange_id, filled_order.symbol, depth=5
@@ -407,7 +443,7 @@ class InstantFillResponseEngine:
             price = min(mid * (Decimal("1") - spread / Decimal("2")), best_bid + mid * improve)
 
         price = price.quantize(Decimal("0.00001"))
-        amount = fill.amount.quantize(Decimal("0.00001"))
+        amount = target_amount
 
         try:
             response = await self._adapter.create_order(
