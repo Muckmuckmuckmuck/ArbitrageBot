@@ -524,6 +524,7 @@ class CoinbaseMarketMakingEngine:
         try:
             balance = await self.exchange_manager.fetch_balance('coinbase')
             free_balance = balance.get('free', {})
+            total_balance = balance.get('total', {})
             exchange = self.exchange_manager.get_exchange('coinbase')
             logger.info("   🔵 [COINBASE] 🔁 Checking account inventory for outstanding positions...")
             
@@ -532,6 +533,9 @@ class CoinbaseMarketMakingEngine:
             for currency, amount in free_balance.items():
                 # Skip quote currencies (cash)
                 if currency in ['USD', 'USDT', 'USDC', 'GUSD'] or amount <= 0:
+                    continue
+                total_amount = total_balance.get(currency, amount)
+                if total_amount <= 0:
                     continue
                 tradable_found = True
                 
@@ -543,6 +547,26 @@ class CoinbaseMarketMakingEngine:
                         if not market_info.get('active', True):
                             continue
                         
+                        # If balance is locked in existing orders, cancel them first
+                        if amount < total_amount:
+                            try:
+                                open_orders = await self.exchange_manager.fetch_open_orders('coinbase', pair)
+                            except Exception as e:
+                                logger.warning(f"   🔵 [COINBASE] Failed to fetch open orders for {pair} before flatten: {e}")
+                                open_orders = []
+                            for order in open_orders:
+                                try:
+                                    await self.exchange_manager.cancel_order('coinbase', order.get('id'), pair)
+                                except Exception as cancel_err:
+                                    logger.warning(f"   🔵 [COINBASE] Cancel order failed during flatten {pair}: {cancel_err}")
+                            balance = await self.exchange_manager.fetch_balance('coinbase')
+                            free_balance = balance.get('free', {})
+                            total_balance = balance.get('total', {})
+                            amount = free_balance.get(currency, 0)
+                            total_amount = total_balance.get(currency, amount)
+                            if total_amount <= 0:
+                                break
+
                         # Get current price
                         ticker = await self.exchange_manager.fetch_ticker('coinbase', pair)
                         if not ticker:
@@ -563,7 +587,7 @@ class CoinbaseMarketMakingEngine:
                             break
                         
                         # Calculate sell amount (use all available inventory)
-                        sell_amount = amount
+                        sell_amount = total_amount
 
                         last_buy_price = self.last_buy_prices.get(pair)
                         min_profitable_price = self._get_min_profitable_sell_price(

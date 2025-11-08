@@ -686,6 +686,25 @@ class CoinbaseGeminiExchangeManager:
             logger.error(f"Error cancelling order {order_id} on {exchange_id}: {e}")
             raise
     
+    async def fetch_open_orders(self, exchange_id: str, symbol: Optional[str] = None) -> List[Dict]:
+        """
+        ⚪ COMMON: Fetch open orders for an exchange, optionally filtered by symbol.
+        """
+        exchange = self.get_exchange(exchange_id)
+        try:
+            if symbol:
+                result = exchange.fetch_open_orders(symbol)
+            else:
+                result = exchange.fetch_open_orders()
+            if hasattr(result, '__await__'):
+                orders = await result
+            else:
+                orders = result
+            return orders or []
+        except Exception as e:
+            logger.error(f"Error fetching open orders on {exchange_id} ({symbol or 'ALL'}): {e}")
+            raise
+    
     async def fetch_deposit_address(self, exchange_id: str, currency: str, 
                                     network: Optional[str] = None, params: Optional[Dict] = None) -> Dict:
         """Fetch deposit address for currency
@@ -701,14 +720,14 @@ class CoinbaseGeminiExchangeManager:
         # ====================================================================
         # 🔵 COINBASE-SPECIFIC: Network parameter handling
         # ====================================================================
-        fetch_params = {}
+        fetch_params: Dict[str, Any] = {}
         if params:
             fetch_params.update(params)
-        
+            
         # 🔵 Add network if provided (required for ERC-20 tokens on Coinbase)
         if exchange_id == EXCHANGE_COINBASE and network:
-            fetch_params['network'] = network
-            logger.info(f"   Using network: {network}")
+                fetch_params['network'] = network
+                logger.info(f"   Using network: {network}")
             
         # ====================================================================
         # ⚪ COMMON: Fetch deposit address (works for both exchanges)

@@ -522,6 +522,7 @@ class GeminiMarketMakingEngine:
         try:
             balance = await self.exchange_manager.fetch_balance('gemini')
             free_balance = balance.get('free', {})
+            total_balance = balance.get('total', {})
             exchange = self.exchange_manager.get_exchange('gemini')
             logger.info("   🟢 [GEMINI] 🔁 Checking account inventory for outstanding positions...")
             
@@ -530,6 +531,9 @@ class GeminiMarketMakingEngine:
             for currency, amount in free_balance.items():
                 # Skip quote currencies (cash)
                 if currency in ['USD', 'USDT', 'USDC', 'GUSD'] or amount <= 0:
+                    continue
+                total_amount = total_balance.get(currency, amount)
+                if total_amount <= 0:
                     continue
                 tradable_found = True
                 
@@ -541,6 +545,26 @@ class GeminiMarketMakingEngine:
                         if not market_info.get('active', True):
                             continue
                         
+                        # If funds are locked in open orders, cancel them first
+                        if amount < total_amount:
+                            try:
+                                open_orders = await self.exchange_manager.fetch_open_orders('gemini', pair)
+                            except Exception as e:
+                                logger.warning(f"   🟢 [GEMINI] Failed to fetch open orders for {pair} before flatten: {e}")
+                                open_orders = []
+                            for order in open_orders:
+                                try:
+                                    await self.exchange_manager.cancel_order('gemini', order.get('id'), pair)
+                                except Exception as cancel_err:
+                                    logger.warning(f"   🟢 [GEMINI] Cancel order failed during flatten {pair}: {cancel_err}")
+                            balance = await self.exchange_manager.fetch_balance('gemini')
+                            free_balance = balance.get('free', {})
+                            total_balance = balance.get('total', {})
+                            amount = free_balance.get(currency, 0)
+                            total_amount = total_balance.get(currency, amount)
+                            if total_amount <= 0:
+                                break
+
                         # Get current price
                         ticker = await self.exchange_manager.fetch_ticker('gemini', pair)
                         if not ticker:
@@ -561,7 +585,7 @@ class GeminiMarketMakingEngine:
                             break
                         
                         # Calculate sell amount (use all available inventory)
-                        sell_amount = amount
+                        sell_amount = total_amount
 
                         last_buy_price = self.last_buy_prices.get(pair)
                         min_profitable_price = self._get_min_profitable_sell_price(
