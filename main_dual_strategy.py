@@ -90,8 +90,7 @@ class DualStrategyBot:
                     exchange_manager=self.exchange_manager,
                     db_manager=self.db_manager,
                 )
-                await self.gemini_market_making_engine.initialize()
-                logger.info("   ✅ Gemini Market-Making Engine initialized successfully")
+                logger.info("   ✅ Gemini Market-Making Engine ready")
             except Exception as e:
                 logger.warning(f"   ⚠️ Failed to initialize Gemini Market-Making Engine: {e}")
                 logger.warning(f"   💡 Bot will continue with Coinbase market making only")

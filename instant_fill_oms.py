@@ -747,6 +747,7 @@ class InstantFillMarketMaker:
         if self._running:
             return
         self._running = True
+        await self._startup_cleanup()
         symbols_by_exchange: Dict[str, List[str]] = defaultdict(list)
         for cfg in self._pair_configs:
             symbols_by_exchange[cfg.exchange_id].append(cfg.symbol)
@@ -788,5 +789,112 @@ class InstantFillMarketMaker:
                 except Exception as exc:
                     logger.debug("Balance refresh failed for %s: %s", exchange, exc)
             await asyncio.sleep(3.0)
+
+    async def _startup_cleanup(self) -> None:
+        exchanges = self._adapter.available_exchanges()
+        for exchange_id in exchanges:
+            await self._cancel_open_orders(exchange_id)
+            await self._flatten_inventory(exchange_id)
+            await self._balance_cache.get_balances(exchange_id)
+
+    async def _cancel_open_orders(self, exchange_id: str) -> None:
+        try:
+            open_orders = await self._adapter.fetch_open_orders(exchange_id)
+        except Exception as exc:
+            logger.debug("[CLEANUP] Unable to fetch open orders on %s: %s", exchange_id, exc)
+            return
+
+        for order in open_orders:
+            order_id = str(order.get("id")) if order.get("id") is not None else None
+            symbol = order.get("symbol") or order.get("info", {}).get("symbol")
+            if not order_id or not symbol:
+                continue
+            try:
+                await self._adapter.cancel_order(exchange_id, symbol, order_id)
+                logger.info("[CLEANUP] Cancelled %s order %s", exchange_id.upper(), order_id)
+            except Exception as exc:
+                logger.debug("[CLEANUP] Failed to cancel %s order %s: %s", exchange_id, order_id, exc)
+
+    async def _flatten_inventory(self, exchange_id: str) -> None:
+        try:
+            balances = await self._balance_cache.get_balances(exchange_id)
+        except Exception as exc:
+            logger.debug("[CLEANUP] Unable to fetch balances for %s: %s", exchange_id, exc)
+            return
+
+        stable = {"USD", "USDC", "USDT", "GUSD"}
+        quotes_priority = ["USD", "USDC", "USDT", "GUSD"]
+
+        for currency, raw_amount in balances.items():
+            amount = Decimal(str(raw_amount))
+            if currency in stable or amount <= Decimal("0.00001"):
+                continue
+            await self._liquidate_asset(exchange_id, currency, amount, quotes_priority)
+
+    async def _liquidate_asset(
+        self,
+        exchange_id: str,
+        base_currency: str,
+        amount: Decimal,
+        quotes_priority: Sequence[str],
+    ) -> None:
+        for quote in quotes_priority:
+            symbol = f"{base_currency}/{quote}"
+            cfg = next(
+                (cfg for cfg in self._pair_configs if cfg.exchange_id == exchange_id and cfg.symbol == symbol),
+                None,
+            )
+            try:
+                order_book = await self._adapter.fetch_order_book(exchange_id, symbol, depth=5)
+            except Exception:
+                continue
+            bids = order_book.get("bids") or []
+            if not bids:
+                continue
+            best_bid = Decimal(str(bids[0][0]))
+            if best_bid <= 0:
+                continue
+
+            sell_amount = amount.quantize(Decimal("0.00001"))
+            sell_value = sell_amount * best_bid
+            min_notional = cfg.min_notional_usd if cfg else Decimal("5.00")
+            if sell_value < min_notional:
+                continue
+
+            order_type = "market" if exchange_id == "coinbase" else "limit"
+            price = None
+            if order_type == "limit":
+                price = (best_bid * Decimal("0.999")).quantize(Decimal("0.00001"))
+
+            try:
+                await self._adapter.create_order(
+                    exchange_id,
+                    symbol,
+                    OrderSide.SELL,
+                    amount=sell_amount,
+                    price=price,
+                    order_type=order_type,
+                )
+                logger.info(
+                    "[CLEANUP] Flattened %s %.8f @ %s on %s",
+                    symbol,
+                    sell_amount,
+                    price if price is not None else "MARKET",
+                    exchange_id.upper(),
+                )
+                return
+            except Exception as exc:
+                logger.debug(
+                    "[CLEANUP] Failed to flatten %s on %s: %s",
+                    symbol,
+                    exchange_id,
+                    exc,
+                )
+        logger.debug(
+            "[CLEANUP] Unable to flatten %s %.8f on %s (no viable market)",
+            base_currency,
+            amount,
+            exchange_id,
+        )
 
 
