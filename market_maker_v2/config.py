@@ -17,9 +17,16 @@ class PairConfig:
     base_spread_bps: Decimal = Decimal("25")  # expressed in basis points
     min_spread_bps: Decimal = Decimal("18")
     max_spread_bps: Decimal = Decimal("120")
-    order_refresh_seconds: int = 20
+    order_refresh_seconds: int = 10
     order_expiry_seconds: int = 45
     price_requote_pct: Decimal = Decimal("0.002")  # reprice if drift > 0.2%
+    layers: int = 2
+    layer_spacing_bps: Decimal = Decimal("8")  # 0.08% between layers
+    base_order_size_pct: Decimal = Decimal("0.03")  # 3% of capital per level
+    max_order_size_pct: Decimal = Decimal("0.10")
+    min_depth_usd: Decimal = Decimal("40000")
+    min_volume_usd: Decimal = Decimal("150000")
+    allow_dynamic_watchlist: bool = True
 
 
 @dataclass(slots=True)
@@ -32,6 +39,11 @@ class RiskConfig:
     soft_inventory_imbalance_pct: Decimal = Decimal("0.12")
     volatility_pause_threshold_pct: Decimal = Decimal("0.035")
     volatility_resume_threshold_pct: Decimal = Decimal("0.02")
+    max_pair_exposure_pct: Decimal = Decimal("0.20")
+    max_global_exposure_pct: Decimal = Decimal("0.60")
+    max_drawdown_pct: Decimal = Decimal("0.08")
+    circuit_breaker_move_pct: Decimal = Decimal("0.05")
+    circuit_breaker_cooldown_seconds: int = 120
 
 
 @dataclass(slots=True)
@@ -42,6 +54,9 @@ class StrategyToggles:
     enable_post_only: bool = True
     enable_rebate_tracking: bool = True
     simulate_mode: bool = False  # live trading by default; enable for paper mode when needed
+    hedge_on_fill: bool = True
+    flatten_on_drawdown: bool = True
+    dynamic_size_from_depth: bool = True
 
 
 @dataclass(slots=True)

@@ -258,6 +258,23 @@ class OrderManager:
             return None
         return self.store._row_to_record(row)
 
+    async def refresh_order(self, symbol: str, record: OrderRecord) -> Optional[OrderRecord]:
+        if self.simulate_mode or not record.exchange_order_id:
+            return record
+        try:
+            payload = await self.client.fetch_order(record.exchange_order_id, symbol)
+        except ExchangeError as exc:
+            logger.debug("Refresh fetch_order failed for %s: %s", record.exchange_order_id, exc)
+            return None
+
+        record.price = Decimal(str(payload.get("price", record.price)))
+        record.amount = Decimal(str(payload.get("amount", record.amount)))
+        record.filled = Decimal(str(payload.get("filled", record.filled)))
+        record.status = payload.get("status", record.status)
+        record.updated_at = time.time()
+        self.store.upsert(record)
+        return record
+
     def mark_filled(self, record: OrderRecord, fill_price: Optional[Decimal] = None) -> OrderRecord:
         record.filled = record.amount
         if fill_price is not None:

@@ -61,6 +61,8 @@ class InventoryManager:
                 timestamp=time.time(),
             )
         self._pending_force_balance: Optional[tuple[Decimal, Decimal]] = None
+        self._last_locked_base: Decimal = Decimal("0")
+        self._last_locked_quote: Decimal = Decimal("0")
 
     async def start(self) -> None:
         if self._running:

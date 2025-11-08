@@ -100,6 +100,9 @@ class ExchangeClient:
             return await self._call("fetch_my_trades", symbol, since, None, private=True)
         return await self._call("fetch_my_trades", private=True)
 
+    async def fetch_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
+        return await self._call("fetch_order", order_id, symbol, private=True)
+
     async def close(self) -> None:
         await asyncio.to_thread(self._exchange.close)
 

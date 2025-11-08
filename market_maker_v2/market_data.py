@@ -19,6 +19,10 @@ class MarketSnapshot:
     bid_size: Decimal
     ask_size: Decimal
     spread_pct: Decimal
+    bid_depth_usd: Decimal
+    ask_depth_usd: Decimal
+    bids: list
+    asks: list
     timestamp: float
 
 
@@ -96,8 +100,12 @@ class MarketDataFeed:
                 if best_bid is None or best_ask is None:
                     await asyncio.sleep(self.poll_interval)
                     continue
+                bids_list = [(Decimal(str(p)), Decimal(str(q))) for p, q in (book.get("bids") or [])]
+                asks_list = [(Decimal(str(p)), Decimal(str(q))) for p, q in (book.get("asks") or [])]
                 mid = (best_bid + best_ask) / 2
                 spread_pct = (best_ask - best_bid) / mid if mid > 0 else Decimal("0")
+                bid_depth_usd = sum((p * q for p, q in bids_list))
+                ask_depth_usd = sum((p * q for p, q in asks_list))
                 self.snapshot = MarketSnapshot(
                     mid_price=mid,
                     best_bid=best_bid,
@@ -105,6 +113,10 @@ class MarketDataFeed:
                     bid_size=bid_size,
                     ask_size=ask_size,
                     spread_pct=spread_pct,
+                    bid_depth_usd=bid_depth_usd,
+                    ask_depth_usd=ask_depth_usd,
+                    bids=[(p, q) for p, q in bids_list],
+                    asks=[(p, q) for p, q in asks_list],
                     timestamp=time.time(),
                 )
                 self.volatility.add(mid)
