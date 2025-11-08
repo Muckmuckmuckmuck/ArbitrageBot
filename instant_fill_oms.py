@@ -365,8 +365,8 @@ class InstantFillResponseEngine:
                 filled_order.exchange_id, filled_order.symbol, depth=5
             )
         except Exception as exc:
-            logger.warning(
-                "[OMS] Failed to fetch order book for %s: %s",
+            logger.debug(
+                "[OMS] Unable to fetch order book for %s: %s",
                 filled_order.symbol,
                 exc,
             )
@@ -462,9 +462,12 @@ class DualSideQuoteManager:
                 self._last_quote_time[(cfg.exchange_id, cfg.symbol)] = time.time()
 
     async def _ensure_pair(self, cfg: PairConfig) -> None:
-        order_book = await self._adapter.fetch_order_book(
-            cfg.exchange_id, cfg.symbol, depth=5
-        )
+        try:
+            order_book = await self._adapter.fetch_order_book(
+                cfg.exchange_id, cfg.symbol, depth=5
+            )
+        except Exception:
+            return
         if not order_book["bids"] or not order_book["asks"]:
             return
 
