@@ -67,12 +67,20 @@ class CoinbaseGeminiExchangeManager:
         delay = base_delay
         for attempt in range(attempts):
             try:
+                logger.info(
+                    "[API] %s attempt %d/%d",
+                    retry_context,
+                    attempt + 1,
+                    attempts,
+                )
                 result = operation()
                 if asyncio.iscoroutine(result):
                     result = await result
+                logger.info("[API] %s success", retry_context)
                 return result
             except Exception as exc:  # pragma: no cover - defensive
                 if attempt == attempts - 1 or not self._is_retryable_exception(exc):
+                    logger.error("[API] %s failed: %s", retry_context, exc)
                     raise
                 logger.warning(
                     "   ⚠️ %s failed (%s). Retrying in %.2fs...",
@@ -264,6 +272,14 @@ class CoinbaseGeminiExchangeManager:
                     continue
                 price_usd = await self._get_price_in_usd(exchange_id, asset)
                 value_usd = price_usd * total_amount if price_usd else 0.0
+                logger.info(
+                    "[SNAPSHOT] %s asset=%s amount=%s price=%s value=%s",
+                    exchange_id.upper(),
+                    asset,
+                    total_amount,
+                    price_usd,
+                    value_usd,
+                )
                 asset_entry = {
                     'asset': asset,
                     'amount': total_amount,
@@ -310,10 +326,18 @@ class CoinbaseGeminiExchangeManager:
             logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] Balance fetched successfully")
             return result
         try:
-            return await self._call_with_retries(
+            balance = await self._call_with_retries(
                 _attempt,
                 retry_context=f"{exchange_id} balance",
             )
+            totals = balance.get('total', {}) if isinstance(balance, dict) else {}
+            logger.info(
+                "[API] %s balance assets=%d sample=%s",
+                exchange_id.upper(),
+                len(totals),
+                list(totals.items())[:5],
+            )
+            return balance
         except Exception as e:
             logger.error(f"   {exchange_marker} [{exchange_id.upper()}] Error fetching balance: {e}")
             raise
@@ -335,10 +359,20 @@ class CoinbaseGeminiExchangeManager:
             logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] Ticker fetched for {symbol}: ${result.get('last', 0):.8f}")
             return result
         try:
-            return await self._call_with_retries(
+            ticker = await self._call_with_retries(
                 _attempt,
                 retry_context=f"{exchange_id} ticker {symbol}",
             )
+            logger.info(
+                "[API] %s ticker %s last=%s bid=%s ask=%s volume=%s",
+                exchange_id.upper(),
+                symbol,
+                ticker.get('last'),
+                ticker.get('bid'),
+                ticker.get('ask'),
+                ticker.get('baseVolume') or ticker.get('volume'),
+            )
+            return ticker
         except Exception as e:
             logger.error(f"   {exchange_marker} [{exchange_id.upper()}] Error fetching ticker {symbol}: {e}")
             raise
@@ -357,10 +391,22 @@ class CoinbaseGeminiExchangeManager:
                 result = await result
             return result
         try:
-            return await self._call_with_retries(
+            order_book = await self._call_with_retries(
                 _attempt,
                 retry_context=f"{exchange_id} order_book {symbol}",
             )
+            bids = order_book.get('bids') or []
+            asks = order_book.get('asks') or []
+            logger.info(
+                "[API] %s order book %s bids=%d asks=%d top_bid=%s top_ask=%s",
+                exchange_id.upper(),
+                symbol,
+                len(bids),
+                len(asks),
+                bids[0] if bids else None,
+                asks[0] if asks else None,
+            )
+            return order_book
         except Exception as e:
             logger.error(f"Error fetching order book {symbol} from {exchange_id}: {e}")
             raise
@@ -551,42 +597,30 @@ class CoinbaseGeminiExchangeManager:
             if order_params:
                 logger.debug(f"      {exchange_marker} [{exchange_id.upper()}] params={order_params}")
             
-            if order_params:
-                order = exchange.create_order(
-                symbol=symbol,
-                type=order_type,
-                side=side,
-                amount=amount,
-                price=price,
-                    params=order_params
+            async def _create_order_attempt():
+                logger.info(
+                    "   %s [%s] Creating order: %s %.8f %s @ %s (%s)",
+                    exchange_marker,
+                    exchange_id.upper(),
+                    side.upper(),
+                    amount,
+                    symbol,
+                    price if price is not None else "MARKET",
+                    order_type,
                 )
-            else:
-                order = exchange.create_order(
-                    symbol=symbol,
-                    type=order_type,
-                    side=side,
-                    amount=amount,
-                    price=price
-                )
+                response = exchange.create_order(symbol, order_type, side, amount, price, order_params)
+                if hasattr(response, '__await__'):
+                    response = await response
+                return response
             
-            # CCXT returns sync result, but handle async just in case
-            if hasattr(order, '__await__'):
-                order_result = await order
-            else:
-                order_result = order
-            
-            # 🔵 CRITICAL FIX: Log full order response for debugging
-            logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] Order response: {order_result}")
-            
-            order_id = order_result.get('id') if order_result else None
-            if order_id:
-                logger.info(f"   {exchange_marker} [{exchange_id.upper()}] ✅✅✅ ORDER CREATED SUCCESSFULLY: ID={order_id}")
-                price_str = f"${price:.8f}" if price else "MARKET"
-                logger.info(f"   {exchange_marker} [{exchange_id.upper()}] Order details: {symbol} {side} {amount:.8f} @ {price_str}")
-            else:
-                logger.warning(f"   {exchange_marker} [{exchange_id.upper()}] ⚠️ Order created but no ID returned: {order_result}")
-            
-            return order_result
+            order = await self._call_with_retries(
+                _create_order_attempt,
+                retry_context=f"{exchange_id} create_order {symbol} {side}",
+            )
+            logger.info(f"   {exchange_marker} [{exchange_id.upper()}] ✅✅✅ ORDER CREATED SUCCESSFULLY: ID={order.get('id') if order else 'N/A'}")
+            price_str = f"${price:.8f}" if price else "MARKET"
+            logger.info(f"   {exchange_marker} [{exchange_id.upper()}] Order details: {symbol} {side} {amount:.8f} @ {price_str}")
+            return order
             
         except Exception as e:
             error_msg = str(e)
@@ -769,10 +803,18 @@ class CoinbaseGeminiExchangeManager:
                 result = await result
             return result or []
         try:
-            return await self._call_with_retries(
+            orders = await self._call_with_retries(
                 _attempt,
                 retry_context=f"{exchange_id} open_orders {symbol or 'ALL'}",
             )
+            logger.info(
+                "[API] %s open orders %s count=%d sample=%s",
+                exchange_id.upper(),
+                symbol or 'ALL',
+                len(orders),
+                orders[:2],
+            )
+            return orders
         except Exception as e:
             logger.error(f"Error fetching open orders on {exchange_id} ({symbol or 'ALL'}): {e}")
             raise

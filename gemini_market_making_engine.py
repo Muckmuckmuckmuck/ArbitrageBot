@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from decimal import Decimal
+import logging
 from typing import List, Optional
 
 from coinbase_gemini_exchanges import CoinbaseGeminiExchangeManager
@@ -15,7 +16,7 @@ from instant_fill_oms import ExchangeManagerAdapter, InstantFillMarketMaker, Pai
 
 
 def _gemini_pair_configs() -> List[PairConfig]:
-    return [
+    configs = [
         PairConfig(
             "gemini",
             "BTC/USD",
@@ -45,6 +46,15 @@ def _gemini_pair_configs() -> List[PairConfig]:
             max_quote_interval_s=20.0,
         ),
     ]
+    for cfg in configs:
+        logging.getLogger(__name__).info(
+            "[CONFIG] Gemini pair %s size_usd=%s min_spread_bps=%s quote_interval=%s",
+            cfg.symbol,
+            cfg.order_size_usd,
+            cfg.min_spread_bps,
+            cfg.max_quote_interval_s,
+        )
+    return configs
 
 
 class GeminiMarketMakingEngine:
@@ -58,6 +68,10 @@ class GeminiMarketMakingEngine:
     ) -> None:
         adapter = ExchangeManagerAdapter(exchange_manager)
         configs = pair_configs or _gemini_pair_configs()
+        logging.getLogger(__name__).info(
+            "[INIT] GeminiMarketMakingEngine pairs=%s",
+            [cfg.symbol for cfg in configs],
+        )
         self._maker = InstantFillMarketMaker(adapter, db_manager, configs)
         self._task: Optional[asyncio.Task] = None
 

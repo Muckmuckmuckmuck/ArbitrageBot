@@ -104,6 +104,15 @@ class ExchangeManagerAdapter:
         price: Optional[Decimal] = None,
         order_type: str = "limit",
     ) -> Dict:
+        logger.info(
+            "[ADAPTER] create_order %s %s side=%s amount=%s price=%s type=%s",
+            exchange_id.upper(),
+            symbol,
+            side.value,
+            amount,
+            price,
+            order_type,
+        )
         return await self._manager.create_order(
             exchange_id=exchange_id,
             symbol=symbol,
@@ -116,16 +125,33 @@ class ExchangeManagerAdapter:
     async def cancel_order(
         self, exchange_id: str, symbol: str, order_id: str
     ) -> None:
+        logger.info(
+            "[ADAPTER] cancel_order %s %s order_id=%s",
+            exchange_id.upper(),
+            symbol,
+            order_id,
+        )
         await self._manager.cancel_order(exchange_id, order_id, symbol)
 
     async def fetch_order_book(
         self, exchange_id: str, symbol: str, depth: int = 10
     ) -> Dict:
+        logger.info(
+            "[ADAPTER] fetch_order_book %s %s depth=%s",
+            exchange_id.upper(),
+            symbol,
+            depth,
+        )
         return await self._manager.fetch_order_book(exchange_id, symbol, depth)
 
     async def fetch_open_orders(
         self, exchange_id: str, symbol: Optional[str] = None
     ) -> List[Dict]:
+        logger.info(
+            "[ADAPTER] fetch_open_orders %s symbol=%s",
+            exchange_id.upper(),
+            symbol,
+        )
         return await self._manager.fetch_open_orders(exchange_id, symbol)
 
     async def fetch_trades(
@@ -134,12 +160,24 @@ class ExchangeManagerAdapter:
         symbol: Optional[str] = None,
         since: Optional[int] = None,
     ) -> List[Dict]:
+        logger.info(
+            "[ADAPTER] fetch_trades %s symbol=%s since=%s",
+            exchange_id.upper(),
+            symbol,
+            since,
+        )
         return await self._manager.fetch_my_trades(exchange_id, symbol, since)
 
     async def fetch_balance(self, exchange_id: str) -> Dict:
+        logger.info("[ADAPTER] fetch_balance %s", exchange_id.upper())
         return await self._manager.fetch_balance(exchange_id)
 
     async def fetch_ticker(self, exchange_id: str, symbol: str) -> Dict:
+        logger.info(
+            "[ADAPTER] fetch_ticker %s %s",
+            exchange_id.upper(),
+            symbol,
+        )
         return await self._manager.fetch_ticker(exchange_id, symbol)
 
 
@@ -180,6 +218,12 @@ class BalanceCache:
             balances[currency] = max(free_value, total_value)
         self._balances[exchange_id] = balances
         self._last_refresh[exchange_id] = now
+        logger.info(
+            "[BALANCE] Updated cache for %s assets=%d sample=%s",
+            exchange_id.upper(),
+            len(balances),
+            list(balances.items())[:5],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +307,12 @@ class InstantFillResponseEngine:
             base, order_quote = order.symbol.split("/")
             if order_quote == quote:
                 total += order.price * order.amount
+        logger.info(
+            "[OMS] Reserved quote %s on %s = %s",
+            quote,
+            exchange_id.upper(),
+            total,
+        )
         return total
 
     def reserved_base(self, exchange_id: str, base: str) -> Decimal:
@@ -273,6 +323,12 @@ class InstantFillResponseEngine:
             order_base, _ = order.symbol.split("/")
             if order_base == base:
                 total += order.amount
+        logger.info(
+            "[OMS] Reserved base %s on %s = %s",
+            base,
+            exchange_id.upper(),
+            total,
+        )
         return total
 
     async def register_order(self, order: ManagedOrder) -> None:
@@ -281,6 +337,16 @@ class InstantFillResponseEngine:
         async with self._lock:
             self._orders[key] = order
             self._orders_by_pair[side_key] = order
+        logger.info(
+            "[OMS] 📥 Registered order %s %s %s %s @ %s x%s (tag=%s)",
+            order.exchange_id.upper(),
+            order.side.value.upper(),
+            order.symbol,
+            order.order_id,
+            order.price,
+            order.amount,
+            order.tag,
+        )
 
     async def mark_cancelled(
         self, exchange_id: str, symbol: str, side: OrderSide
@@ -290,10 +356,28 @@ class InstantFillResponseEngine:
             existing = self._orders_by_pair.pop(side_key, None)
             if existing:
                 self._orders.pop((exchange_id, existing.order_id), None)
+        logger.info(
+            "[OMS] 🗑️ Removed tracked order %s %s %s",
+            exchange_id.upper(),
+            symbol,
+            side.value.upper(),
+        )
+
+    async def get_orders_by_tag(self, tag: str) -> List[ManagedOrder]:
+        async with self._lock:
+            return [order for order in self._orders.values() if order.tag == tag]
 
     async def enqueue_fill(self, fill: FillEvent) -> None:
         async with self._lock:
             self._pending_trades.append(fill)
+        logger.info(
+            "[OMS] 📬 Enqueued fill %s %s %s amount=%s price=%s",
+            fill.exchange_id.upper(),
+            fill.symbol,
+            fill.side.value.upper(),
+            fill.amount,
+            fill.price,
+        )
 
     async def retry_pending_fills(self) -> None:
         """Background task to process fill queue."""
@@ -340,6 +424,16 @@ class InstantFillResponseEngine:
                 self._latency_warning_ms,
             )
 
+        logger.info(
+            "[OMS] ✅ Fill processed for %s %s %s order=%s amount=%s price=%s latency=%.1fms",
+            order.exchange_id.upper(),
+            order.symbol,
+            order.side.value.upper(),
+            order.order_id,
+            fill.amount,
+            fill.price,
+            latency_ms,
+        )
         self._last_fill_ts = time.time()
         await self._record_trade(order, fill)
         await self._post_opposite_order(order, fill)
@@ -368,6 +462,13 @@ class InstantFillResponseEngine:
                 risk_score=0.0,
             )
             self._db.save_trade(trade)
+            logger.info(
+                "[OMS] 💾 Trade recorded symbol=%s amount=%s buy_price=%s sell_price=%s",
+                trade.symbol,
+                trade.amount,
+                trade.buy_price,
+                trade.sell_price,
+            )
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("Failed to persist trade record: %s", exc)
 
@@ -406,6 +507,13 @@ class InstantFillResponseEngine:
                     target_amount,
                 )
                 return
+            logger.info(
+                "[OMS] 🔁 Hedge order %s %s needs resize old=%.8f new=%.8f",
+                filled_order.exchange_id.upper(),
+                filled_order.symbol,
+                existing.amount,
+                target_amount,
+            )
             try:
                 await self._adapter.cancel_order(
                     filled_order.exchange_id, filled_order.symbol, existing.order_id
@@ -455,6 +563,14 @@ class InstantFillResponseEngine:
         price = price.quantize(Decimal("0.00001"))
         amount = target_amount
 
+        logger.info(
+            "[OMS] ➡️ Posting opposite %s for %s on %s price=%s amount=%s",
+            side.value,
+            filled_order.symbol,
+            filled_order.exchange_id.upper(),
+            price,
+            amount,
+        )
         try:
             response = await self._adapter.create_order(
                 filled_order.exchange_id,
@@ -518,6 +634,12 @@ class DualSideQuoteManager:
             now = time.time()
             last = self._last_quote_time.get((cfg.exchange_id, cfg.symbol), 0.0)
             if now - last < cfg.max_quote_interval_s:
+                logger.info(
+                    "[QUOTE] Skipping %s %s (cooldown %.2fs)",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    cfg.max_quote_interval_s - (now - last),
+                )
                 continue
             try:
                 await self._ensure_pair(cfg)
@@ -553,6 +675,16 @@ class DualSideQuoteManager:
         bid_depth = sum(Decimal(str(entry[1])) * Decimal(str(entry[0])) for entry in order_book["bids"][:3])
         ask_depth = sum(Decimal(str(entry[1])) * Decimal(str(entry[0])) for entry in order_book["asks"][:3])
 
+        logger.info(
+            "[QUOTE] %s %s best_bid=%s best_ask=%s bid_depth=%.2f ask_depth=%.2f",
+            cfg.exchange_id.upper(),
+            cfg.symbol,
+            best_bid,
+            best_ask,
+            bid_depth,
+            ask_depth,
+        )
+
         if bid_depth < cfg.min_depth_usd or ask_depth < cfg.min_depth_usd:
             logger.debug(
                 "[QUOTE] Depth too low for %s (%s/%s)",
@@ -584,6 +716,18 @@ class DualSideQuoteManager:
         usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
         usable_base = max(Decimal("0"), base_balance - base_reserved)
 
+        logger.info(
+            "[QUOTE] Balances %s %s quote=%s reserved=%s usable=%s | base=%s reserved=%s usable=%s",
+            cfg.exchange_id.upper(),
+            cfg.symbol,
+            quote_balance,
+            quote_reserved,
+            usable_quote,
+            base_balance,
+            base_reserved,
+            usable_base,
+        )
+
         max_buy_amount = (
             usable_quote / (buy_price * Decimal("1.01"))
         ).quantize(Decimal("0.00001")) if buy_price > 0 else Decimal("0")
@@ -594,6 +738,17 @@ class DualSideQuoteManager:
         need_buy = buy_amount > Decimal("0") and (buy_amount * buy_price) >= cfg.min_notional_usd
         need_sell = sell_amount > Decimal("0") and (sell_amount * sell_price) >= cfg.min_notional_usd
 
+        logger.info(
+            "[QUOTE] Computed orders %s %s buy_amount=%s buy_price=%s sell_amount=%s sell_price=%s need_buy=%s need_sell=%s",
+            cfg.exchange_id.upper(),
+            cfg.symbol,
+            buy_amount,
+            buy_price,
+            sell_amount,
+            sell_price,
+            need_buy,
+            need_sell,
+        )
         await self._sync_side(cfg, OrderSide.BUY, buy_amount, buy_price, need_buy)
         await self._sync_side(cfg, OrderSide.SELL, sell_amount, sell_price, need_sell)
 
@@ -616,6 +771,14 @@ class DualSideQuoteManager:
             )
             return
         if not allowed:
+            logger.info(
+                "[QUOTE] %s %s side=%s not allowed (amount=%s price=%s)",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                side.value,
+                amount,
+                price,
+            )
             if existing:
                 await self._adapter.cancel_order(
                     cfg.exchange_id, cfg.symbol, existing.order_id
@@ -630,9 +793,21 @@ class DualSideQuoteManager:
             and abs(existing.price - price) / price < Decimal("0.0015")
             and abs(existing.amount - amount) / amount < Decimal("0.1")
         ):
+            logger.info(
+                "[QUOTE] %s %s reusing existing order %s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                existing.order_id,
+            )
             return
 
         if existing:
+            logger.info(
+                "[QUOTE] %s %s cancelling existing order %s to replace",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                existing.order_id,
+            )
             await self._adapter.cancel_order(
                 cfg.exchange_id, cfg.symbol, existing.order_id
             )
@@ -642,6 +817,14 @@ class DualSideQuoteManager:
             # refresh balances after cancellation to avoid stale locked funds
             await self._balance_cache.get_balances(cfg.exchange_id)
 
+        logger.info(
+            "[QUOTE] %s %s creating order side=%s amount=%s price=%s",
+            cfg.exchange_id.upper(),
+            cfg.symbol,
+            side.value,
+            amount,
+            price,
+        )
         response = await self._adapter.create_order(
             cfg.exchange_id,
             cfg.symbol,
@@ -737,6 +920,12 @@ class WebSocketFillMonitor:
 
     async def _poll_once(self) -> None:
         for symbol in self._symbols:
+            logger.info(
+                "[WS] Polling trades for %s %s since=%s",
+                self._exchange_id.upper(),
+                symbol,
+                self._last_trade_ts,
+            )
             trades = await self._adapter.fetch_trades(
                 self._exchange_id,
                 symbol,
@@ -744,6 +933,12 @@ class WebSocketFillMonitor:
             )
             if trades:
                 self._last_trade_ts = max(t.get("timestamp", 0) for t in trades)
+            logger.info(
+                "[WS] %s %s fetched %d trades",
+                self._exchange_id.upper(),
+                symbol,
+                len(trades or []),
+            )
 
             for trade in trades or []:
                 order_id = str(trade.get("order"))
@@ -773,9 +968,14 @@ class WebSocketFillMonitor:
         open_orders: List[Dict] = []
         for symbol in self._symbols:
             try:
-                open_orders.extend(
-                    await self._adapter.fetch_open_orders(self._exchange_id, symbol)
+                symbol_orders = await self._adapter.fetch_open_orders(self._exchange_id, symbol)
+                logger.info(
+                    "[WS] %s %s open orders fetched=%d",
+                    self._exchange_id.upper(),
+                    symbol,
+                    len(symbol_orders),
                 )
+                open_orders.extend(symbol_orders)
             except Exception as exc:
                 logger.debug("[WS] Open order poll failed for %s %s: %s", self._exchange_id, symbol, exc)
                 continue
@@ -793,6 +993,12 @@ class WebSocketFillMonitor:
                 continue
             if order.order_id not in open_ids:
                 # Treat as filled without trade info
+                logger.info(
+                    "[WS] Detected closed order %s %s %s assumed filled",
+                    order.exchange_id.upper(),
+                    order.symbol,
+                    order.order_id,
+                )
                 fill = FillEvent(
                     exchange_id=self._exchange_id,
                     symbol=order.symbol,
@@ -851,6 +1057,8 @@ class InstantFillMarketMaker:
         self._tasks: List[asyncio.Task] = []
         self._running = False
         self._last_inactivity_warning: float = 0.0
+        self._hedge_refresh_interval = 5.0
+        self._hedge_max_age = 10.0
         self._rebuild_pair_maps()
 
     async def start(self) -> None:
@@ -879,6 +1087,7 @@ class InstantFillMarketMaker:
         self._tasks.append(asyncio.create_task(self._quote_loop()))
         self._tasks.append(asyncio.create_task(self._balance_refresh_loop()))
         self._tasks.append(asyncio.create_task(self._inventory_guard_loop()))
+        self._tasks.append(asyncio.create_task(self._hedge_refresh_loop()))
         self._tasks.append(asyncio.create_task(self._inactivity_monitor_loop()))
 
     async def stop(self) -> None:
@@ -896,11 +1105,13 @@ class InstantFillMarketMaker:
 
     async def _quote_loop(self) -> None:
         while self._running:
+            logger.info("[LOOP] Quote loop tick")
             await self._quote_manager.ensure_quotes()
             await asyncio.sleep(1.0)
 
     async def _balance_refresh_loop(self) -> None:
         while self._running:
+            logger.info("[LOOP] Balance refresh tick")
             for exchange in self._adapter.available_exchanges():
                 try:
                     await self._balance_cache.get_balances(exchange)
@@ -917,6 +1128,16 @@ class InstantFillMarketMaker:
             except Exception as exc:
                 logger.debug("Inventory guard error: %s", exc)
             await asyncio.sleep(self._inventory_check_interval)
+
+    async def _hedge_refresh_loop(self) -> None:
+        while self._running:
+            try:
+                await self._refresh_stale_hedges()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("Hedge refresh error: %s", exc)
+            await asyncio.sleep(self._hedge_refresh_interval)
 
     async def _inactivity_monitor_loop(self) -> None:
         check_interval = 60.0
@@ -959,12 +1180,30 @@ class InstantFillMarketMaker:
                 total_amount = Decimal(str(raw_amount))
                 free_amount = Decimal(str(free_balances.get(currency, 0)))
                 usable_amount = min(total_amount, free_amount)
+                logger.info(
+                    "[INVENTORY] Inspecting %s on %s total=%s free=%s usable=%s",
+                    currency,
+                    exchange_id.upper(),
+                    total_amount,
+                    free_amount,
+                    usable_amount,
+                )
                 if (
                     currency in stable_quotes
                     or usable_amount <= self._inventory_threshold
                 ):
+                    logger.info(
+                        "[INVENTORY] Skipping %s on %s (stable or below threshold)",
+                        currency,
+                        exchange_id.upper(),
+                    )
                     continue
                 if self._fill_engine.has_active_sell_order(exchange_id, currency):
+                    logger.info(
+                        "[INVENTORY] Active hedge already exists for %s on %s",
+                        currency,
+                        exchange_id.upper(),
+                    )
                     continue
                 configs = self._pair_index.get(exchange_id, {}).get(currency, [])
                 placed = False
@@ -976,6 +1215,12 @@ class InstantFillMarketMaker:
                         else len(priority),
                     )
                     for cfg in ordered_configs:
+                        logger.info(
+                            "[INVENTORY] Attempting hedge via %s on %s amount=%s",
+                            cfg.symbol,
+                            exchange_id.upper(),
+                            usable_amount,
+                        )
                         placed = await self._place_inventory_hedge(cfg, usable_amount)
                         if placed:
                             break
@@ -988,6 +1233,11 @@ class InstantFillMarketMaker:
         if amount <= self._inventory_threshold:
             return False
         if not self._adapter.is_symbol_supported(cfg.exchange_id, cfg.symbol):
+            logger.info(
+                "[INVENTORY] Market %s not supported on %s",
+                cfg.symbol,
+                cfg.exchange_id.upper(),
+            )
             return False
         try:
             order_book = await self._adapter.fetch_order_book(
@@ -1004,6 +1254,11 @@ class InstantFillMarketMaker:
 
         bids = order_book.get("bids") or []
         if not bids:
+            logger.info(
+                "[INVENTORY] No bids for %s on %s",
+                cfg.symbol,
+                cfg.exchange_id.upper(),
+            )
             return False
         best_bid = Decimal(str(bids[0][0]))
         if best_bid <= 0:
@@ -1011,6 +1266,13 @@ class InstantFillMarketMaker:
 
         sell_amount = amount.quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
         if sell_amount * best_bid < cfg.min_notional_usd:
+            logger.info(
+                "[INVENTORY] Sell amount below notional for %s on %s value=%s min=%s",
+                cfg.symbol,
+                cfg.exchange_id.upper(),
+                sell_amount * best_bid,
+                cfg.min_notional_usd,
+            )
             return False
 
         order_type = "market" if cfg.exchange_id == "coinbase" else "limit"
@@ -1018,6 +1280,13 @@ class InstantFillMarketMaker:
         if order_type == "limit":
             price = (best_bid * Decimal("0.999")).quantize(Decimal("0.00001"))
 
+        logger.info(
+            "[INVENTORY] Posting hedge sell %s on %s price=%s amount=%s",
+            cfg.symbol,
+            cfg.exchange_id.upper(),
+            price if price is not None else "MARKET",
+            sell_amount,
+        )
         try:
             response = await self._adapter.create_order(
                 cfg.exchange_id,
@@ -1071,7 +1340,9 @@ class InstantFillMarketMaker:
     async def _startup_cleanup(self) -> None:
         exchanges = self._adapter.available_exchanges()
         for exchange_id in exchanges:
+            logger.info("[STARTUP] Cancelling open orders on %s", exchange_id.upper())
             await self._cancel_open_orders(exchange_id)
+            logger.info("[STARTUP] Flattening inventory on %s", exchange_id.upper())
             await self._flatten_inventory(exchange_id)
             await self._balance_cache.get_balances(exchange_id)
         self._pair_configs = await self._filter_supported_pairs(self._pair_configs)
@@ -1141,6 +1412,11 @@ class InstantFillMarketMaker:
                 None,
             )
             if not self._adapter.is_symbol_supported(exchange_id, symbol):
+                logger.info(
+                    "[CLEANUP] %s not supported on %s during flatten",
+                    symbol,
+                    exchange_id.upper(),
+                )
                 continue
             try:
                 order_book = await self._adapter.fetch_order_book(exchange_id, symbol, depth=5)
@@ -1157,6 +1433,13 @@ class InstantFillMarketMaker:
             sell_value = sell_amount * best_bid
             min_notional = cfg.min_notional_usd if cfg else Decimal("5.00")
             if sell_value < min_notional:
+                logger.info(
+                    "[CLEANUP] Order value below minimum for %s on %s value=%s min=%s",
+                    symbol,
+                    exchange_id.upper(),
+                    sell_value,
+                    min_notional,
+                )
                 continue
 
             order_type = "market" if exchange_id == "coinbase" else "limit"
@@ -1164,6 +1447,13 @@ class InstantFillMarketMaker:
             if order_type == "limit":
                 price = (best_bid * Decimal("0.999")).quantize(Decimal("0.00001"))
 
+            logger.info(
+                "[CLEANUP] Attempting flatten %s on %s amount=%s price=%s",
+                symbol,
+                exchange_id.upper(),
+                sell_amount,
+                price if price is not None else "MARKET",
+            )
             try:
                 response = await self._adapter.create_order(
                     exchange_id,
@@ -1209,6 +1499,115 @@ class InstantFillMarketMaker:
             exchange_id,
         )
         return False
+
+    async def _refresh_stale_hedges(self) -> None:
+        hedges = await self._fill_engine.get_orders_by_tag("hedge")
+        if not hedges:
+            return
+        now = time.time()
+        for hedge in hedges:
+            age = now - hedge.created_at
+            if age < self._hedge_max_age:
+                continue
+            logger.info(
+                "[OMS] 🔁 Refreshing stale hedge %s %s order=%s age=%.1fs",
+                hedge.exchange_id.upper(),
+                hedge.symbol,
+                hedge.order_id,
+                age,
+            )
+            try:
+                await self._adapter.cancel_order(
+                    hedge.exchange_id, hedge.symbol, hedge.order_id
+                )
+                await self._fill_engine.mark_cancelled(
+                    hedge.exchange_id, hedge.symbol, hedge.side
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[OMS] Unable to cancel stale hedge %s %s: %s",
+                    hedge.exchange_id.upper(),
+                    hedge.symbol,
+                    exc,
+                )
+                continue
+
+            try:
+                order_book = await self._adapter.fetch_order_book(
+                    hedge.exchange_id, hedge.symbol, depth=5
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[OMS] Cannot refresh hedge %s %s due to book error: %s",
+                    hedge.exchange_id.upper(),
+                    hedge.symbol,
+                    exc,
+                )
+                continue
+
+            bids = order_book.get("bids") or []
+            asks = order_book.get("asks") or []
+            price: Optional[Decimal] = None
+            if hedge.side == OrderSide.SELL and bids:
+                price = (Decimal(str(bids[0][0])) * Decimal("0.998")).quantize(
+                    Decimal("0.00001")
+                )
+            elif hedge.side == OrderSide.BUY and asks:
+                price = (Decimal(str(asks[0][0])) * Decimal("1.002")).quantize(
+                    Decimal("0.00001")
+                )
+            if price is None:
+                logger.warning(
+                    "[OMS] Cannot determine refreshed price for hedge %s %s",
+                    hedge.exchange_id.upper(),
+                    hedge.symbol,
+                )
+                continue
+
+            try:
+                response = await self._adapter.create_order(
+                    hedge.exchange_id,
+                    hedge.symbol,
+                    hedge.side,
+                    amount=hedge.amount,
+                    price=price,
+                    order_type="limit",
+                )
+            except Exception as exc:
+                logger.error(
+                    "[OMS] Failed to recreate hedge %s %s: %s",
+                    hedge.exchange_id.upper(),
+                    hedge.symbol,
+                    exc,
+                )
+                continue
+
+            order_id = response.get("id") or response.get("order_id")
+            if not order_id:
+                logger.error(
+                    "[OMS] Hedge refresh missing order id for %s %s",
+                    hedge.exchange_id.upper(),
+                    hedge.symbol,
+                )
+                continue
+
+            refreshed = ManagedOrder(
+                exchange_id=hedge.exchange_id,
+                symbol=hedge.symbol,
+                side=hedge.side,
+                order_id=str(order_id),
+                price=price,
+                amount=hedge.amount,
+                tag="hedge",
+            )
+            await self._fill_engine.register_order(refreshed)
+            logger.info(
+                "[OMS] 🔄 Hedge refreshed %s %s new_order=%s price=%s",
+                hedge.exchange_id.upper(),
+                hedge.symbol,
+                order_id,
+                price,
+            )
 
     async def _filter_supported_pairs(
         self, pair_configs: Sequence[PairConfig]
