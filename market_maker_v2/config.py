@@ -153,7 +153,14 @@ class BotConfig:
             maker_fee_bps=Decimal("-10"),  # rebate
             taker_fee_bps=Decimal("35"),
             markets=[
-                PairConfig(symbol="BTC/USD", base_spread_bps=Decimal("28"), min_order_usd=Decimal("5.0"), base_order_size_pct=Decimal("0.02")),
+                PairConfig(
+                    symbol="BTC/USD",
+                    base_spread_bps=Decimal("28"),
+                    min_order_usd=Decimal("5.0"),
+                    base_order_size_pct=Decimal("0.015"),
+                    min_depth_usd=Decimal("50000"),
+                    min_volume_usd=Decimal("200000"),
+                ),
             ],
         )
         exchanges[gemini.name] = gemini
