@@ -1,181 +1,64 @@
-#!/usr/bin/env python3
 """
-Coinbase Market Making Engine
-Implements passive market-making strategy on Coinbase exchange
-Top pairs optimized for maximum profitability with dynamic adjustments
+Simplified Coinbase market making engine that relies on the instant-fill OMS.
+"""
 
-EXCHANGE: 🔵 COINBASE ONLY - This entire module is for Coinbase market making
-"""
+from __future__ import annotations
 
 import asyncio
-import logging
-import random
-import statistics
-import time
-from typing import Any, Dict, List, Optional, Tuple
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from collections import defaultdict
+from decimal import Decimal
+from typing import List, Optional
 
 from coinbase_gemini_exchanges import CoinbaseGeminiExchangeManager
+from database_manager import DatabaseManager
+from instant_fill_oms import ExchangeManagerAdapter, InstantFillMarketMaker, PairConfig
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
-# Core bases we want to quote on Coinbase (high-liquidity assets)
-TOP_COINBASE_BASES = [
-    'BTC', 'ETH', 'SOL', 'AVAX', 'LINK', 'UNI', 'DOGE', 'XRP',
-    'ADA', 'DOT', 'MATIC', 'ATOM', 'ALGO', 'LTC', 'AAVE'
-]
+def _coinbase_pair_configs() -> List[PairConfig]:
+    return [
+        PairConfig("coinbase", "BTC/USD", Decimal("3.00"), min_spread_bps=25),
+        PairConfig("coinbase", "ETH/USD", Decimal("2.50"), min_spread_bps=30),
+        PairConfig("coinbase", "SOL/USD", Decimal("2.00"), min_spread_bps=35),
+        PairConfig("coinbase", "AVAX/USD", Decimal("1.50"), min_spread_bps=40),
+        PairConfig("coinbase", "LINK/USD", Decimal("1.50"), min_spread_bps=40),
+        PairConfig("coinbase", "UNI/USD", Decimal("1.50"), min_spread_bps=45),
+    ]
 
-# Prioritize both USD and USDC quotes so we can trade when cash is held in either
-TOP_COINBASE_QUOTES = ['USD', 'USDC']
-
-# Generate the default pair universe (duplicates removed downstream during initialization)
-TOP_COINBASE_PAIRS = [
-    f"{base}/{quote}"
-    for base in TOP_COINBASE_BASES
-    for quote in TOP_COINBASE_QUOTES
-]
-
-@dataclass
-class MarketMakingOrder:
-    """Represents a market-making order"""
-    pair: str
-    side: str  # 'buy' or 'sell'
-    order_id: Optional[str] = None
-    price: float = 0.0
-    amount: float = 0.0
-    status: str = 'pending'  # 'pending', 'open', 'filled', 'canceled'
-    created_at: datetime = field(default_factory=datetime.now)
-    filled_at: Optional[datetime] = None
-    filled_amount: float = 0.0  # Track partial fills - amount that has been filled so far
-    fees_paid: float = 0.0
-
-@dataclass
-class MarketMakingStats:
-    """Statistics for market-making performance"""
-    pair: str
-    total_orders: int = 0
-    filled_orders: int = 0
-    total_profit_usd: float = 0.0
-    total_fees_usd: float = 0.0
-    net_profit_usd: float = 0.0
-    avg_spread_captured: float = 0.0
-    win_rate: float = 0.0
-    wins: int = 0
-    losses: int = 0
 
 class CoinbaseMarketMakingEngine:
-    """Market-making engine for Coinbase exchange"""
-    
+    """Thin wrapper that runs the instant-fill market maker for Coinbase pairs."""
+
     def __init__(
         self,
         exchange_manager: CoinbaseGeminiExchangeManager,
-        capital_per_pair: float = 75.0,  # $75 per pair to support larger quotes
-        grid_spacing_percent: float = 0.20,  # 0.20% spacing
-        order_size_percent: float = 0.12,  # 12% of capital per order (~$9)
-        min_spread_percent: float = 0.95,  # Skip if effective spread < 0.95% (covers maker fees + buffer)
-        max_inventory_percent: float = 0.25,  # Max 25% in one asset
-        requote_interval_seconds: int = 15,  # Update orders every 15s
-        stop_loss_percent: float = 0.02,  # -2% stop loss
-        take_profit_interval_minutes: int = 60,  # Flatten every hour
-        max_volatility_percent: float = 2.0,  # Skip if short-term volatility above this
-        min_depth_usd: float = 500.0,  # Require at least this much depth on both sides
-    ):
-        self.exchange_manager = exchange_manager
-        self.capital_per_pair = capital_per_pair
-        self.grid_spacing_percent = grid_spacing_percent
-        self.order_size_percent = order_size_percent
-        self.maker_fee_percent = 0.35  # Estimated maker fee in percent
-        self.taker_fee_percent = 0.35  # Estimated taker fee (fallback / crosses)
-        self.min_order_value_usd = 5.00
-        self.min_inventory_sell_value_usd = 5.00
-        self.balance_buffer_multiplier = 1.05
-        self.min_profit_buffer_percent = 0.25  # Additional cushion beyond fees
-        self.min_spread_percent = max(
-            min_spread_percent,
-            self.maker_fee_percent + self.taker_fee_percent + self.min_profit_buffer_percent
-        )
-        self.max_inventory_percent = max_inventory_percent
-        self.requote_interval_seconds = requote_interval_seconds
-        self.stop_loss_percent = stop_loss_percent
-        self.take_profit_interval_minutes = take_profit_interval_minutes
-        self.min_spacing_percent = 0.50  # Minimum spacing to ensure profitability (percent)
-        self.max_spacing_percent = 1.50  # Cap spacing to avoid quoting too far away
-        self.min_volume_usd = 150000.0
-        self.max_volatility_percent = max_volatility_percent
-        self.min_depth_usd = max(min_depth_usd, 7500.0)
-        self.min_fill_rate_threshold = 0.12
-        self.fill_rate_blacklist_minutes = 10
-        self.max_pair_loss_usd = -8.0
-        self.max_global_loss_usd = -25.0
-        self.inside_quote_volume_threshold = 1200.0
-        self.inside_quote_improve_bps = 2.0  # 0.02%
-        self.micro_reprice_threshold = 0.12  # 0.12% drift triggers reprice
-        self.inventory_max_age_minutes = 75
+        db_manager: DatabaseManager,
+        pair_configs: Optional[List[PairConfig]] = None,
+    ) -> None:
+        adapter = ExchangeManagerAdapter(exchange_manager)
+        configs = pair_configs or _coinbase_pair_configs()
+        self._maker = InstantFillMarketMaker(adapter, db_manager, configs)
+        self._task: Optional[asyncio.Task] = None
 
-        # Active orders tracking
-        self.active_orders: Dict[str, List[MarketMakingOrder]] = defaultdict(list)
-        
-        # Statistics
-        self.stats: Dict[str, MarketMakingStats] = {}
-        self.available_pairs: List[str] = []  # Will be set during initialization
-        
-        # 🔵 IMPROVEMENT: Track fill rates for pairs (focus on pairs that actually fill)
-        self.pair_fill_rates: Dict[str, float] = {}  # pair -> fill_rate (0-1)
-        self.last_buy_prices: Dict[str, float] = defaultdict(lambda: 0.0)
-        self.pending_sell_queue: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-        
-        # 🔵 IMPROVEMENT: Dynamic adjustment tracking
-        self.pair_performance: Dict[str, Dict] = defaultdict(lambda: {
-            'total_profit': 0.0,
-            'total_trades': 0,
-            'avg_spread': 0.0,
-            'fill_rate': 0.5
-        })
-        self.pair_spread_overrides: Dict[str, float] = {}
-        self.pair_skip_until: Dict[str, datetime] = {}
-        self.pair_last_inventory_timestamp: Dict[str, datetime] = {}
-        self.pair_failure_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        self.pair_cooldown_multipliers: Dict[str, int] = defaultdict(lambda: 1)
-        self.pair_cooldowns: Dict[str, Tuple[datetime, str]] = {}
-        self.failure_threshold = 3
-        self.failure_cooldown_minutes = 5
-        
-        # Running state
-        self.running = False
-        self.last_flatten_time = datetime.now()
-        self.net_profit_usd: float = 0.0
-        self.total_fees_usd: float = 0.0
-        self.position_tracker: Dict[str, List[Dict[str, float]]] = defaultdict(list)
-        self.global_loss_pause_until: Optional[datetime] = None
-        
-    def _reset_failures(self, pair: str):
-        if pair in self.pair_failure_counts:
-            self.pair_failure_counts[pair].clear()
-        if pair in self.pair_cooldowns and self.pair_cooldowns[pair][0] <= datetime.now():
-            self.pair_cooldowns.pop(pair, None)
-        if pair in self.pair_cooldown_multipliers:
-            self.pair_cooldown_multipliers[pair] = 1
+    async def start(self) -> None:
+        await self._maker.start()
+        if self._task is None:
+            self._task = asyncio.create_task(self._run_forever())
 
-    def _register_failure(self, pair: str, failure_type: str, detail: str):
-        counts = self.pair_failure_counts[pair]
-        counts[failure_type] += 1
-        logger.debug(f"   🔵 [COINBASE] {pair}: Failure '{failure_type}' count -> {counts[failure_type]} ({detail})")
-        if counts[failure_type] >= self.failure_threshold:
-            multiplier = min(4, self.pair_cooldown_multipliers[pair] + 1)
-            self.pair_cooldown_multipliers[pair] = multiplier
-            cooldown_minutes = self.failure_cooldown_minutes * multiplier
-            cooldown_until = datetime.now() + timedelta(minutes=cooldown_minutes)
-            self.pair_cooldowns[pair] = (cooldown_until, failure_type)
-            counts[failure_type] = 0
-            logger.warning(
-                f"   🔵 [COINBASE] ⏸️ Cooling down {pair} for {cooldown_minutes}m after repeated '{failure_type}' failures ({detail})"
-            )
+    async def stop(self) -> None:
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+        await self._maker.stop()
+
+    async def _run_forever(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            pass
 
     def _is_on_cooldown(self, pair: str) -> Optional[Tuple[datetime, str]]:
         cooldown_entry = self.pair_cooldowns.get(pair)
