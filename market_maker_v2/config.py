@@ -136,8 +136,8 @@ class BotConfig:
             maker_fee_bps=Decimal("0"),
             taker_fee_bps=Decimal("40"),
             markets=[
-                PairConfig(symbol="BTC-USD", base_spread_bps=Decimal("22")),
-                PairConfig(symbol="ETH-USD", base_spread_bps=Decimal("26"), min_order_usd=Decimal("2.0")),
+                PairConfig(symbol="BTC-USD", base_spread_bps=Decimal("22"), base_order_size_pct=Decimal("0.025")),
+                PairConfig(symbol="ETH-USD", base_spread_bps=Decimal("26"), min_order_usd=Decimal("2.0"), base_order_size_pct=Decimal("0.025")),
             ],
         )
         exchanges[coinbase.name] = coinbase
@@ -153,7 +153,7 @@ class BotConfig:
             maker_fee_bps=Decimal("-10"),  # rebate
             taker_fee_bps=Decimal("35"),
             markets=[
-                PairConfig(symbol="BTC/USD", base_spread_bps=Decimal("28"), min_order_usd=Decimal("5.0")),
+                PairConfig(symbol="BTC/USD", base_spread_bps=Decimal("28"), min_order_usd=Decimal("5.0"), base_order_size_pct=Decimal("0.02")),
             ],
         )
         exchanges[gemini.name] = gemini

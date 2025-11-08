@@ -29,6 +29,7 @@ class PairRuntime:
     active_orders: Dict[str, Dict[int, OrderRecord]]
     order_last_checked: Dict[str, Dict[int, float]]
     last_snapshot: Optional[MarketSnapshot] = None  # type: ignore[name-defined]
+    dust_amount: Decimal = Decimal("0")
     last_quote_time: float = 0.0
     last_reconcile_time: float = 0.0
     last_status_log: float = 0.0
@@ -348,6 +349,7 @@ class MarketMakerBot:
             return None
 
         amount = target_amount
+        total_amount = amount
         if side == "sell":
             reserved = sum(
                 order.amount
@@ -357,8 +359,10 @@ class MarketMakerBot:
             available_base = max(Decimal("0"), inventory_snapshot.base_balance - reserved)
             if available_base <= Decimal("0"):
                 return None
-            if amount > available_base:
-                amount = available_base.quantize(Decimal("0.00001"))
+            total_amount += runtime.dust_amount
+            total_amount = min(total_amount, available_base)
+            if total_amount <= Decimal("0"):
+                return None
         else:
             reserved = sum(
                 order.price * order.amount * Decimal("1.01")
@@ -368,16 +372,26 @@ class MarketMakerBot:
             available_quote = max(Decimal("0"), inventory_snapshot.quote_balance - reserved)
             if available_quote <= Decimal("0"):
                 return None
-            required_quote = target_price * amount * Decimal("1.01")
-            if required_quote > available_quote:
-                amount = (available_quote / (target_price * Decimal("1.01"))).quantize(Decimal("0.00001"))
+            max_affordable = available_quote / (target_price * Decimal("1.01"))
+            total_amount = min(total_amount, max_affordable)
+            if total_amount <= Decimal("0"):
+                return None
 
-        if amount <= Decimal("0"):
-            return None
-
-        order_value = target_price * amount
+        order_value = target_price * total_amount
         if order_value < runtime.cfg.min_order_usd:
+            if side == "sell":
+                runtime.dust_amount = total_amount
+                logger.info(
+                    "Accumulating dust for %s: amount=%s (~$%.2f) awaiting threshold",
+                    runtime.cfg.symbol,
+                    total_amount,
+                    order_value,
+                )
             return None
+
+        amount = total_amount.quantize(Decimal("0.00001"))
+        if side == "sell":
+            runtime.dust_amount = Decimal("0")
 
         try:
             new_order = await runtime.order_manager.place_limit_order(runtime.cfg.symbol, side, amount, target_price)
@@ -526,16 +540,21 @@ class MarketMakerBot:
 
     async def _flatten_inventory(self, runtime: PairRuntime, snapshot: MarketSnapshot) -> None:
         inv = runtime.inventory.snapshot
-        if inv is None or inv.base_balance <= Decimal("0"):
+        if inv is None:
             return
-        amount = inv.base_balance.quantize(Decimal("0.00001"))
+        total_amount = inv.base_balance + runtime.dust_amount
+        if total_amount <= Decimal("0"):
+            return
+        amount = total_amount.quantize(Decimal("0.00001"))
         price = max(snapshot.best_bid * Decimal("0.999"), snapshot.mid_price * Decimal("0.995"))
         price = price.quantize(Decimal("0.01"))
         order_value = amount * price
         if order_value < runtime.cfg.min_order_usd:
+            runtime.dust_amount = total_amount
             return
         try:
             await runtime.order_manager.place_limit_order(runtime.cfg.symbol, "sell", amount, price)
+            runtime.dust_amount = Decimal("0")
             logger.info("Flatten order placed for %s @ %s x%s", runtime.cfg.symbol, price, amount)
         except ExchangeError as exc:
             logger.warning("Flatten placement failed for %s: %s", runtime.cfg.symbol, exc)
