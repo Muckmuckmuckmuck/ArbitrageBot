@@ -16,10 +16,34 @@ from instant_fill_oms import ExchangeManagerAdapter, InstantFillMarketMaker, Pai
 
 def _gemini_pair_configs() -> List[PairConfig]:
     return [
-        PairConfig("gemini", "BTC/USD", Decimal("2.50"), min_spread_bps=35),
-        PairConfig("gemini", "ETH/USD", Decimal("2.00"), min_spread_bps=40),
-        PairConfig("gemini", "SOL/USD", Decimal("1.50"), min_spread_bps=45),
-        PairConfig("gemini", "LINK/USD", Decimal("1.50"), min_spread_bps=50),
+        PairConfig(
+            "gemini",
+            "BTC/USD",
+            Decimal("5.00"),
+            min_spread_bps=18,
+            max_quote_interval_s=20.0,
+        ),
+        PairConfig(
+            "gemini",
+            "ETH/USD",
+            Decimal("4.00"),
+            min_spread_bps=22,
+            max_quote_interval_s=20.0,
+        ),
+        PairConfig(
+            "gemini",
+            "SOL/USD",
+            Decimal("3.00"),
+            min_spread_bps=28,
+            max_quote_interval_s=20.0,
+        ),
+        PairConfig(
+            "gemini",
+            "LINK/USD",
+            Decimal("3.00"),
+            min_spread_bps=30,
+            max_quote_interval_s=20.0,
+        ),
     ]
 
 

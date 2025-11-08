@@ -215,6 +215,7 @@ class InstantFillResponseEngine:
             "opposite_failures": 0,
             "latency_ms": [],
         }
+        self._last_fill_ts: Optional[float] = None
 
     def get_metrics(self) -> Dict[str, float]:
         latencies = self._metrics["latency_ms"]
@@ -230,7 +231,15 @@ class InstantFillResponseEngine:
             "average_latency_ms": avg_latency,
             "p95_latency_ms": p95_latency,
             "pending_fills": len(self._pending_trades),
+            "seconds_since_last_fill":
+            (time.time() - self._last_fill_ts)
+            if self._last_fill_ts
+            else None,
         }
+
+    @property
+    def last_fill_timestamp(self) -> Optional[float]:
+        return self._last_fill_ts
 
     def get_active_order(
         self, exchange_id: str, symbol: str, side: OrderSide
@@ -331,6 +340,7 @@ class InstantFillResponseEngine:
                 self._latency_warning_ms,
             )
 
+        self._last_fill_ts = time.time()
         await self._record_trade(order, fill)
         await self._post_opposite_order(order, fill)
 
@@ -840,6 +850,7 @@ class InstantFillMarketMaker:
         self._monitors: Dict[str, WebSocketFillMonitor] = {}
         self._tasks: List[asyncio.Task] = []
         self._running = False
+        self._last_inactivity_warning: float = 0.0
         self._rebuild_pair_maps()
 
     async def start(self) -> None:
@@ -868,6 +879,7 @@ class InstantFillMarketMaker:
         self._tasks.append(asyncio.create_task(self._quote_loop()))
         self._tasks.append(asyncio.create_task(self._balance_refresh_loop()))
         self._tasks.append(asyncio.create_task(self._inventory_guard_loop()))
+        self._tasks.append(asyncio.create_task(self._inactivity_monitor_loop()))
 
     async def stop(self) -> None:
         self._running = False
@@ -905,6 +917,28 @@ class InstantFillMarketMaker:
             except Exception as exc:
                 logger.debug("Inventory guard error: %s", exc)
             await asyncio.sleep(self._inventory_check_interval)
+
+    async def _inactivity_monitor_loop(self) -> None:
+        check_interval = 60.0
+        warning_threshold = 600.0
+        while self._running:
+            await asyncio.sleep(check_interval)
+            metrics = self._fill_engine.get_metrics()
+            last_fill_age = metrics.get("seconds_since_last_fill")
+            if last_fill_age is None:
+                continue
+            if last_fill_age < warning_threshold:
+                continue
+            now = time.time()
+            if now - self._last_inactivity_warning < warning_threshold / 2:
+                continue
+            self._last_inactivity_warning = now
+            logger.warning(
+                "[OMS] ⚠️ No fills processed in %.1f minutes (total fills: %s, pending fills: %s)",
+                last_fill_age / 60.0,
+                metrics.get("total_fills_processed"),
+                metrics.get("pending_fills"),
+            )
 
     async def _run_inventory_guard(self) -> None:
         stable_quotes = {"USD", "USDC", "USDT", "GUSD"}
@@ -1053,6 +1087,7 @@ class InstantFillMarketMaker:
             self._pair_configs,
         )
         self._rebuild_pair_maps()
+        self._last_inactivity_warning = 0.0
 
     async def _cancel_open_orders(self, exchange_id: str) -> None:
         try:
