@@ -86,6 +86,23 @@ class ExchangeClient:
             private=True,
         )
 
+    async def create_market_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: Decimal,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        params = params or {}
+        return await self._call(
+            "create_market_order",
+            symbol,
+            side,
+            float(amount),
+            params,
+            private=True,
+        )
+
     async def cancel_order(self, order_id: str, symbol: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         params = params or {}
         return await self._call("cancel_order", order_id, symbol, params, private=True)

@@ -5,7 +5,7 @@ import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from typing import Dict, Optional
 
 from .config import BotConfig, PairConfig
@@ -98,6 +98,7 @@ class MarketMakerBot:
                 await market_data.start()
                 await inventory.start()
 
+            await self._startup_cleanup(exchange_name)
             self._tasks[exchange_name] = asyncio.create_task(self._run_exchange_loop(exchange_name))
 
     async def stop(self) -> None:
@@ -537,6 +538,113 @@ class MarketMakerBot:
         runtime.active_orders["sell"].clear()
         runtime.order_last_checked["buy"].clear()
         runtime.order_last_checked["sell"].clear()
+
+    async def _startup_cleanup(self, exchange_name: str) -> None:
+        pair_map = self.pairs.get(exchange_name)
+        if not pair_map:
+            return
+
+        logger.info("Startup cleanup for %s: cancelling open orders and flattening balances", exchange_name)
+        seen_managers: set[int] = set()
+        for runtime in pair_map.values():
+            manager_id = id(runtime.order_manager)
+            if manager_id in seen_managers:
+                continue
+            try:
+                await runtime.order_manager.cancel_all_force()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to cancel open orders on %s for %s: %s", exchange_name, runtime.cfg.symbol, exc)
+            seen_managers.add(manager_id)
+
+        for runtime in pair_map.values():
+            await self._force_flatten_inventory(runtime)
+
+    async def _force_flatten_inventory(self, runtime: PairRuntime) -> None:
+        snapshot = await runtime.inventory.fetch_balances()
+        if snapshot is not None:
+            runtime.inventory.snapshot = snapshot
+        if snapshot is None:
+            return
+
+        total_amount = snapshot.base_balance + runtime.dust_amount
+        if total_amount <= Decimal("0"):
+            return
+
+        try:
+            ticker = await runtime.order_manager.client.fetch_ticker(runtime.cfg.symbol)
+        except ExchangeError as exc:
+            logger.warning("Startup flatten skipped for %s: ticker fetch failed (%s)", runtime.cfg.symbol, exc)
+            return
+
+        bid_raw = ticker.get("bid") or ticker.get("last") or ticker.get("close")
+        if not bid_raw:
+            logger.warning("Startup flatten skipped for %s: no bid available", runtime.cfg.symbol)
+            return
+
+        bid_price = Decimal(str(bid_raw))
+        if bid_price <= 0:
+            logger.warning("Startup flatten skipped for %s: invalid bid %s", runtime.cfg.symbol, bid_price)
+            return
+
+        amount = total_amount.quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
+        if amount <= Decimal("0"):
+            return
+
+        order_value = amount * bid_price
+        if order_value < runtime.cfg.min_order_usd:
+            logger.info(
+                "Startup flatten skipped for %s: value $%.2f below minimum $%.2f",
+                runtime.cfg.symbol,
+                float(order_value),
+                float(runtime.cfg.min_order_usd),
+            )
+            runtime.dust_amount = total_amount
+            return
+
+        try:
+            logger.info(
+                "Startup flatten for %s: selling %.8f @ ~%s (%s)",
+                runtime.cfg.symbol,
+                float(amount),
+                bid_price,
+                runtime.exchange,
+            )
+            await runtime.order_manager.client.create_market_order(
+                runtime.cfg.symbol,
+                "sell",
+                amount,
+                params={"post_only": False},
+            )
+        except ExchangeError as exc:
+            error_text = str(exc).lower()
+            if "market" in error_text or "post only" in error_text:
+                fallback_price = bid_price * Decimal("0.999")
+                try:
+                    await runtime.order_manager.client.create_limit_order(
+                        runtime.cfg.symbol,
+                        "sell",
+                        amount,
+                        fallback_price,
+                        params={"post_only": False},
+                    )
+                    logger.info(
+                        "Startup flatten fallback for %s: limit sell %.8f @ %s submitted",
+                        runtime.cfg.symbol,
+                        float(amount),
+                        fallback_price,
+                    )
+                except ExchangeError as limit_exc:
+                    logger.warning("Startup flatten failed for %s (limit fallback): %s", runtime.cfg.symbol, limit_exc)
+                    return
+            else:
+                logger.warning("Startup flatten failed for %s: %s", runtime.cfg.symbol, exc)
+                return
+
+        await asyncio.sleep(1.0)
+        refreshed = await runtime.inventory.fetch_balances()
+        if refreshed:
+            runtime.inventory.snapshot = refreshed
+            runtime.dust_amount = Decimal("0")
 
     async def _flatten_inventory(self, runtime: PairRuntime, snapshot: MarketSnapshot) -> None:
         inv = runtime.inventory.snapshot
