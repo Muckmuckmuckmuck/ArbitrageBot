@@ -56,6 +56,7 @@ class ManagedOrder:
     status: OrderStatus = OrderStatus.OPEN
     filled_amount: Decimal = Decimal("0")
     last_update: float = field(default_factory=time.time)
+    tag: str = "quote"
 
 
 @dataclass(slots=True)
@@ -86,6 +87,11 @@ class ExchangeManagerAdapter:
             for ex in ("coinbase", "gemini")
             if self._manager.is_exchange_available(ex)
         ]
+
+    def is_symbol_supported(self, exchange_id: str, symbol: str) -> bool:
+        exchange = self._manager.get_exchange(exchange_id)
+        markets = getattr(exchange, "markets", {}) or {}
+        return symbol in markets
 
     async def create_order(
         self,
@@ -230,6 +236,15 @@ class InstantFillResponseEngine:
     ) -> Optional[ManagedOrder]:
         return self._orders_by_pair.get((exchange_id, symbol, side))
 
+    def has_active_sell_order(self, exchange_id: str, base_asset: str) -> bool:
+        for order in self._orders.values():
+            if order.exchange_id != exchange_id or order.side != OrderSide.SELL:
+                continue
+            base, _ = order.symbol.split("/")
+            if base == base_asset:
+                return True
+        return False
+
     def reserved_quote(self, exchange_id: str, quote: str) -> Decimal:
         total = Decimal("0")
         for order in self._orders.values():
@@ -357,8 +372,15 @@ class InstantFillResponseEngine:
             )
             return
 
-        base, quote = filled_order.symbol.split("/")
         side = OrderSide.SELL if filled_order.side == OrderSide.BUY else OrderSide.BUY
+
+        if not self._adapter.is_symbol_supported(filled_order.exchange_id, filled_order.symbol):
+            logger.debug(
+                "[OMS] Skipping opposite order for unsupported symbol %s on %s",
+                filled_order.symbol,
+                filled_order.exchange_id,
+            )
+            return
 
         try:
             order_book = await self._adapter.fetch_order_book(
@@ -462,6 +484,13 @@ class DualSideQuoteManager:
                 self._last_quote_time[(cfg.exchange_id, cfg.symbol)] = time.time()
 
     async def _ensure_pair(self, cfg: PairConfig) -> None:
+        if not self._adapter.is_symbol_supported(cfg.exchange_id, cfg.symbol):
+            logger.debug(
+                "[FILTER] Skipping unsupported symbol %s on %s",
+                cfg.symbol,
+                cfg.exchange_id,
+            )
+            return
         try:
             order_book = await self._adapter.fetch_order_book(
                 cfg.exchange_id, cfg.symbol, depth=5
@@ -531,6 +560,13 @@ class DualSideQuoteManager:
         existing = self._response_engine.get_active_order(
             cfg.exchange_id, cfg.symbol, side
         )
+        if existing and existing.tag == "hedge":
+            logger.debug(
+                "[QUOTE] Skipping %s %s - hedge order active",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+            )
+            return
         if not allowed:
             if existing:
                 await self._adapter.cancel_order(
@@ -576,6 +612,7 @@ class DualSideQuoteManager:
             order_id=str(order_id),
             price=price,
             amount=amount,
+            tag="quote",
         )
         await self._response_engine.register_order(managed)
         logger.info(
@@ -743,6 +780,9 @@ class InstantFillMarketMaker:
             for cfg in pair_configs
             if cfg.exchange_id in adapter.available_exchanges()
         ]
+        self._pair_index: Dict[str, Dict[str, List[PairConfig]]] = {}
+        self._inventory_check_interval = 2.0
+        self._inventory_threshold = Decimal("0.00001")
         self._balance_cache = BalanceCache(adapter)
         self._fill_engine = InstantFillResponseEngine(
             adapter, db_manager, self._pair_configs
@@ -753,6 +793,7 @@ class InstantFillMarketMaker:
         self._monitors: Dict[str, WebSocketFillMonitor] = {}
         self._tasks: List[asyncio.Task] = []
         self._running = False
+        self._rebuild_pair_maps()
 
     async def start(self) -> None:
         if self._running:
@@ -773,6 +814,7 @@ class InstantFillMarketMaker:
         self._tasks.append(asyncio.create_task(self._fill_engine.retry_pending_fills()))
         self._tasks.append(asyncio.create_task(self._quote_loop()))
         self._tasks.append(asyncio.create_task(self._balance_refresh_loop()))
+        self._tasks.append(asyncio.create_task(self._inventory_guard_loop()))
 
     async def stop(self) -> None:
         self._running = False
@@ -801,6 +843,140 @@ class InstantFillMarketMaker:
                     logger.debug("Balance refresh failed for %s: %s", exchange, exc)
             await asyncio.sleep(3.0)
 
+    async def _inventory_guard_loop(self) -> None:
+        while self._running:
+            try:
+                await self._run_inventory_guard()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("Inventory guard error: %s", exc)
+            await asyncio.sleep(self._inventory_check_interval)
+
+    async def _run_inventory_guard(self) -> None:
+        stable_quotes = {"USD", "USDC", "USDT", "GUSD"}
+        priority = ("USD", "USDC", "USDT", "GUSD")
+        for exchange_id in self._adapter.available_exchanges():
+            try:
+                balances = await self._balance_cache.get_balances(exchange_id)
+            except Exception as exc:
+                logger.debug(
+                    "Inventory guard balance fetch failed for %s: %s",
+                    exchange_id,
+                    exc,
+                )
+                continue
+            for currency, raw_amount in balances.items():
+                amount = Decimal(str(raw_amount))
+                if (
+                    currency in stable_quotes
+                    or amount <= self._inventory_threshold
+                ):
+                    continue
+                if self._fill_engine.has_active_sell_order(exchange_id, currency):
+                    continue
+                configs = self._pair_index.get(exchange_id, {}).get(currency, [])
+                placed = False
+                if configs:
+                    ordered_configs = sorted(
+                        configs,
+                        key=lambda cfg: priority.index(cfg.symbol.split("/")[1])
+                        if cfg.symbol.split("/")[1] in priority
+                        else len(priority),
+                    )
+                    for cfg in ordered_configs:
+                        placed = await self._place_inventory_hedge(cfg, amount)
+                        if placed:
+                            break
+                if not placed:
+                    await self._liquidate_asset(
+                        exchange_id, currency, amount, priority
+                    )
+
+    async def _place_inventory_hedge(self, cfg: PairConfig, amount: Decimal) -> bool:
+        if amount <= self._inventory_threshold:
+            return False
+        if not self._adapter.is_symbol_supported(cfg.exchange_id, cfg.symbol):
+            return False
+        try:
+            order_book = await self._adapter.fetch_order_book(
+                cfg.exchange_id, cfg.symbol, depth=5
+            )
+        except Exception as exc:
+            logger.debug(
+                "[INVENTORY] Failed to fetch order book for %s on %s: %s",
+                cfg.symbol,
+                cfg.exchange_id,
+                exc,
+            )
+            return False
+
+        bids = order_book.get("bids") or []
+        if not bids:
+            return False
+        best_bid = Decimal(str(bids[0][0]))
+        if best_bid <= 0:
+            return False
+
+        sell_amount = amount.quantize(Decimal("0.00001"))
+        if sell_amount * best_bid < cfg.min_notional_usd:
+            return False
+
+        order_type = "market" if cfg.exchange_id == "coinbase" else "limit"
+        price: Optional[Decimal] = None
+        if order_type == "limit":
+            price = (best_bid * Decimal("0.999")).quantize(Decimal("0.00001"))
+
+        try:
+            response = await self._adapter.create_order(
+                cfg.exchange_id,
+                cfg.symbol,
+                OrderSide.SELL,
+                amount=sell_amount,
+                price=price,
+                order_type=order_type,
+            )
+        except Exception as exc:
+            logger.debug(
+                "[INVENTORY] Failed to post hedge order for %s on %s: %s",
+                cfg.symbol,
+                cfg.exchange_id,
+                exc,
+            )
+            return False
+
+        order_id = response.get("id") or response.get("order_id")
+        if not order_id:
+            return False
+
+        tracked_price = price if price is not None else best_bid
+        managed = ManagedOrder(
+            exchange_id=cfg.exchange_id,
+            symbol=cfg.symbol,
+            side=OrderSide.SELL,
+            order_id=str(order_id),
+            price=tracked_price,
+            amount=sell_amount,
+            tag="hedge",
+        )
+        await self._fill_engine.register_order(managed)
+        logger.info(
+            "[INVENTORY] Posted hedge sell %s on %s @ %s x%s",
+            cfg.symbol,
+            cfg.exchange_id.upper(),
+            tracked_price,
+            sell_amount,
+        )
+        return True
+
+    def _rebuild_pair_maps(self) -> None:
+        index: Dict[str, Dict[str, List[PairConfig]]] = {}
+        for cfg in self._pair_configs:
+            base, _ = cfg.symbol.split("/")
+            per_exchange = index.setdefault(cfg.exchange_id, {})
+            per_exchange.setdefault(base, []).append(cfg)
+        self._pair_index = index
+
     async def _startup_cleanup(self) -> None:
         exchanges = self._adapter.available_exchanges()
         for exchange_id in exchanges:
@@ -819,6 +995,7 @@ class InstantFillMarketMaker:
             self._balance_cache,
             self._pair_configs,
         )
+        self._rebuild_pair_maps()
 
     async def _cancel_open_orders(self, exchange_id: str) -> None:
         try:
@@ -860,13 +1037,15 @@ class InstantFillMarketMaker:
         base_currency: str,
         amount: Decimal,
         quotes_priority: Sequence[str],
-    ) -> None:
+    ) -> bool:
         for quote in quotes_priority:
             symbol = f"{base_currency}/{quote}"
             cfg = next(
                 (cfg for cfg in self._pair_configs if cfg.exchange_id == exchange_id and cfg.symbol == symbol),
                 None,
             )
+            if not self._adapter.is_symbol_supported(exchange_id, symbol):
+                continue
             try:
                 order_book = await self._adapter.fetch_order_book(exchange_id, symbol, depth=5)
             except Exception:
@@ -890,7 +1069,7 @@ class InstantFillMarketMaker:
                 price = (best_bid * Decimal("0.999")).quantize(Decimal("0.00001"))
 
             try:
-                await self._adapter.create_order(
+                response = await self._adapter.create_order(
                     exchange_id,
                     symbol,
                     OrderSide.SELL,
@@ -898,14 +1077,6 @@ class InstantFillMarketMaker:
                     price=price,
                     order_type=order_type,
                 )
-                logger.info(
-                    "[CLEANUP] Flattened %s %.8f @ %s on %s",
-                    symbol,
-                    sell_amount,
-                    price if price is not None else "MARKET",
-                    exchange_id.upper(),
-                )
-                return
             except Exception as exc:
                 logger.debug(
                     "[CLEANUP] Failed to flatten %s on %s: %s",
@@ -913,12 +1084,35 @@ class InstantFillMarketMaker:
                     exchange_id,
                     exc,
                 )
+                continue
+            order_id = response.get("id") or response.get("order_id")
+            if order_id:
+                tracked_price = price if price is not None else best_bid
+                managed = ManagedOrder(
+                    exchange_id=exchange_id,
+                    symbol=symbol,
+                    side=OrderSide.SELL,
+                    order_id=str(order_id),
+                    price=tracked_price,
+                    amount=sell_amount,
+                    tag="hedge",
+                )
+                await self._fill_engine.register_order(managed)
+            logger.info(
+                "[CLEANUP] Flattened %s %.8f @ %s on %s",
+                symbol,
+                sell_amount,
+                price if price is not None else "MARKET",
+                exchange_id.upper(),
+            )
+            return True
         logger.debug(
             "[CLEANUP] Unable to flatten %s %.8f on %s (no viable market)",
             base_currency,
             amount,
             exchange_id,
         )
+        return False
 
     async def _filter_supported_pairs(
         self, pair_configs: Sequence[PairConfig]
