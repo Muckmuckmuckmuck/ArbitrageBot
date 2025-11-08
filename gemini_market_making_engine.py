@@ -23,6 +23,7 @@ def _gemini_pair_configs() -> List[PairConfig]:
             Decimal("5.00"),
             min_spread_bps=18,
             max_quote_interval_s=20.0,
+            price_improve_bps=2,
         ),
         PairConfig(
             "gemini",
@@ -30,6 +31,7 @@ def _gemini_pair_configs() -> List[PairConfig]:
             Decimal("4.00"),
             min_spread_bps=22,
             max_quote_interval_s=20.0,
+            price_improve_bps=2,
         ),
         PairConfig(
             "gemini",
@@ -37,6 +39,7 @@ def _gemini_pair_configs() -> List[PairConfig]:
             Decimal("3.00"),
             min_spread_bps=28,
             max_quote_interval_s=20.0,
+            price_improve_bps=2,
         ),
         PairConfig(
             "gemini",
@@ -44,6 +47,7 @@ def _gemini_pair_configs() -> List[PairConfig]:
             Decimal("3.00"),
             min_spread_bps=30,
             max_quote_interval_s=20.0,
+            price_improve_bps=2,
         ),
     ]
     for cfg in configs:

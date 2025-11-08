@@ -8,12 +8,18 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_DOWN
 from enum import Enum
-from typing import Any, Deque, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from coinbase_gemini_exchanges import CoinbaseGeminiExchangeManager
 from database_manager import DatabaseManager, TradeRecord
 
 logger = logging.getLogger(__name__)
+
+
+async def maybe_awaitable(result: Optional[Any]) -> Optional[Any]:
+    if asyncio.iscoroutine(result):
+        return await result
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -240,10 +246,16 @@ class InstantFillResponseEngine:
         db_manager: DatabaseManager,
         pair_configs: Sequence[PairConfig],
         latency_warning_ms: float = 500.0,
+        order_registered_cb: Optional[Callable[[ManagedOrder], None]] = None,
+        order_cancelled_cb: Optional[Callable[[ManagedOrder], None]] = None,
+        fill_callback: Optional[Callable[[ManagedOrder, FillEvent], None]] = None,
     ) -> None:
         self._adapter = adapter
         self._db = db_manager
         self._latency_warning_ms = latency_warning_ms
+        self._order_registered_cb = order_registered_cb
+        self._order_cancelled_cb = order_cancelled_cb
+        self._fill_callback = fill_callback
 
         self._pair_lookup: Dict[Tuple[str, str], PairConfig] = {
             (cfg.exchange_id, cfg.symbol): cfg for cfg in pair_configs
@@ -260,6 +272,9 @@ class InstantFillResponseEngine:
             "latency_ms": [],
         }
         self._last_fill_ts: Optional[float] = None
+        self._last_fill_by_pair: Dict[Tuple[str, str], float] = {}
+        self._fill_count_by_pair: Dict[Tuple[str, str], int] = defaultdict(int)
+        self._pending_by_pair: Dict[Tuple[str, str], int] = defaultdict(int)
 
     def get_metrics(self) -> Dict[str, float]:
         latencies = self._metrics["latency_ms"]
@@ -271,7 +286,7 @@ class InstantFillResponseEngine:
         )
         return {
             "total_fills_processed": self._metrics["fills_processed"],
-            "failed_opposite_orders": self._metrics["opposite_failures"],
+            "failed_opposite_failures": self._metrics["opposite_failures"],
             "average_latency_ms": avg_latency,
             "p95_latency_ms": p95_latency,
             "pending_fills": len(self._pending_trades),
@@ -279,11 +294,16 @@ class InstantFillResponseEngine:
             (time.time() - self._last_fill_ts)
             if self._last_fill_ts
             else None,
+            "fills_by_pair": dict(self._fill_count_by_pair),
+            "pending_by_pair": dict(self._pending_by_pair),
         }
 
     @property
     def last_fill_timestamp(self) -> Optional[float]:
         return self._last_fill_ts
+
+    def last_fill_time(self, exchange_id: str, symbol: str) -> Optional[float]:
+        return self._last_fill_by_pair.get((exchange_id, symbol))
 
     def get_active_order(
         self, exchange_id: str, symbol: str, side: OrderSide
@@ -347,6 +367,10 @@ class InstantFillResponseEngine:
             order.amount,
             order.tag,
         )
+        if order.tag == "hedge":
+            self._pending_by_pair[(order.exchange_id, order.symbol)] += 1
+        if self._order_registered_cb:
+            await maybe_awaitable(self._order_registered_cb(order))
 
     async def mark_cancelled(
         self, exchange_id: str, symbol: str, side: OrderSide
@@ -362,6 +386,13 @@ class InstantFillResponseEngine:
             symbol,
             side.value.upper(),
         )
+        if existing and existing.tag == "hedge":
+            self._pending_by_pair[(existing.exchange_id, existing.symbol)] = max(
+                0,
+                self._pending_by_pair.get((existing.exchange_id, existing.symbol), 0) - 1,
+            )
+        if existing and self._order_cancelled_cb:
+            await maybe_awaitable(self._order_cancelled_cb(existing))
 
     async def get_orders_by_tag(self, tag: str) -> List[ManagedOrder]:
         async with self._lock:
@@ -435,6 +466,16 @@ class InstantFillResponseEngine:
             latency_ms,
         )
         self._last_fill_ts = time.time()
+        pair_key = (order.exchange_id, order.symbol)
+        self._last_fill_by_pair[pair_key] = self._last_fill_ts
+        self._fill_count_by_pair[pair_key] += 1
+        if order.tag == "hedge":
+            self._pending_by_pair[pair_key] = max(
+                0,
+                self._pending_by_pair.get(pair_key, 0) - 1,
+            )
+        if self._fill_callback:
+            await maybe_awaitable(self._fill_callback(order, fill))
         await self._record_trade(order, fill)
         await self._post_opposite_order(order, fill)
 
@@ -622,16 +663,28 @@ class DualSideQuoteManager:
         response_engine: InstantFillResponseEngine,
         balance_cache: BalanceCache,
         pair_configs: Sequence[PairConfig],
+        pair_cooldowns: Dict[Tuple[str, str], float],
     ) -> None:
         self._adapter = adapter
         self._response_engine = response_engine
         self._balance_cache = balance_cache
         self._pair_configs = list(pair_configs)
         self._last_quote_time: Dict[Tuple[str, str], float] = {}
+        self._pair_cooldowns = pair_cooldowns
+        self._inactivity_tighten_threshold = 600.0
 
     async def ensure_quotes(self) -> None:
         for cfg in self._pair_configs:
             now = time.time()
+            cooldown_until = self._pair_cooldowns.get((cfg.exchange_id, cfg.symbol))
+            if cooldown_until and now < cooldown_until:
+                logger.info(
+                    "[QUOTE] Cooldown active for %s %s (%.1fs remaining)",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    cooldown_until - now,
+                )
+                continue
             last = self._last_quote_time.get((cfg.exchange_id, cfg.symbol), 0.0)
             if now - last < cfg.max_quote_interval_s:
                 logger.info(
@@ -695,17 +748,34 @@ class DualSideQuoteManager:
             return
 
         mid = (best_bid + best_ask) / Decimal("2")
-        min_spread = Decimal(cfg.min_spread_bps) / Decimal("10000")
+        last_fill_time = self._response_engine.last_fill_time(cfg.exchange_id, cfg.symbol)
+        last_fill_age = None
+        if last_fill_time:
+            last_fill_age = time.time() - last_fill_time
+        adjusted_spread_bps = Decimal(cfg.min_spread_bps)
+        adjusted_price_improve_bps = Decimal(cfg.price_improve_bps)
+        if last_fill_age and last_fill_age > self._inactivity_tighten_threshold:
+            adjusted_spread_bps = max(adjusted_spread_bps - Decimal("5"), Decimal("5"))
+            adjusted_price_improve_bps = max(adjusted_price_improve_bps - Decimal("1"), Decimal("1"))
+            logger.info(
+                "[QUOTE] Tightening spread for %s %s due to inactivity %.1fs",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                last_fill_age,
+            )
+        min_spread = adjusted_spread_bps / Decimal("10000")
         spread = max((best_ask - best_bid) / mid, min_spread)
+        price_improve = adjusted_price_improve_bps / Decimal("10000")
         buy_price = mid * (Decimal("1") - spread / Decimal("2"))
         sell_price = mid * (Decimal("1") + spread / Decimal("2"))
+        if price_improve > 0:
+            buy_price -= mid * price_improve
+            sell_price += mid * price_improve
         buy_price = buy_price.quantize(Decimal("0.00001"))
         sell_price = sell_price.quantize(Decimal("0.00001"))
 
-        order_value = max(cfg.order_size_usd, Decimal(cfg.min_notional_usd))
-        buy_amount = (order_value / buy_price).quantize(Decimal("0.00001"))
-        sell_amount = (order_value / sell_price).quantize(Decimal("0.00001"))
-
+        target_order_value = max(cfg.order_size_usd, Decimal(cfg.min_notional_usd))
+        dynamic_multiplier = Decimal("1")
         base, quote = cfg.symbol.split("/")
         quote_balance = await self._balance_cache.get_balance(cfg.exchange_id, quote)
         base_balance = await self._balance_cache.get_balance(cfg.exchange_id, base)
@@ -716,17 +786,29 @@ class DualSideQuoteManager:
         usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
         usable_base = max(Decimal("0"), base_balance - base_reserved)
 
-        logger.info(
-            "[QUOTE] Balances %s %s quote=%s reserved=%s usable=%s | base=%s reserved=%s usable=%s",
-            cfg.exchange_id.upper(),
-            cfg.symbol,
-            quote_balance,
-            quote_reserved,
-            usable_quote,
-            base_balance,
-            base_reserved,
-            usable_base,
-        )
+        if usable_quote > target_order_value * Decimal("4"):
+            dynamic_multiplier = Decimal("1.5")
+        order_value = target_order_value * dynamic_multiplier
+        order_value = min(order_value, usable_quote * Decimal("0.5") if usable_quote > 0 else order_value)
+        order_value = max(order_value, Decimal(cfg.min_notional_usd))
+        order_value = min(order_value, usable_quote) if usable_quote > 0 else order_value
+        buy_amount = (order_value / buy_price).quantize(Decimal("0.00001"))
+        sell_amount = (order_value / sell_price).quantize(Decimal("0.00001"))
+
+        if usable_base > Decimal("0") and sell_amount > Decimal("0") and usable_base > sell_amount * Decimal("3"):
+            sell_amount = min(
+                (usable_base * Decimal("0.5")).quantize(Decimal("0.00001")),
+                (sell_amount * Decimal("2")).quantize(Decimal("0.00001")),
+            )
+
+        if bid_depth < order_value * Decimal("2") or ask_depth < order_value * Decimal("2"):
+            logger.info(
+                "[QUOTE] Skipping %s %s depth insufficient for order_value=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                order_value,
+            )
+            return
 
         max_buy_amount = (
             usable_quote / (buy_price * Decimal("1.01"))
@@ -749,6 +831,14 @@ class DualSideQuoteManager:
             need_buy,
             need_sell,
         )
+        logger.info(
+            "[QUOTE] Spread %.5f price_improve_bps=%s last_fill_age=%s order_value=%s",
+            spread,
+            adjusted_price_improve_bps,
+            last_fill_age,
+            order_value,
+        )
+
         await self._sync_side(cfg, OrderSide.BUY, buy_amount, buy_price, need_buy)
         await self._sync_side(cfg, OrderSide.SELL, sell_amount, sell_price, need_sell)
 
@@ -1047,11 +1137,22 @@ class InstantFillMarketMaker:
         self._inventory_check_interval = 2.0
         self._inventory_threshold = Decimal("0.00001")
         self._balance_cache = BalanceCache(adapter)
+        self._pair_cooldowns: Dict[Tuple[str, str], float] = {}
+        self._hedge_attempts: Dict[Tuple[str, str], int] = {}
         self._fill_engine = InstantFillResponseEngine(
-            adapter, db_manager, self._pair_configs
+            adapter,
+            db_manager,
+            self._pair_configs,
+            order_registered_cb=self._on_order_registered,
+            order_cancelled_cb=self._on_order_cancelled,
+            fill_callback=self._on_fill,
         )
         self._quote_manager = DualSideQuoteManager(
-            adapter, self._fill_engine, self._balance_cache, self._pair_configs
+            adapter,
+            self._fill_engine,
+            self._balance_cache,
+            self._pair_configs,
+            self._pair_cooldowns,
         )
         self._monitors: Dict[str, WebSocketFillMonitor] = {}
         self._tasks: List[asyncio.Task] = []
@@ -1059,6 +1160,7 @@ class InstantFillMarketMaker:
         self._last_inactivity_warning: float = 0.0
         self._hedge_refresh_interval = 5.0
         self._hedge_max_age = 10.0
+        self._metrics_interval = 300.0
         self._rebuild_pair_maps()
 
     async def start(self) -> None:
@@ -1088,6 +1190,7 @@ class InstantFillMarketMaker:
         self._tasks.append(asyncio.create_task(self._balance_refresh_loop()))
         self._tasks.append(asyncio.create_task(self._inventory_guard_loop()))
         self._tasks.append(asyncio.create_task(self._hedge_refresh_loop()))
+        self._tasks.append(asyncio.create_task(self._metrics_loop()))
         self._tasks.append(asyncio.create_task(self._inactivity_monitor_loop()))
 
     async def stop(self) -> None:
@@ -1139,6 +1242,36 @@ class InstantFillMarketMaker:
                 logger.debug("Hedge refresh error: %s", exc)
             await asyncio.sleep(self._hedge_refresh_interval)
 
+    async def _metrics_loop(self) -> None:
+        while self._running:
+            try:
+                metrics = self._fill_engine.get_metrics()
+                hedges = await self._fill_engine.get_orders_by_tag("hedge")
+                quotes = await self._fill_engine.get_orders_by_tag("quote")
+                exposure_snapshot: Dict[str, Dict[str, str]] = {}
+                for exchange in self._adapter.available_exchanges():
+                    balances = await self._balance_cache.get_balances(exchange)
+                    exposure_snapshot[exchange.upper()] = {
+                        asset: str(amount)
+                        for asset, amount in balances.items()
+                        if amount > Decimal("0")
+                    }
+                logger.info(
+                    "[METRICS] fills=%s pending=%s since_last_fill=%s hedges=%s quotes=%s fills_by_pair=%s exposure=%s",
+                    metrics.get("total_fills_processed"),
+                    metrics.get("pending_fills"),
+                    metrics.get("seconds_since_last_fill"),
+                    len(hedges),
+                    len(quotes),
+                    metrics.get("fills_by_pair"),
+                    exposure_snapshot,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("Metrics loop error: %s", exc)
+            await asyncio.sleep(self._metrics_interval)
+
     async def _inactivity_monitor_loop(self) -> None:
         check_interval = 60.0
         warning_threshold = 600.0
@@ -1160,6 +1293,12 @@ class InstantFillMarketMaker:
                 metrics.get("total_fills_processed"),
                 metrics.get("pending_fills"),
             )
+            self._activate_cooldown(duration=180.0)
+            for exchange in self._adapter.available_exchanges():
+                try:
+                    await self._balance_cache.get_balances(exchange)
+                except Exception as exc:
+                    logger.debug("[OMS] Balance refresh during inactivity failed: %s", exc)
 
     async def _run_inventory_guard(self) -> None:
         stable_quotes = {"USD", "USDC", "USDT", "GUSD"}
@@ -1228,6 +1367,39 @@ class InstantFillMarketMaker:
                     await self._liquidate_asset(
                         exchange_id, currency, usable_amount, priority
                     )
+
+    async def _on_order_registered(self, order: ManagedOrder) -> None:
+        if order.tag == "hedge":
+            self._hedge_attempts[(order.exchange_id, order.symbol)] = 0
+            logger.info(
+                "[HEDGE] Tracking hedge %s %s order=%s",
+                order.exchange_id.upper(),
+                order.symbol,
+                order.order_id,
+            )
+
+    async def _on_order_cancelled(self, order: ManagedOrder) -> None:
+        if order.tag == "hedge":
+            self._hedge_attempts.pop((order.exchange_id, order.symbol), None)
+            logger.info(
+                "[HEDGE] Cancelled tracked hedge %s %s order=%s",
+                order.exchange_id.upper(),
+                order.symbol,
+                order.order_id,
+            )
+
+    async def _on_fill(self, order: ManagedOrder, fill: FillEvent) -> None:
+        if order.tag == "hedge":
+            self._hedge_attempts.pop((order.exchange_id, order.symbol), None)
+        self._pair_cooldowns.pop((order.exchange_id, order.symbol), None)
+        self._last_inactivity_warning = 0.0
+        logger.info(
+            "[FILL] %s %s filled amount=%s price=%s",
+            order.exchange_id.upper(),
+            order.symbol,
+            fill.amount,
+            fill.price,
+        )
 
     async def _place_inventory_hedge(self, cfg: PairConfig, amount: Decimal) -> bool:
         if amount <= self._inventory_threshold:
@@ -1350,15 +1522,29 @@ class InstantFillMarketMaker:
             self._adapter,
             self._db,
             self._pair_configs,
+            order_registered_cb=self._on_order_registered,
+            order_cancelled_cb=self._on_order_cancelled,
+            fill_callback=self._on_fill,
         )
         self._quote_manager = DualSideQuoteManager(
             self._adapter,
             self._fill_engine,
             self._balance_cache,
             self._pair_configs,
+            self._pair_cooldowns,
         )
+        self._hedge_attempts.clear()
         self._rebuild_pair_maps()
         self._last_inactivity_warning = 0.0
+
+    def _activate_cooldown(self, duration: float) -> None:
+        until = time.time() + duration
+        for cfg in self._pair_configs:
+            self._pair_cooldowns[(cfg.exchange_id, cfg.symbol)] = until
+        logger.warning(
+            "[QUOTE] Activated cooldown for all pairs duration=%.1fs",
+            duration,
+        )
 
     async def _cancel_open_orders(self, exchange_id: str) -> None:
         try:
@@ -1547,16 +1733,39 @@ class InstantFillMarketMaker:
 
             bids = order_book.get("bids") or []
             asks = order_book.get("asks") or []
+            attempts = self._hedge_attempts.get((hedge.exchange_id, hedge.symbol), 0)
             price: Optional[Decimal] = None
-            if hedge.side == OrderSide.SELL and bids:
-                price = (Decimal(str(bids[0][0])) * Decimal("0.998")).quantize(
-                    Decimal("0.00001")
+            order_type = "limit"
+            if attempts >= 2:
+                if hedge.exchange_id == "gemini":
+                    if hedge.side == OrderSide.SELL and bids:
+                        price = (Decimal(str(bids[0][0])) * Decimal("0.995")).quantize(
+                            Decimal("0.00001")
+                        )
+                    elif hedge.side == OrderSide.BUY and asks:
+                        price = (Decimal(str(asks[0][0])) * Decimal("1.005")).quantize(
+                            Decimal("0.00001")
+                        )
+                else:
+                    order_type = "market"
+                    price = None
+                logger.info(
+                    "[HEDGE] Escalating hedge %s %s attempts=%s order_type=%s",
+                    hedge.exchange_id.upper(),
+                    hedge.symbol,
+                    attempts,
+                    order_type,
                 )
-            elif hedge.side == OrderSide.BUY and asks:
-                price = (Decimal(str(asks[0][0])) * Decimal("1.002")).quantize(
-                    Decimal("0.00001")
-                )
-            if price is None:
+            else:
+                if hedge.side == OrderSide.SELL and bids:
+                    price = (Decimal(str(bids[0][0])) * Decimal("0.999")).quantize(
+                        Decimal("0.00001")
+                    )
+                elif hedge.side == OrderSide.BUY and asks:
+                    price = (Decimal(str(asks[0][0])) * Decimal("1.002")).quantize(
+                        Decimal("0.00001")
+                    )
+            if order_type == "limit" and price is None:
                 logger.warning(
                     "[OMS] Cannot determine refreshed price for hedge %s %s",
                     hedge.exchange_id.upper(),
@@ -1571,7 +1780,7 @@ class InstantFillMarketMaker:
                     hedge.side,
                     amount=hedge.amount,
                     price=price,
-                    order_type="limit",
+                    order_type=order_type,
                 )
             except Exception as exc:
                 logger.error(
@@ -1601,6 +1810,7 @@ class InstantFillMarketMaker:
                 tag="hedge",
             )
             await self._fill_engine.register_order(refreshed)
+            self._hedge_attempts[(hedge.exchange_id, hedge.symbol)] = attempts + 1
             logger.info(
                 "[OMS] 🔄 Hedge refreshed %s %s new_order=%s price=%s",
                 hedge.exchange_id.upper(),
