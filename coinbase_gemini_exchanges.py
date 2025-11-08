@@ -40,6 +40,48 @@ class CoinbaseGeminiExchangeManager:
         self.gemini = None
         self.exchanges = {}
         self._price_cache: Dict[str, Dict[str, Tuple[float, float]]] = {}
+        self._last_snapshot: Optional[Dict[str, Any]] = None
+ 
+    @staticmethod
+    def _is_retryable_exception(exc: Exception) -> bool:
+        message = str(exc).lower()
+        retry_tokens = [
+            "502",
+            "503",
+            "504",
+            "temporarily unavailable",
+            "bad gateway",
+            "cloudflare",
+            "service unavailable",
+        ]
+        return any(token in message for token in retry_tokens)
+
+    async def _call_with_retries(
+        self,
+        operation,
+        *,
+        retry_context: str,
+        attempts: int = 3,
+        base_delay: float = 0.5,
+    ):
+        delay = base_delay
+        for attempt in range(attempts):
+            try:
+                result = operation()
+                if asyncio.iscoroutine(result):
+                    result = await result
+                return result
+            except Exception as exc:  # pragma: no cover - defensive
+                if attempt == attempts - 1 or not self._is_retryable_exception(exc):
+                    raise
+                logger.warning(
+                    "   ⚠️ %s failed (%s). Retrying in %.2fs...",
+                    retry_context,
+                    exc,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                delay *= 2
         
     async def initialize(self):
         """Initialize both exchanges with API keys"""
@@ -201,6 +243,7 @@ class CoinbaseGeminiExchangeManager:
             'total_value_usd': 0.0,
             'exchanges': {}
         }
+        had_success = False
         for exchange_id in exchanges_to_check:
             if not self.is_exchange_available(exchange_id):
                 continue
@@ -235,6 +278,19 @@ class CoinbaseGeminiExchangeManager:
                     exchange_snapshot['crypto_value_usd'] += value_usd
             snapshot['exchanges'][exchange_id] = exchange_snapshot
             snapshot['total_value_usd'] += exchange_snapshot['total_value_usd']
+            had_success = True
+
+        if had_success:
+            # store a deep copy so later mutations don't affect the cache
+            self._last_snapshot = json.loads(json.dumps(snapshot))
+            return snapshot
+
+        if self._last_snapshot:
+            logger.warning("   ⚠️ Using cached portfolio snapshot due to exchange errors")
+            cached_snapshot = json.loads(json.dumps(self._last_snapshot))
+            cached_snapshot['timestamp'] = datetime.utcnow().isoformat()
+            return cached_snapshot
+
         return snapshot
     
     async def fetch_balance(self, exchange_id: str) -> Dict:
@@ -246,17 +302,18 @@ class CoinbaseGeminiExchangeManager:
         """
         exchange = self.get_exchange(exchange_id)
         exchange_marker = "🔵" if exchange_id == EXCHANGE_COINBASE else "🟢"
-        try:
+        async def _attempt():
             logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] Fetching balance...")
-            # CCXT fetch_balance can be sync or async depending on version
             result = exchange.fetch_balance()
-            # Check if it's a coroutine (async) or direct result (sync)
             if hasattr(result, '__await__'):
-                balance = await result
-            else:
-                balance = result
+                result = await result
             logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] Balance fetched successfully")
-            return balance
+            return result
+        try:
+            return await self._call_with_retries(
+                _attempt,
+                retry_context=f"{exchange_id} balance",
+            )
         except Exception as e:
             logger.error(f"   {exchange_marker} [{exchange_id.upper()}] Error fetching balance: {e}")
             raise
@@ -270,17 +327,18 @@ class CoinbaseGeminiExchangeManager:
         """
         exchange = self.get_exchange(exchange_id)
         exchange_marker = "🔵" if exchange_id == EXCHANGE_COINBASE else "🟢"
-        try:
+        async def _attempt():
             logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] Fetching ticker for {symbol}...")
-            # CCXT fetch_ticker can be sync or async depending on version
             result = exchange.fetch_ticker(symbol)
-            # Check if it's a coroutine (async) or direct result (sync)
             if hasattr(result, '__await__'):
-                ticker = await result
-            else:
-                ticker = result
-            logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] Ticker fetched for {symbol}: ${ticker.get('last', 0):.8f}")
-            return ticker
+                result = await result
+            logger.debug(f"   {exchange_marker} [{exchange_id.upper()}] Ticker fetched for {symbol}: ${result.get('last', 0):.8f}")
+            return result
+        try:
+            return await self._call_with_retries(
+                _attempt,
+                retry_context=f"{exchange_id} ticker {symbol}",
+            )
         except Exception as e:
             logger.error(f"   {exchange_marker} [{exchange_id.upper()}] Error fetching ticker {symbol}: {e}")
             raise
@@ -293,14 +351,16 @@ class CoinbaseGeminiExchangeManager:
             exchange_id: EXCHANGE_COINBASE or EXCHANGE_GEMINI
         """
         exchange = self.get_exchange(exchange_id)
-        try:
-            # CCXT fetch_order_book can be sync or async
+        async def _attempt():
             result = exchange.fetch_order_book(symbol, limit)
             if hasattr(result, '__await__'):
-                order_book = await result
-            else:
-                order_book = result
-            return order_book
+                result = await result
+            return result
+        try:
+            return await self._call_with_retries(
+                _attempt,
+                retry_context=f"{exchange_id} order_book {symbol}",
+            )
         except Exception as e:
             logger.error(f"Error fetching order book {symbol} from {exchange_id}: {e}")
             raise
@@ -692,18 +752,27 @@ class CoinbaseGeminiExchangeManager:
             raise
     
     async def fetch_open_orders(self, exchange_id: str, symbol: Optional[str] = None) -> List[Dict]:
-        """Fetch open orders, optionally filtered by symbol."""
+        """
+        ⚪ COMMON: Fetch open orders from exchange (works for both Coinbase and Gemini)
+        
+        Args:
+            exchange_id: EXCHANGE_COINBASE or EXCHANGE_GEMINI
+            symbol: Optional symbol to filter open orders by
+        """
         exchange = self.get_exchange(exchange_id)
-        try:
+        async def _attempt():
             if symbol:
                 result = exchange.fetch_open_orders(symbol)
             else:
                 result = exchange.fetch_open_orders()
             if hasattr(result, '__await__'):
-                orders = await result
-            else:
-                orders = result
-            return orders or []
+                result = await result
+            return result or []
+        try:
+            return await self._call_with_retries(
+                _attempt,
+                retry_context=f"{exchange_id} open_orders {symbol or 'ALL'}",
+            )
         except Exception as e:
             logger.error(f"Error fetching open orders on {exchange_id} ({symbol or 'ALL'}): {e}")
             raise

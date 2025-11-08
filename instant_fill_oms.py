@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -640,11 +641,13 @@ class WebSocketFillMonitor:
         response_engine: InstantFillResponseEngine,
         exchange_id: str,
         poll_interval: float = 1.5,
+        jitter: float = 0.25,
     ) -> None:
         self._adapter = adapter
         self._response_engine = response_engine
         self._exchange_id = exchange_id
         self._poll_interval = poll_interval
+        self._jitter = max(0.0, min(jitter, 1.0))
         self._symbols: List[str] = []
         self._running = False
         self._task: Optional[asyncio.Task] = None
@@ -677,7 +680,14 @@ class WebSocketFillMonitor:
                 raise
             except Exception as exc:  # pragma: no cover - defensive
                 logger.debug("[WS] Poll error for %s: %s", self._exchange_id, exc)
-            await asyncio.sleep(self._poll_interval)
+            await asyncio.sleep(self._next_sleep_interval())
+
+    def _next_sleep_interval(self) -> float:
+        if self._jitter <= 0:
+            return self._poll_interval
+        low = max(0.05, self._poll_interval * (1.0 - self._jitter))
+        high = self._poll_interval * (1.0 + self._jitter)
+        return random.uniform(low, high)
 
     async def _poll_once(self) -> None:
         for symbol in self._symbols:
@@ -806,8 +816,14 @@ class InstantFillMarketMaker:
             symbols_by_exchange[cfg.exchange_id].append(cfg.symbol)
 
         for exchange_id, symbols in symbols_by_exchange.items():
+            poll_interval = 0.5 if exchange_id == "gemini" else 1.0
+            jitter = 0.35 if exchange_id == "gemini" else 0.2
             monitor = WebSocketFillMonitor(
-                self._adapter, self._fill_engine, exchange_id
+                self._adapter,
+                self._fill_engine,
+                exchange_id,
+                poll_interval=poll_interval,
+                jitter=jitter,
             )
             await monitor.start(symbols)
             self._monitors[exchange_id] = monitor
