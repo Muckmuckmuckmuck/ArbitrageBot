@@ -427,6 +427,7 @@ class InstantFillResponseEngine:
                 order_id=str(order_id),
                 price=price,
                 amount=amount,
+                tag="hedge",
             )
             await self.register_order(new_order)
             logger.info(
