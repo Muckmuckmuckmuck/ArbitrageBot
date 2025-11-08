@@ -687,9 +687,7 @@ class CoinbaseGeminiExchangeManager:
             raise
     
     async def fetch_open_orders(self, exchange_id: str, symbol: Optional[str] = None) -> List[Dict]:
-        """
-        ⚪ COMMON: Fetch open orders for an exchange, optionally filtered by symbol.
-        """
+        """Fetch open orders, optionally filtered by symbol."""
         exchange = self.get_exchange(exchange_id)
         try:
             if symbol:

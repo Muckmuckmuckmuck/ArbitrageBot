@@ -639,41 +639,49 @@ class WebSocketFillMonitor:
             await asyncio.sleep(self._poll_interval)
 
     async def _poll_once(self) -> None:
-        trades = await self._adapter.fetch_trades(
-            self._exchange_id,
-            None,
-            since=self._last_trade_ts,
-        )
-        if trades:
-            self._last_trade_ts = max(t.get("timestamp", 0) for t in trades)
-
-        for trade in trades or []:
-            order_id = str(trade.get("order"))
-            if not order_id:
-                continue
-            amount = Decimal(str(trade.get("amount", "0")))
-            price = Decimal(str(trade.get("price", "0")))
-            raw_symbol = trade.get("symbol") or trade.get("info", {}).get("symbol", "")
-            symbol = self._normalise_symbol(raw_symbol)
-            if not symbol:
-                continue
-            side_str = str(trade.get("side", "buy")).lower()
-            if side_str not in (OrderSide.BUY.value, OrderSide.SELL.value):
-                side_str = OrderSide.BUY.value
-            fill = FillEvent(
-                exchange_id=self._exchange_id,
-                symbol=symbol,
-                side=OrderSide(side_str),
-                price=price,
-                amount=amount,
-                order_id=order_id,
-                timestamp=trade.get("timestamp", time.time())
-                / 1000.0,
+        for symbol in self._symbols:
+            trades = await self._adapter.fetch_trades(
+                self._exchange_id,
+                symbol,
+                since=self._last_trade_ts,
             )
-            await self._response_engine.enqueue_fill(fill)
+            if trades:
+                self._last_trade_ts = max(t.get("timestamp", 0) for t in trades)
+
+            for trade in trades or []:
+                order_id = str(trade.get("order"))
+                if not order_id:
+                    continue
+                amount = Decimal(str(trade.get("amount", "0")))
+                price = Decimal(str(trade.get("price", "0")))
+                raw_symbol = trade.get("symbol") or trade.get("info", {}).get("symbol", "") or symbol
+                symbol_norm = self._normalise_symbol(raw_symbol)
+                if not symbol_norm:
+                    continue
+                side_str = str(trade.get("side", "buy")).lower()
+                if side_str not in (OrderSide.BUY.value, OrderSide.SELL.value):
+                    side_str = OrderSide.BUY.value
+                fill = FillEvent(
+                    exchange_id=self._exchange_id,
+                    symbol=symbol_norm,
+                    side=OrderSide(side_str),
+                    price=price,
+                    amount=amount,
+                    order_id=order_id,
+                    timestamp=trade.get("timestamp", time.time()) / 1000.0,
+                )
+                await self._response_engine.enqueue_fill(fill)
 
         # Detect cancelled orders by comparing tracked vs open
-        open_orders = await self._adapter.fetch_open_orders(self._exchange_id)
+        open_orders: List[Dict] = []
+        for symbol in self._symbols:
+            try:
+                open_orders.extend(
+                    await self._adapter.fetch_open_orders(self._exchange_id, symbol)
+                )
+            except Exception as exc:
+                logger.debug("[WS] Open order poll failed for %s %s: %s", self._exchange_id, symbol, exc)
+                continue
         open_ids = {str(order.get("id")) for order in open_orders}
         tracked: List[ManagedOrder] = []
         for symbol in self._symbols:
