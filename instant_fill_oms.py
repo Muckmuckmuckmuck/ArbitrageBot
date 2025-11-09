@@ -977,7 +977,7 @@ class DualSideQuoteManager:
         usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
         usable_base = max(Decimal("0"), base_balance - base_reserved)
 
-        if quote_reserved > 0 and usable_quote < Decimal(cfg.min_notional_usd):
+        if usable_quote < Decimal(cfg.min_notional_usd):
             cancelled = await self._cancel_orphan_orders(cfg, OrderSide.BUY)
             if cancelled:
                 await self._balance_cache.force_refresh(cfg.exchange_id)
@@ -986,7 +986,7 @@ class DualSideQuoteManager:
                 usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
 
         min_base_required = Decimal(cfg.min_notional_usd) / max(Decimal("1"), sell_price)
-        if base_reserved > 0 and usable_base < min_base_required:
+        if usable_base < min_base_required:
             cancelled = await self._cancel_orphan_orders(cfg, OrderSide.SELL)
             if cancelled:
                 await self._balance_cache.force_refresh(cfg.exchange_id)
