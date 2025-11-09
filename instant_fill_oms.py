@@ -712,6 +712,7 @@ class DualSideQuoteManager:
         self._stale_quote_multiplier = 2.0
         self._ioc_slippage = Decimal("0.0015")
         self._min_conversion_chunk = Decimal("10")
+        self._orphan_cancel_age_s = 90.0
 
     async def ensure_quotes(self) -> None:
         for cfg in self._pair_configs:
@@ -846,10 +847,7 @@ class DualSideQuoteManager:
         usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
         usable_base = max(Decimal("0"), base_balance - base_reserved)
 
-        if (
-            quote_balance >= Decimal(cfg.min_notional_usd)
-            and usable_quote < Decimal(cfg.min_notional_usd)
-        ):
+        if quote_reserved > 0 and usable_quote < Decimal(cfg.min_notional_usd):
             cancelled = await self._cancel_orphan_orders(cfg, OrderSide.BUY)
             if cancelled:
                 await self._balance_cache.force_refresh(cfg.exchange_id)
@@ -857,10 +855,8 @@ class DualSideQuoteManager:
                 quote_reserved = self._response_engine.reserved_quote(cfg.exchange_id, quote)
                 usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
 
-        if (
-            base_balance >= (Decimal(cfg.min_notional_usd) / max(Decimal("1"), sell_price))
-            and usable_base < (Decimal(cfg.min_notional_usd) / max(Decimal("1"), sell_price))
-        ):
+        min_base_required = Decimal(cfg.min_notional_usd) / max(Decimal("1"), sell_price)
+        if base_reserved > 0 and usable_base < min_base_required:
             cancelled = await self._cancel_orphan_orders(cfg, OrderSide.SELL)
             if cancelled:
                 await self._balance_cache.force_refresh(cfg.exchange_id)
@@ -1080,11 +1076,15 @@ class DualSideQuoteManager:
             )
             return False
 
-        if not open_orders:
-            return False
-
         tracked = self._response_engine.get_active_order(cfg.exchange_id, cfg.symbol, side)
-        tracked_id = tracked.order_id if tracked else None
+        tracked_client_id = None
+        tracked_order_id = None
+        tracked_age = None
+        if tracked:
+            tracked_order_id = tracked.order_id
+            tracked_client_id = getattr(tracked, "client_order_id", None)
+            tracked_age = time.time() - tracked.created_at
+
         cancelled = False
 
         for order in open_orders:
@@ -1103,18 +1103,65 @@ class DualSideQuoteManager:
             )
             if not order_id:
                 continue
-            if tracked_id and order_id == tracked_id:
+
+            info = order.get("info", {}) or {}
+            client_id = str(
+                order.get("clientOrderId")
+                or order.get("client_order_id")
+                or info.get("clientOrderId")
+                or info.get("client_order_id")
+                or ""
+            ) or None
+
+            should_cancel = True
+
+            if tracked_order_id and order_id == tracked_order_id:
+                if tracked_age is None or tracked_age <= self._orphan_cancel_age_s:
+                    should_cancel = False
+                else:
+                    logger.info(
+                        "[QUOTE] Tracked order %s %s age=%.2fs exceeds stale threshold %.0fs; cancelling.",
+                        cfg.exchange_id.upper(),
+                        order_id,
+                        tracked_age,
+                        self._orphan_cancel_age_s,
+                    )
+            if should_cancel and tracked_client_id and client_id == tracked_client_id:
+                if tracked_age is None or tracked_age <= self._orphan_cancel_age_s:
+                    should_cancel = False
+                else:
+                    logger.info(
+                        "[QUOTE] Tracked client order %s age=%.2fs exceeds stale threshold %.0fs; cancelling.",
+                        client_id,
+                        tracked_age,
+                        self._orphan_cancel_age_s,
+                    )
+            if not should_cancel:
                 continue
+
+            symbol = order.get("symbol") or info.get("symbol") or cfg.symbol
             try:
-                await self._adapter.cancel_order(cfg.exchange_id, cfg.symbol, order_id)
-                await self._response_engine.mark_cancelled(cfg.exchange_id, cfg.symbol, side)
-                logger.info(
-                    "[QUOTE] Cancelled orphan %s order %s on %s %s",
-                    side.value.upper(),
-                    order_id,
-                    cfg.exchange_id.upper(),
-                    cfg.symbol,
-                )
+                amount = Decimal(str(order.get("remaining") or order.get("remaining_amount") or order.get("amount") or info.get("remaining_amount") or 0))
+            except Exception:
+                amount = Decimal("0")
+            try:
+                price = Decimal(str(order.get("price") or info.get("price") or 0))
+            except Exception:
+                price = Decimal("0")
+
+            logger.info(
+                "[QUOTE] Cancelling orphan %s order %s symbol=%s amount=%s price=%s tracked_order=%s tracked_client=%s",
+                side.value.upper(),
+                order_id,
+                symbol,
+                amount,
+                price,
+                tracked_order_id,
+                tracked_client_id,
+            )
+            try:
+                await self._adapter.cancel_order(cfg.exchange_id, symbol, order_id)
+                await self._response_engine.mark_cancelled(cfg.exchange_id, symbol, side)
                 cancelled = True
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning(
@@ -1122,9 +1169,18 @@ class DualSideQuoteManager:
                     side.value.upper(),
                     order_id,
                     cfg.exchange_id.upper(),
-                    cfg.symbol,
+                    symbol,
                     exc,
                 )
+
+        if cancelled:
+            logger.info(
+                "[QUOTE] Completed orphan cancellation sweep for %s %s side=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                side.value.upper(),
+            )
+
         return cancelled
 
     async def _sync_side(
