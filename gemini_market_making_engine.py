@@ -24,7 +24,7 @@ from instant_fill_oms import ExchangeManagerAdapter, InstantFillMarketMaker, Pai
 
 logger = logging.getLogger(__name__)
 
-MIN_VOLUME_USD = Decimal("50000")
+MIN_VOLUME_USD = Decimal("20000")
 DEFAULT_ORDER_SIZE_USD = Decimal("12.00")
 DEFAULT_MIN_SPREAD_BPS = 160
 DEFAULT_PRICE_IMPROVEMENT_BPS = 3
@@ -231,8 +231,19 @@ async def _gemini_pair_configs(
     discovered.sort(key=lambda item: item[1], reverse=True)
 
     if not discovered:
+        logger.warning(
+            "[GEMINI CONFIG] No Gemini markets met the %s volume filter; falling back to core overrides",
+            MIN_VOLUME_USD,
+        )
+        fallback: List[PairConfig] = []
+        for symbol, override in PAIR_OVERRIDES.items():
+            if symbol not in markets:
+                continue
+            fallback.append(_make_pair_config(symbol, override))
+        if fallback:
+            return fallback
         raise RuntimeError(
-            "No Gemini markets satisfied the $50k 24h volume filter."
+            "No Gemini markets satisfied the volume filter and no fallback pairs were available."
         )
 
     logger.info(
