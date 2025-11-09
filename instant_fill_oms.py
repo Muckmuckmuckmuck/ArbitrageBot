@@ -43,12 +43,13 @@ class OrderStatus(str, Enum):
 class PairConfig:
     exchange_id: str
     symbol: str
-    order_size_usd: Decimal = Decimal("3.00")
+    order_size_usd: Decimal = Decimal("10.00")
     min_spread_bps: int = 30  # 0.30%
     max_quote_interval_s: float = 5.0
     min_depth_usd: Decimal = Decimal("10000")
-    min_notional_usd: Decimal = Decimal("5.00")
+    min_notional_usd: Decimal = Decimal("10.00")
     price_improve_bps: int = 5  # 0.05%
+    fee_floor_bps: int = 0
 
 
 @dataclass(slots=True)
@@ -109,6 +110,7 @@ class ExchangeManagerAdapter:
         amount: Decimal,
         price: Optional[Decimal] = None,
         order_type: str = "limit",
+        params: Optional[Dict[str, Any]] = None,
     ) -> Dict:
         logger.info(
             "[ADAPTER] create_order %s %s side=%s amount=%s price=%s type=%s",
@@ -126,6 +128,7 @@ class ExchangeManagerAdapter:
             side=side.value,
             amount=float(amount),
             price=float(price) if price is not None else None,
+            params=params,
         )
 
     async def cancel_order(
@@ -664,6 +667,7 @@ class DualSideQuoteManager:
         balance_cache: BalanceCache,
         pair_configs: Sequence[PairConfig],
         pair_cooldowns: Dict[Tuple[str, str], float],
+        fee_floor_bps: Dict[str, Decimal],
     ) -> None:
         self._adapter = adapter
         self._response_engine = response_engine
@@ -672,6 +676,7 @@ class DualSideQuoteManager:
         self._last_quote_time: Dict[Tuple[str, str], float] = {}
         self._pair_cooldowns = pair_cooldowns
         self._inactivity_tighten_threshold = 600.0
+        self._exchange_fee_floor_bps = fee_floor_bps
 
     async def ensure_quotes(self) -> None:
         for cfg in self._pair_configs:
@@ -770,6 +775,19 @@ class DualSideQuoteManager:
                 cfg.symbol,
                 last_fill_age,
             )
+        fee_floor_bps = max(
+            Decimal(cfg.fee_floor_bps),
+            self._exchange_fee_floor_bps.get(cfg.exchange_id, Decimal("0")),
+        )
+        if adjusted_spread_bps < fee_floor_bps:
+            logger.info(
+                "[QUOTE] Adjusting %s %s spread floor from %s bps to fee floor %s bps",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                adjusted_spread_bps,
+                fee_floor_bps,
+            )
+            adjusted_spread_bps = fee_floor_bps
         min_spread = adjusted_spread_bps / Decimal("10000")
         spread = max((best_ask - best_bid) / mid, min_spread)
         price_improve = adjusted_price_improve_bps / Decimal("10000")
@@ -1150,7 +1168,7 @@ class InstantFillMarketMaker:
         self._pair_index: Dict[str, Dict[str, List[PairConfig]]] = {}
         self._inventory_check_interval = 2.0
         self._inventory_threshold = Decimal("0.00001")
-        self._dust_threshold = Decimal("0.50")
+        self._dust_threshold = Decimal("10.00")
         self._balance_cache = BalanceCache(adapter)
         self._pair_cooldowns: Dict[Tuple[str, str], float] = {}
         self._hedge_attempts: Dict[Tuple[str, str], int] = {}
@@ -1161,6 +1179,40 @@ class InstantFillMarketMaker:
         self._wins: int = 0
         self._losses: int = 0
         self._break_even: int = 0
+        self._fee_floor_bps: Dict[str, Decimal] = {
+            "coinbase": Decimal("80"),
+            "gemini": Decimal("80"),
+        }
+        minimum_notional = Decimal("10.00")
+        for cfg in self._pair_configs:
+            if cfg.order_size_usd < minimum_notional:
+                logger.info(
+                    "[CONFIG] Raising order_size_usd for %s %s from %s to %s",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    cfg.order_size_usd,
+                    minimum_notional,
+                )
+                cfg.order_size_usd = minimum_notional
+            if cfg.min_notional_usd < minimum_notional:
+                logger.info(
+                    "[CONFIG] Raising min_notional_usd for %s %s from %s to %s",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    cfg.min_notional_usd,
+                    minimum_notional,
+                )
+                cfg.min_notional_usd = minimum_notional
+            fee_floor = self._fee_floor_bps.get(cfg.exchange_id, Decimal("0"))
+            if Decimal(cfg.fee_floor_bps) < fee_floor:
+                logger.info(
+                    "[CONFIG] Setting fee_floor_bps for %s %s to %s (was %s)",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    fee_floor,
+                    cfg.fee_floor_bps,
+                )
+                cfg.fee_floor_bps = int(fee_floor)
         self._fill_engine = InstantFillResponseEngine(
             adapter,
             db_manager,
@@ -1175,6 +1227,7 @@ class InstantFillMarketMaker:
             self._balance_cache,
             self._pair_configs,
             self._pair_cooldowns,
+            self._fee_floor_bps,
         )
         self._monitors: Dict[str, WebSocketFillMonitor] = {}
         self._tasks: List[asyncio.Task] = []
@@ -1844,6 +1897,7 @@ class InstantFillMarketMaker:
             attempts = self._hedge_attempts.get((hedge.exchange_id, hedge.symbol), 0)
             price: Optional[Decimal] = None
             order_type = "limit"
+            order_params: Optional[Dict[str, Any]] = None
             if attempts >= 2:
                 if hedge.exchange_id == "gemini":
                     if hedge.side == OrderSide.SELL and bids:
@@ -1854,6 +1908,7 @@ class InstantFillMarketMaker:
                         price = (Decimal(str(asks[0][0])) * Decimal("1.005")).quantize(
                             Decimal("0.00001")
                         )
+                    order_params = {"options": ["immediate-or-cancel"]}
                 else:
                     order_type = "market"
                     price = None
@@ -1889,6 +1944,7 @@ class InstantFillMarketMaker:
                     amount=hedge.amount,
                     price=price,
                     order_type=order_type,
+                    params=order_params,
                 )
             except Exception as exc:
                 logger.error(

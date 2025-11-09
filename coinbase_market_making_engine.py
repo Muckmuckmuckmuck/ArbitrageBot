@@ -15,12 +15,54 @@ from instant_fill_oms import ExchangeManagerAdapter, InstantFillMarketMaker, Pai
 
 def _coinbase_pair_configs() -> List[PairConfig]:
     return [
-        PairConfig("coinbase", "BTC/USD", Decimal("3.00"), min_spread_bps=25),
-        PairConfig("coinbase", "ETH/USD", Decimal("2.50"), min_spread_bps=30),
-        PairConfig("coinbase", "SOL/USD", Decimal("2.00"), min_spread_bps=35),
-        PairConfig("coinbase", "AVAX/USD", Decimal("1.50"), min_spread_bps=40),
-        PairConfig("coinbase", "LINK/USD", Decimal("1.50"), min_spread_bps=40),
-        PairConfig("coinbase", "UNI/USD", Decimal("1.50"), min_spread_bps=45),
+        PairConfig(
+            "coinbase",
+            "BTC/USD",
+            Decimal("30.00"),
+            min_spread_bps=95,
+            min_notional_usd=Decimal("10.00"),
+            fee_floor_bps=90,
+        ),
+        PairConfig(
+            "coinbase",
+            "ETH/USD",
+            Decimal("20.00"),
+            min_spread_bps=100,
+            min_notional_usd=Decimal("10.00"),
+            fee_floor_bps=95,
+        ),
+        PairConfig(
+            "coinbase",
+            "SOL/USD",
+            Decimal("15.00"),
+            min_spread_bps=115,
+            min_notional_usd=Decimal("10.00"),
+            fee_floor_bps=110,
+        ),
+        PairConfig(
+            "coinbase",
+            "AVAX/USD",
+            Decimal("12.00"),
+            min_spread_bps=120,
+            min_notional_usd=Decimal("10.00"),
+            fee_floor_bps=115,
+        ),
+        PairConfig(
+            "coinbase",
+            "LINK/USD",
+            Decimal("12.00"),
+            min_spread_bps=125,
+            min_notional_usd=Decimal("10.00"),
+            fee_floor_bps=120,
+        ),
+        PairConfig(
+            "coinbase",
+            "UNI/USD",
+            Decimal("12.00"),
+            min_spread_bps=130,
+            min_notional_usd=Decimal("10.00"),
+            fee_floor_bps=125,
+        ),
     ]
 
 
