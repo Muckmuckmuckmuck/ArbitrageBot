@@ -1089,7 +1089,6 @@ class DualSideQuoteManager:
             usable_quote,
         )
         order_value = target_order_value * dynamic_multiplier
-        order_value = min(order_value, usable_quote * Decimal("0.5") if usable_quote > 0 else order_value)
         order_value = max(order_value, Decimal(cfg.min_notional_usd))
         order_value = min(order_value, usable_quote) if usable_quote > 0 else order_value
         buy_amount = (order_value / buy_price).quantize(Decimal("0.00001"))
