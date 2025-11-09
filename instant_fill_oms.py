@@ -1005,6 +1005,10 @@ class DualSideQuoteManager:
                 alt_balance = await self._balance_cache.get_balance(cfg.exchange_id, alt_currency)
                 if alt_balance <= self._min_conversion_chunk:
                     continue
+                alt_reserved = self._response_engine.reserved_quote(cfg.exchange_id, alt_currency)
+                usable_alt = max(Decimal("0"), alt_balance - alt_reserved)
+                if usable_alt <= self._min_conversion_chunk:
+                    continue
                 required = (
                     max(Decimal(cfg.order_size_usd), Decimal(cfg.min_notional_usd))
                     - usable_quote
@@ -1012,7 +1016,7 @@ class DualSideQuoteManager:
                 if required <= Decimal("0"):
                     break
                 convert_amount = min(
-                    alt_balance,
+                    usable_alt,
                     (required * Decimal("1.2")).quantize(Decimal("0.01"), rounding=ROUND_DOWN),
                 )
                 if convert_amount < self._min_conversion_chunk:
