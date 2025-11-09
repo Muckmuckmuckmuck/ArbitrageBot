@@ -1661,6 +1661,7 @@ class InstantFillMarketMaker:
             self._balance_cache,
             self._pair_configs,
             self._pair_cooldowns,
+            self._fee_floor_bps,
         )
         self._hedge_attempts.clear()
         self._rebuild_pair_maps()
