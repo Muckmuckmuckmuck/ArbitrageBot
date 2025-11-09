@@ -721,6 +721,13 @@ class DualSideQuoteManager:
         except Exception:
             return
         if not order_book["bids"] or not order_book["asks"]:
+            logger.info(
+                "[QUOTE] Skip %s %s: empty order book bids=%s asks=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                order_book["bids"],
+                order_book["asks"],
+            )
             return
 
         best_bid = Decimal(str(order_book["bids"][0][0]))
@@ -831,13 +838,20 @@ class DualSideQuoteManager:
             need_buy,
             need_sell,
         )
-        logger.info(
-            "[QUOTE] Spread %.5f price_improve_bps=%s last_fill_age=%s order_value=%s",
-            spread,
-            adjusted_price_improve_bps,
-            last_fill_age,
-            order_value,
-        )
+        if not need_buy:
+            logger.info(
+                "[QUOTE] BUY skipped for %s %s reason=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                "notional below minimum" if buy_amount * buy_price < cfg.min_notional_usd else "insufficient balance",
+            )
+        if not need_sell:
+            logger.info(
+                "[QUOTE] SELL skipped for %s %s reason=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                "notional below minimum" if sell_amount * sell_price < cfg.min_notional_usd else "insufficient inventory",
+            )
 
         await self._sync_side(cfg, OrderSide.BUY, buy_amount, buy_price, need_buy)
         await self._sync_side(cfg, OrderSide.SELL, sell_amount, sell_price, need_sell)
@@ -1136,9 +1150,17 @@ class InstantFillMarketMaker:
         self._pair_index: Dict[str, Dict[str, List[PairConfig]]] = {}
         self._inventory_check_interval = 2.0
         self._inventory_threshold = Decimal("0.00001")
+        self._dust_threshold = Decimal("0.50")
         self._balance_cache = BalanceCache(adapter)
         self._pair_cooldowns: Dict[Tuple[str, str], float] = {}
         self._hedge_attempts: Dict[Tuple[str, str], int] = {}
+        self._position_tracker: Dict[Tuple[str, str], List[Tuple[Decimal, Decimal]]] = defaultdict(list)
+        self._realized_pnl: Decimal = Decimal("0")
+        self._realized_volume: Decimal = Decimal("0")
+        self._trade_count: int = 0
+        self._wins: int = 0
+        self._losses: int = 0
+        self._break_even: int = 0
         self._fill_engine = InstantFillResponseEngine(
             adapter,
             db_manager,
@@ -1400,6 +1422,49 @@ class InstantFillMarketMaker:
             fill.amount,
             fill.price,
         )
+        pair_key = (order.exchange_id, order.symbol)
+        if order.side == OrderSide.BUY:
+            self._position_tracker[pair_key].append((fill.amount, fill.price))
+            logger.info(
+                "[PNL] Recorded buy leg %s %s amount=%s price=%s",
+                order.exchange_id.upper(),
+                order.symbol,
+                fill.amount,
+                fill.price,
+            )
+        elif order.side == OrderSide.SELL:
+            remaining = fill.amount
+            profit = Decimal("0")
+            fifo = self._position_tracker[pair_key]
+            updated_fifo: List[Tuple[Decimal, Decimal]] = []
+            for bought_amount, bought_price in fifo:
+                if remaining <= Decimal("0"):
+                    updated_fifo.append((bought_amount, bought_price))
+                    continue
+                matched = min(remaining, bought_amount)
+                profit += matched * (fill.price - bought_price)
+                remaining -= matched
+                leftover = bought_amount - matched
+                if leftover > Decimal("0"):
+                    updated_fifo.append((leftover, bought_price))
+            if remaining > Decimal("0"):
+                logger.warning(
+                    "[PNL] SELL exceeded tracked inventory for %s %s remaining=%s",
+                    order.exchange_id.upper(),
+                    order.symbol,
+                    remaining,
+                )
+            self._position_tracker[pair_key] = updated_fifo
+            self._realized_pnl += profit
+            self._realized_volume += fill.price * fill.amount
+            self._trade_count += 1
+            if profit > Decimal("0"):
+                self._wins += 1
+            elif profit < Decimal("0"):
+                self._losses += 1
+            else:
+                self._break_even += 1
+            self._log_pnl_summary(order.exchange_id)
 
     async def _place_inventory_hedge(self, cfg: PairConfig, amount: Decimal) -> bool:
         if amount <= self._inventory_threshold:
@@ -1437,12 +1502,23 @@ class InstantFillMarketMaker:
             return False
 
         sell_amount = amount.quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
-        if sell_amount * best_bid < cfg.min_notional_usd:
+        sell_value = sell_amount * best_bid
+        min_notional = cfg.min_notional_usd if cfg else Decimal("5.00")
+        if sell_value < self._dust_threshold:
+            logger.info(
+                "[INVENTORY] Dust position %s on %s value=%s < dust_threshold=%s",
+                cfg.symbol,
+                cfg.exchange_id.upper(),
+                sell_value,
+                self._dust_threshold,
+            )
+            return False
+        if sell_value < min_notional:
             logger.info(
                 "[INVENTORY] Sell amount below notional for %s on %s value=%s min=%s",
                 cfg.symbol,
                 cfg.exchange_id.upper(),
-                sell_amount * best_bid,
+                sell_value,
                 cfg.min_notional_usd,
             )
             return False
@@ -1546,6 +1622,29 @@ class InstantFillMarketMaker:
             duration,
         )
 
+    def _log_pnl_summary(self, exchange_id: str) -> None:
+        win_rate = (
+            (self._wins / self._trade_count) * 100
+            if self._trade_count > 0
+            else 0.0
+        )
+        avg_profit = (
+            self._realized_pnl / Decimal(str(self._trade_count))
+            if self._trade_count > 0
+            else Decimal("0")
+        )
+        logger.info(
+            "[PNL] ✅✅ Total PnL: $%.4f | Trades: %s | Win rate: %.2f%% | Wins: %s | Losses: %s | Break-even: %s | Avg profit: $%.4f | Exchange: %s",
+            float(self._realized_pnl),
+            self._trade_count,
+            win_rate,
+            self._wins,
+            self._losses,
+            self._break_even,
+            float(avg_profit),
+            exchange_id.upper(),
+        )
+
     async def _cancel_open_orders(self, exchange_id: str) -> None:
         try:
             open_orders = await self._adapter.fetch_open_orders(exchange_id)
@@ -1618,6 +1717,15 @@ class InstantFillMarketMaker:
             sell_amount = amount.quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
             sell_value = sell_amount * best_bid
             min_notional = cfg.min_notional_usd if cfg else Decimal("5.00")
+            if sell_value < self._dust_threshold:
+                logger.info(
+                    "[CLEANUP] %s on %s treated as dust value=%s < dust_threshold=%s",
+                    symbol,
+                    exchange_id.upper(),
+                    sell_value,
+                    self._dust_threshold,
+                )
+                continue
             if sell_value < min_notional:
                 logger.info(
                     "[CLEANUP] Order value below minimum for %s on %s value=%s min=%s",
