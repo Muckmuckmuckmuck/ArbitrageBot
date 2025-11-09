@@ -7,7 +7,7 @@ import random
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from enum import Enum
 from typing import Any, Callable, Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -254,6 +254,19 @@ class BalanceCache:
         async with self._lock:
             await self._maybe_refresh(exchange_id)
             return dict(self._balances.get(exchange_id, {}))
+
+    async def get_equity(
+        self, exchange_id: str, currencies: Optional[Iterable[str]] = None
+    ) -> Decimal:
+        async with self._lock:
+            await self._maybe_refresh(exchange_id)
+            balances = self._balances.get(exchange_id, {})
+            if currencies:
+                currency_set = set(currencies)
+                return sum(
+                    balances.get(currency, Decimal("0")) for currency in currency_set
+                )
+            return sum(balances.values())
 
     async def _maybe_refresh(self, exchange_id: str) -> None:
         now = time.time()
@@ -724,6 +737,7 @@ class DualSideQuoteManager:
         self._pair_cooldowns = pair_cooldowns
         self._inactivity_tighten_threshold = 600.0
         self._exchange_fee_floor_bps = fee_floor_bps
+        self._stable_currencies = {"USD", "USDC", "USDT", "GUSD"}
         self._stable_aliases: Dict[str, Sequence[str]] = {
             "USD": ("USDC", "USDT", "GUSD"),
             "USDC": ("USD", "USDT"),
@@ -732,7 +746,7 @@ class DualSideQuoteManager:
         }
         self._stale_quote_multiplier = 2.0
         self._ioc_slippage = Decimal("0.0015")
-        self._min_conversion_chunk = Decimal("10")
+        self._min_conversion_chunk = Decimal("5")
         self._orphan_cancel_age_s = 90.0
         self._volatility_cache: Dict[
             Tuple[str, str], Tuple[float, Optional[float]]
@@ -965,17 +979,62 @@ class DualSideQuoteManager:
         buy_price = buy_price.quantize(Decimal("0.00001"))
         sell_price = sell_price.quantize(Decimal("0.00001"))
 
-        target_order_value = max(cfg.order_size_usd, Decimal(cfg.min_notional_usd))
-        dynamic_multiplier = Decimal("1")
         base, quote = cfg.symbol.split("/")
         quote_balance = await self._balance_cache.get_balance(cfg.exchange_id, quote)
         base_balance = await self._balance_cache.get_balance(cfg.exchange_id, base)
+
+        total_stable_equity = await self._balance_cache.get_equity(
+            cfg.exchange_id, self._stable_currencies
+        )
+
+        cancelled_buy = await self._cancel_orphan_orders(cfg, OrderSide.BUY)
+        cancelled_sell = await self._cancel_orphan_orders(cfg, OrderSide.SELL)
+        if cancelled_buy or cancelled_sell:
+            await self._balance_cache.force_refresh(cfg.exchange_id)
+            quote_balance = await self._balance_cache.get_balance(cfg.exchange_id, quote)
+            base_balance = await self._balance_cache.get_balance(cfg.exchange_id, base)
 
         quote_reserved = self._response_engine.reserved_quote(cfg.exchange_id, quote)
         base_reserved = self._response_engine.reserved_base(cfg.exchange_id, base)
 
         usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
         usable_base = max(Decimal("0"), base_balance - base_reserved)
+
+        effective_min_notional = Decimal(cfg.min_notional_usd)
+        if total_stable_equity > Decimal("0"):
+            scaled_floor = (total_stable_equity * Decimal("0.25")).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            scaled_floor = max(Decimal("5"), scaled_floor)
+            effective_min_notional = min(effective_min_notional, scaled_floor)
+        effective_min_notional = max(Decimal("5"), effective_min_notional)
+
+        target_order_value = Decimal(cfg.order_size_usd)
+        if total_stable_equity > Decimal("0"):
+            budget_cap = (total_stable_equity * Decimal("0.4")).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            if budget_cap > Decimal("0"):
+                target_order_value = min(target_order_value, budget_cap)
+        if usable_quote > Decimal("0"):
+            quote_cap = (usable_quote * Decimal("0.8")).quantize(
+                Decimal("0.01"), rounding=ROUND_DOWN
+            )
+            if quote_cap > Decimal("0"):
+                target_order_value = min(target_order_value, quote_cap)
+
+        target_order_value = max(effective_min_notional, target_order_value)
+        dynamic_multiplier = Decimal("1")
+
+        logger.debug(
+            "[QUOTE] %s %s totals stable=%s effective_min=%s target_value=%s usable_quote=%s",
+            cfg.exchange_id.upper(),
+            cfg.symbol,
+            total_stable_equity,
+            effective_min_notional,
+            target_order_value,
+            usable_quote,
+        )
 
         if usable_quote < Decimal(cfg.min_notional_usd):
             cancelled = await self._cancel_orphan_orders(cfg, OrderSide.BUY)
@@ -1093,7 +1152,7 @@ class DualSideQuoteManager:
             usable_quote,
         )
         order_value = target_order_value * dynamic_multiplier
-        order_value = max(order_value, Decimal(cfg.min_notional_usd))
+        order_value = max(order_value, effective_min_notional)
         order_value = min(order_value, usable_quote) if usable_quote > 0 else order_value
         buy_amount = (order_value / buy_price).quantize(Decimal("0.00001"))
         sell_amount = (order_value / sell_price).quantize(Decimal("0.00001"))
