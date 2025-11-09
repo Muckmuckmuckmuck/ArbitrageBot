@@ -2288,46 +2288,43 @@ class InstantFillMarketMaker:
             bids = order_book.get("bids") or []
             asks = order_book.get("asks") or []
             attempts = self._hedge_attempts.get((hedge.exchange_id, hedge.symbol), 0)
-            price: Optional[Decimal] = None
             order_type = "limit"
             order_params: Optional[Dict[str, Any]] = None
-            if attempts >= 2:
-                if hedge.exchange_id == "gemini":
-                    if hedge.side == OrderSide.SELL and bids:
-                        price = (Decimal(str(bids[0][0])) * Decimal("0.995")).quantize(
-                            Decimal("0.00001")
-                        )
-                    elif hedge.side == OrderSide.BUY and asks:
-                        price = (Decimal(str(asks[0][0])) * Decimal("1.005")).quantize(
-                            Decimal("0.00001")
-                        )
-                    order_params = {"options": ["immediate-or-cancel"]}
-                else:
-                    order_type = "market"
-                    price = None
-                logger.info(
-                    "[HEDGE] Escalating hedge %s %s attempts=%s order_type=%s",
-                    hedge.exchange_id.upper(),
-                    hedge.symbol,
-                    attempts,
-                    order_type,
-                )
+
+            if hedge.side == OrderSide.SELL and bids:
+                candidate = Decimal(str(bids[0][0]))
+                price = max(candidate, hedge.price).quantize(Decimal("0.00001"))
+            elif hedge.side == OrderSide.BUY and asks:
+                candidate = Decimal(str(asks[0][0]))
+                price = min(candidate, hedge.price).quantize(Decimal("0.00001"))
             else:
-                if hedge.side == OrderSide.SELL and bids:
-                    price = (Decimal(str(bids[0][0])) * Decimal("0.999")).quantize(
-                        Decimal("0.00001")
-                    )
-                elif hedge.side == OrderSide.BUY and asks:
-                    price = (Decimal(str(asks[0][0])) * Decimal("1.002")).quantize(
-                        Decimal("0.00001")
-                    )
-            if order_type == "limit" and price is None:
+                price = None
+
+            if price is None:
                 logger.warning(
                     "[OMS] Cannot determine refreshed price for hedge %s %s",
                     hedge.exchange_id.upper(),
                     hedge.symbol,
                 )
                 continue
+
+            if price == hedge.price:
+                logger.debug(
+                    "[HEDGE] Retaining entry price %s for %s %s (attempts=%s)",
+                    price,
+                    hedge.exchange_id.upper(),
+                    hedge.symbol,
+                    attempts,
+                )
+            else:
+                logger.info(
+                    "[HEDGE] Refreshing hedge %s %s attempts=%s new_price=%s entry_price=%s",
+                    hedge.exchange_id.upper(),
+                    hedge.symbol,
+                    attempts,
+                    price,
+                    hedge.price,
+                )
 
             try:
                 response = await self._adapter.create_order(
