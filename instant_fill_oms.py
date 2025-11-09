@@ -1320,7 +1320,7 @@ class DualSideQuoteManager:
                 tracked_client_id,
             )
             try:
-                await self._adapter.cancel_order(cfg.exchange_id, symbol, order_id)
+                await self._adapter.cancel_order(cfg.exchange_id, order_id, symbol)
                 await self._response_engine.mark_cancelled(cfg.exchange_id, symbol, side)
                 cancelled = True
             except Exception as exc:  # pragma: no cover - defensive
