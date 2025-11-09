@@ -122,7 +122,7 @@ class ProfitabilityCalculator:
             # Return negative spread to indicate error
             raw_spread = (sell_price - buy_price) / buy_price
         else:
-            raw_spread = (sell_price - buy_price) / buy_price
+        raw_spread = (sell_price - buy_price) / buy_price
         
         # 2. Trading Fees (using maker fees for limit orders)
         fees_total = self.maker_fee + self.maker_fee  # Buy + Sell
@@ -386,16 +386,16 @@ class IntraExchangeArbitrageEngine:
         # Crypto quote currency (e.g., ETH, BTC, SOL) - convert through USD
         # Example: BTC/ETH price = 15.5 ETH per BTC
         # We need: ETH/USD rate to convert to USD
-        try:
-            exchange = self.exchange_manager.get_exchange(exchange_id)
+            try:
+                exchange = self.exchange_manager.get_exchange(exchange_id)
             # Try to get quote_currency/USD pair (e.g., ETH/USD, BTC/USD)
             crypto_usd_pair = f"{quote_currency}/USD"
             if crypto_usd_pair in exchange.markets and ':' not in crypto_usd_pair:
                 ticker = await self.exchange_manager.fetch_ticker(exchange_id, crypto_usd_pair)
                 rate = ticker.get('last') or ticker.get('close') or ticker.get('bid')
-                if rate and rate > 0:
+                    if rate and rate > 0:
                     # price is in quote_currency, multiply by quote_currency/USD rate to get USD
-                    return price * rate
+                        return price * rate
             else:
                 # If quote_currency/USD doesn't exist, try USD/quote_currency and invert
                 usd_crypto_pair = f"USD/{quote_currency}"
@@ -405,7 +405,7 @@ class IntraExchangeArbitrageEngine:
                     if rate and rate > 0:
                         # price is in quote_currency, divide by USD/quote_currency rate to get USD
                         return price / rate
-        except Exception as e:
+            except Exception as e:
             logger.debug(f"Could not fetch {quote_currency}/USD rate for normalization: {e}")
         
         # Fallback: log warning and return original price (will cause calculation issues)
@@ -692,7 +692,7 @@ class IntraExchangeArbitrageEngine:
                         threshold = self.exchange_min_thresholds.get(exchange_id, self.min_profit_threshold)
                         self.pair_thresholds[pair_key] = threshold
                     else:
-                        threshold = self.pair_thresholds[pair_key]
+                    threshold = self.pair_thresholds[pair_key]
                     
                     # 🔵 DOUBLE-CHECK: Ensure net_profit is positive (profitable after all costs)
                     # This is a safety check - net_profit already accounts for fees, slippage, latency
@@ -827,7 +827,7 @@ class IntraExchangeArbitrageEngine:
             if ':' in symbol:
                 continue
             
-            base = market_info.get('base', '').strip().upper()
+                base = market_info.get('base', '').strip().upper()
             quote = market_info.get('quote', '').strip().upper()
             
             # Count all pairs (USD/USDC/USDT AND crypto-to-crypto), exclude fiat
@@ -1105,7 +1105,7 @@ class IntraExchangeArbitrageEngine:
         Re-check spread right before execution
         Opportunities disappear fast - this prevents bad trades
         """
-        exchange_id = opportunity.exchange
+            exchange_id = opportunity.exchange
         exchange_marker = "🔵" if exchange_id == 'coinbase' else "🟢"
         
         try:
@@ -1548,7 +1548,7 @@ class IntraExchangeArbitrageEngine:
                     position_multiplier = 1.0  # Full size
                 elif spread_quality > 2.0:  # 2x minimum spread
                     position_multiplier = 0.8  # 80% size
-                else:
+            else:
                     position_multiplier = 0.6  # 60% size
                 
                 # Apply multiplier to desired size
@@ -1588,7 +1588,7 @@ class IntraExchangeArbitrageEngine:
                 if trade_size < opportunity.trade_size_usd:
                     logger.info(f"   💡 Adjusted trade size: ${trade_size:.2f} (available) vs ${opportunity.trade_size_usd:.2f} (desired)")
                 else:
-                    logger.info(f"   📊 Fixed sizing: ${trade_size:.2f} position")
+                logger.info(f"   📊 Fixed sizing: ${trade_size:.2f} position")
             
             base_amount = trade_size / opportunity.buy_price
             logger.info(f"   💵 Trade size: ${trade_size:.2f} → {base_amount:.6f} {opportunity.base_crypto}")
@@ -1614,14 +1614,14 @@ class IntraExchangeArbitrageEngine:
             logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Creating buy order - amount={base_amount:.6f}, price=${buy_price_limit:.6f}")
             
             try:
-                buy_order = await self.exchange_manager.create_order(
-                    exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
-                    symbol=opportunity.buy_pair,
-                    order_type='limit',
-                    side='buy',
-                    amount=base_amount,
-                    price=buy_price_limit
-                )
+            buy_order = await self.exchange_manager.create_order(
+                exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
+                symbol=opportunity.buy_pair,
+                order_type='limit',
+                side='buy',
+                amount=base_amount,
+                price=buy_price_limit
+            )
                 logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Buy order response = {buy_order}")
                 
                 buy_order_id = buy_order.get('id') if buy_order else None
@@ -1777,14 +1777,14 @@ class IntraExchangeArbitrageEngine:
             logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Creating sell order - amount={base_amount:.6f}, price=${sell_price_limit:.6f}")
             
             try:
-                sell_order = await self.exchange_manager.create_order(
-                    exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
-                    symbol=opportunity.sell_pair,
-                    order_type='limit',
-                    side='sell',
-                    amount=base_amount,
-                    price=sell_price_limit
-                )
+            sell_order = await self.exchange_manager.create_order(
+                exchange_id=exchange_id,  # CRITICAL: Pass exchange_id explicitly
+                symbol=opportunity.sell_pair,
+                order_type='limit',
+                side='sell',
+                amount=base_amount,
+                price=sell_price_limit
+            )
                 logger.debug(f"{exchange_marker} [{exchange_id.upper()}]       Sell order response = {sell_order}")
                 
                 sell_order_id = sell_order.get('id') if sell_order else None
@@ -2035,19 +2035,19 @@ class IntraExchangeArbitrageEngine:
                 logger.info(f"      Opportunities found: {coinbase_results.get('opportunities_found', 0)}")
                 logger.info(f"      Trades executed: {coinbase_results.get('trades_executed', 0)}")
                 logger.info(f"      Trades skipped: {coinbase_results.get('trades_skipped', 0)}")
-                logger.info(f"")
+                                logger.info(f"")
                 logger.info(f"   ✅ GEMINI:")
                 logger.info(f"      Opportunities found: {gemini_results.get('opportunities_found', 0)}")
                 logger.info(f"      Trades executed: {gemini_results.get('trades_executed', 0)}")
                 logger.info(f"      Trades skipped: {gemini_results.get('trades_skipped', 0)}")
-                logger.info(f"")
+                                logger.info(f"")
                 logger.info(f"   📈 TOTAL:")
                 total_found = coinbase_results.get('opportunities_found', 0) + gemini_results.get('opportunities_found', 0)
                 total_executed = coinbase_results.get('trades_executed', 0) + gemini_results.get('trades_executed', 0)
                 logger.info(f"      Opportunities found: {total_found}")
                 logger.info(f"      Trades executed: {total_executed}")
                 logger.info("=" * 80)
-                logger.info("")
+                    logger.info("")
                 
                 # Print statistics
                 self._print_statistics()

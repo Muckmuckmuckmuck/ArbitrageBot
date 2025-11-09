@@ -412,6 +412,52 @@ class CoinbaseGeminiExchangeManager:
             logger.error(f"Error fetching order book {symbol} from {exchange_id}: {e}")
             raise
     
+    async def fetch_ohlcv(
+        self,
+        exchange_id: str,
+        symbol: str,
+        *,
+        timeframe: str = "1m",
+        since: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[List[float]]:
+        exchange = self.get_exchange(exchange_id)
+        exchange_marker = "🔵" if exchange_id == EXCHANGE_COINBASE else "🟢"
+
+        async def _attempt():
+            result = exchange.fetch_ohlcv(
+                symbol, timeframe=timeframe, since=since, limit=limit
+            )
+            if hasattr(result, "__await__"):
+                result = await result
+            return result
+
+        try:
+            candles = await self._call_with_retries(
+                _attempt,
+                retry_context=f"{exchange_id} ohlcv {symbol}",
+            )
+            logger.debug(
+                "   %s [%s] OHLCV fetched for %s timeframe=%s limit=%s count=%s",
+                exchange_marker,
+                exchange_id.upper(),
+                symbol,
+                timeframe,
+                limit,
+                len(candles) if candles else 0,
+            )
+            return candles
+        except Exception as exc:
+            logger.debug(
+                "   %s [%s] Error fetching OHLCV %s timeframe=%s: %s",
+                exchange_marker,
+                exchange_id.upper(),
+                symbol,
+                timeframe,
+                exc,
+            )
+            raise
+
     async def create_order(self, exchange_id: str, symbol: str, order_type: str, 
                           side: str, amount: float, price: Optional[float] = None, 
                           params: Optional[Dict] = None) -> Dict:
@@ -993,7 +1039,7 @@ class CoinbaseGeminiExchangeManager:
         fetch_params: Dict[str, Any] = {}
         if params:
             fetch_params.update(params)
-            
+        
         # 🔵 Add network if provided (required for ERC-20 tokens on Coinbase)
         if exchange_id == EXCHANGE_COINBASE and network:
             fetch_params['network'] = network

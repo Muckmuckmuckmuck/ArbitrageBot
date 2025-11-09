@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import random
 import time
 from collections import defaultdict, deque
@@ -198,6 +199,25 @@ class ExchangeManagerAdapter:
             since,
         )
         return await self._manager.fetch_my_trades(exchange_id, symbol, since)
+
+    async def fetch_ohlcv(
+        self,
+        exchange_id: str,
+        symbol: str,
+        timeframe: str = "1m",
+        since: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[List[float]]:
+        logger.info(
+            "[ADAPTER] fetch_ohlcv %s %s timeframe=%s limit=%s",
+            exchange_id.upper(),
+            symbol,
+            timeframe,
+            limit,
+        )
+        return await self._manager.fetch_ohlcv(
+            exchange_id, symbol, timeframe=timeframe, since=since, limit=limit
+        )
 
     async def fetch_balance(self, exchange_id: str) -> Dict:
         logger.info("[ADAPTER] fetch_balance %s", exchange_id.upper())
@@ -714,9 +734,14 @@ class DualSideQuoteManager:
         self._ioc_slippage = Decimal("0.0015")
         self._min_conversion_chunk = Decimal("10")
         self._orphan_cancel_age_s = 90.0
+        self._volatility_cache: Dict[
+            Tuple[str, str], Tuple[float, Optional[float]]
+        ] = {}
+        self._volatility_refresh_s = 120.0
 
-    async def ensure_quotes(self) -> None:
-        for cfg in self._pair_configs:
+    async def ensure_quotes(self, prioritized: Optional[Sequence[PairConfig]] = None) -> None:
+        configs: Sequence[PairConfig] = prioritized if prioritized is not None else self._pair_configs
+        for cfg in configs:
             now = time.time()
             cooldown_until = self._pair_cooldowns.get((cfg.exchange_id, cfg.symbol))
             if cooldown_until and now < cooldown_until:
@@ -747,6 +772,55 @@ class DualSideQuoteManager:
                 )
             finally:
                 self._last_quote_time[(cfg.exchange_id, cfg.symbol)] = time.time()
+
+    async def _get_short_term_volatility(
+        self, cfg: PairConfig, limit: int = 30
+    ) -> Optional[float]:
+        cache_key = (cfg.exchange_id, cfg.symbol)
+        cached = self._volatility_cache.get(cache_key)
+        now = time.time()
+        if cached and now - cached[0] < self._volatility_refresh_s:
+            return cached[1]
+        try:
+            candles = await self._adapter.fetch_ohlcv(
+                cfg.exchange_id, cfg.symbol, timeframe="1m", limit=limit
+            )
+        except Exception as exc:
+            logger.debug(
+                "[VOL] Unable to fetch OHLCV for %s %s: %s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                exc,
+            )
+            return cached[1] if cached else None
+        closes: List[float] = [
+            float(candle[4])
+            for candle in candles
+            if candle and len(candle) > 4 and candle[4]
+        ]
+        if len(closes) < 5:
+            return None
+        returns: List[float] = []
+        for i in range(1, len(closes)):
+            prev = closes[i - 1]
+            curr = closes[i]
+            if prev <= 0:
+                continue
+            returns.append((curr / prev) - 1.0)
+        if len(returns) < 4:
+            return None
+        mean = sum(returns) / len(returns)
+        variance = sum((r - mean) ** 2 for r in returns) / len(returns)
+        volatility = math.sqrt(variance)
+        self._volatility_cache[cache_key] = (now, volatility)
+        logger.debug(
+            "[VOL] %s %s volatility=%.6f (samples=%s)",
+            cfg.exchange_id.upper(),
+            cfg.symbol,
+            volatility,
+            len(returns),
+        )
+        return volatility
 
     async def _ensure_pair(self, cfg: PairConfig) -> None:
         if not self._adapter.is_symbol_supported(cfg.exchange_id, cfg.symbol):
@@ -807,6 +881,7 @@ class DualSideQuoteManager:
         best_ask = Decimal(str(order_book["asks"][0][0]))
         bid_depth = sum(Decimal(str(entry[1])) * Decimal(str(entry[0])) for entry in order_book["bids"][:3])
         ask_depth = sum(Decimal(str(entry[1])) * Decimal(str(entry[0])) for entry in order_book["asks"][:3])
+        depth_capacity = min(bid_depth, ask_depth)
 
         logger.info(
             "[QUOTE] %s %s best_bid=%s best_ask=%s bid_depth=%.2f ask_depth=%.2f",
@@ -856,6 +931,29 @@ class DualSideQuoteManager:
                 fee_floor_bps,
             )
             adjusted_spread_bps = fee_floor_bps
+        volatility = await self._get_short_term_volatility(cfg)
+        volatility_bps: Optional[Decimal] = None
+        if volatility is not None:
+            volatility_bps = (Decimal(str(volatility)) * Decimal("10000")).quantize(
+                Decimal("0.01")
+            )
+            vol_bump = (volatility_bps * Decimal("0.25")).quantize(Decimal("0.01"))
+            vol_bump = min(vol_bump, Decimal("150"))
+            adjusted_spread_bps += vol_bump
+            if volatility > 0.015:
+                adjusted_price_improve_bps = max(
+                    adjusted_price_improve_bps - Decimal("1"), Decimal("1")
+                )
+            elif volatility < 0.004:
+                adjusted_price_improve_bps += Decimal("1")
+            logger.debug(
+                "[QUOTE] Volatility adjust %s %s vol_bps=%s bump=%s price_improve=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                volatility_bps,
+                vol_bump,
+                adjusted_price_improve_bps,
+            )
         min_spread = adjusted_spread_bps / Decimal("10000")
         spread = max((best_ask - best_bid) / mid, min_spread)
         price_improve = adjusted_price_improve_bps / Decimal("10000")
@@ -957,8 +1055,39 @@ class DualSideQuoteManager:
                     usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
                     break
 
+        if volatility is not None:
+            if volatility > 0.015:
+                dynamic_multiplier *= Decimal("0.6")
+            elif volatility > 0.01:
+                dynamic_multiplier *= Decimal("0.8")
+            elif volatility < 0.003:
+                dynamic_multiplier *= Decimal("1.15")
+        if depth_capacity > Decimal("0"):
+            depth_ratio = depth_capacity / max(target_order_value, Decimal("1"))
+        else:
+            depth_ratio = Decimal("0")
+        if depth_ratio < Decimal("1.5"):
+            dynamic_multiplier *= Decimal("0.6")
+        elif depth_ratio < Decimal("2.5"):
+            dynamic_multiplier *= Decimal("0.85")
+        elif depth_ratio > Decimal("6"):
+            dynamic_multiplier *= Decimal("1.6")
+        elif depth_ratio > Decimal("3.5"):
+            dynamic_multiplier *= Decimal("1.25")
         if usable_quote > target_order_value * Decimal("4"):
-            dynamic_multiplier = Decimal("1.5")
+            dynamic_multiplier *= Decimal("1.3")
+        elif usable_quote < Decimal(cfg.min_notional_usd):
+            dynamic_multiplier *= Decimal("0.7")
+        dynamic_multiplier = min(max(dynamic_multiplier, Decimal("0.35")), Decimal("2.5"))
+        logger.debug(
+            "[QUOTE] %s %s dynamic multiplier=%s depth_ratio=%s volatility_bps=%s usable_quote=%s",
+            cfg.exchange_id.upper(),
+            cfg.symbol,
+            dynamic_multiplier,
+            depth_ratio.quantize(Decimal("0.01")) if depth_ratio > 0 else depth_ratio,
+            volatility_bps,
+            usable_quote,
+        )
         order_value = target_order_value * dynamic_multiplier
         order_value = min(order_value, usable_quote * Decimal("0.5") if usable_quote > 0 else order_value)
         order_value = max(order_value, Decimal(cfg.min_notional_usd))
@@ -1575,6 +1704,9 @@ class InstantFillMarketMaker:
             "coinbase": Decimal("80"),
             "gemini": Decimal("80"),
         }
+        self._pair_stats: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._max_active_pairs: int = 12
+        self._last_rank_snapshot: List[Dict[str, Any]] = []
         minimum_notional = Decimal("10.00")
         for cfg in self._pair_configs:
             if cfg.order_size_usd < minimum_notional:
@@ -1630,6 +1762,88 @@ class InstantFillMarketMaker:
         self._metrics_interval = 300.0
         self._rebuild_pair_maps()
 
+    def _get_pair_stats(self, pair_key: Tuple[str, str]) -> Dict[str, Any]:
+        stats = self._pair_stats.get(pair_key)
+        if stats is None:
+            stats = {
+                "wins": 0,
+                "losses": 0,
+                "break_even": 0,
+                "trade_count": 0,
+                "pnl": Decimal("0"),
+                "volume": Decimal("0"),
+                "avg_edge_bps": Decimal("0"),
+                "last_fill_ts": None,
+                "loss_streak": 0,
+            }
+            self._pair_stats[pair_key] = stats
+        return stats
+
+    def _select_active_pairs(self) -> List[PairConfig]:
+        metrics = self._fill_engine.get_metrics()
+        pending_raw = metrics.get("pending_by_pair", {})
+        pending_by_pair: Dict[Tuple[str, str], int] = {}
+        for key, value in pending_raw.items():
+            if isinstance(key, tuple) and len(key) == 2:
+                pending_by_pair[(key[0], key[1])] = value
+            elif isinstance(key, str) and "|" in key:
+                exchange_id, symbol = key.split("|", 1)
+                pending_by_pair[(exchange_id, symbol)] = value
+        now = time.time()
+        ranked: List[Tuple[PairConfig, float]] = []
+        snapshot: List[Dict[str, Any]] = []
+
+        for cfg in self._pair_configs:
+            pair_key = (cfg.exchange_id, cfg.symbol)
+            stats = self._pair_stats.get(pair_key)
+            trades = stats["trade_count"] if stats else 0
+            wins = stats["wins"] if stats else 0
+            losses = stats["losses"] if stats else 0
+            loss_streak = stats["loss_streak"] if stats else 0
+            avg_edge = float(stats["avg_edge_bps"]) if stats else 0.0
+            last_fill_ts = stats["last_fill_ts"] if stats else None
+            last_fill_age = (now - last_fill_ts) if last_fill_ts else None
+            pending = pending_by_pair.get(pair_key, 0)
+
+            if trades > 0:
+                win_rate = wins / trades
+            else:
+                win_rate = 0.55  # optimistic prior for new pairs
+
+            base_score = 0.0 if trades > 0 else 15.0
+            score = base_score
+            score += avg_edge * 0.6
+            score += (win_rate - 0.5) * 200.0
+            if last_fill_age is not None:
+                score -= min(last_fill_age / 180.0, 20.0)
+            score -= loss_streak * 15.0
+            if pending:
+                score -= min(pending * 8.0, 24.0)
+
+            ranked.append((cfg, score))
+            snapshot.append(
+                {
+                    "exchange": cfg.exchange_id,
+                    "symbol": cfg.symbol,
+                    "score": round(score, 2),
+                    "win_rate_pct": round(win_rate * 100.0, 2),
+                    "avg_edge_bps": round(avg_edge, 2),
+                    "loss_streak": loss_streak,
+                    "trades": trades,
+                    "pending": pending,
+                    "last_fill_age_s": round(last_fill_age, 1) if last_fill_age is not None else None,
+                }
+            )
+
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        snapshot.sort(key=lambda item: item["score"], reverse=True)
+        self._last_rank_snapshot = snapshot[:20]
+
+        active_count = min(self._max_active_pairs, len(ranked))
+        if active_count == 0:
+            return list(self._pair_configs)
+        return [cfg for cfg, _ in ranked[:active_count]]
+
     async def start(self) -> None:
         if self._running:
             return
@@ -1676,7 +1890,20 @@ class InstantFillMarketMaker:
     async def _quote_loop(self) -> None:
         while self._running:
             logger.info("[LOOP] Quote loop tick")
-            await self._quote_manager.ensure_quotes()
+            active_pairs = self._select_active_pairs()
+            if active_pairs:
+                summary = [
+                    f"{cfg.exchange_id.upper()}:{cfg.symbol}"
+                    for cfg in active_pairs[:5]
+                ]
+                logger.info(
+                    "[LOOP] Active quoting set (%s/%s): %s%s",
+                    len(active_pairs),
+                    len(self._pair_configs),
+                    ", ".join(summary),
+                    " ..." if len(active_pairs) > 5 else "",
+                )
+            await self._quote_manager.ensure_quotes(active_pairs)
             await asyncio.sleep(1.0)
 
     async def _balance_refresh_loop(self) -> None:
@@ -1733,6 +1960,11 @@ class InstantFillMarketMaker:
                     metrics.get("fills_by_pair"),
                     exposure_snapshot,
                 )
+                if self._last_rank_snapshot:
+                    logger.info(
+                        "[METRICS] ranking_top=%s",
+                        self._last_rank_snapshot[:5],
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -1868,6 +2100,8 @@ class InstantFillMarketMaker:
             fill.price,
         )
         pair_key = (order.exchange_id, order.symbol)
+        stats = self._get_pair_stats(pair_key)
+        stats["last_fill_ts"] = time.time()
         if order.side == OrderSide.BUY:
             self._position_tracker[pair_key].append((fill.amount, fill.price))
             logger.info(
@@ -1882,12 +2116,18 @@ class InstantFillMarketMaker:
             profit = Decimal("0")
             fifo = self._position_tracker[pair_key]
             updated_fifo: List[Tuple[Decimal, Decimal]] = []
+            entry_notional = Decimal("0")
+            exit_notional = Decimal("0")
             for bought_amount, bought_price in fifo:
                 if remaining <= Decimal("0"):
                     updated_fifo.append((bought_amount, bought_price))
                     continue
                 matched = min(remaining, bought_amount)
-                profit += matched * (fill.price - bought_price)
+                entry_value = matched * bought_price
+                exit_value = matched * fill.price
+                entry_notional += entry_value
+                exit_notional += exit_value
+                profit += exit_value - entry_value
                 remaining -= matched
                 leftover = bought_amount - matched
                 if leftover > Decimal("0"):
@@ -1903,12 +2143,44 @@ class InstantFillMarketMaker:
             self._realized_pnl += profit
             self._realized_volume += fill.price * fill.amount
             self._trade_count += 1
+            stats["trade_count"] += 1
+            stats["pnl"] += profit
+            stats["volume"] += exit_notional
+            edge_bps = Decimal("0")
+            if entry_notional > Decimal("0"):
+                edge_bps = ((exit_notional / entry_notional) - Decimal("1")) * Decimal("10000")
+                prev_avg = stats["avg_edge_bps"]
+                trades = stats["trade_count"]
+                if trades > 0:
+                    stats["avg_edge_bps"] = (
+                        (prev_avg * Decimal(trades - 1)) + edge_bps
+                    ) / Decimal(trades)
+                else:
+                    stats["avg_edge_bps"] = edge_bps
+            if profit > Decimal("0"):
+                stats["wins"] += 1
+                stats["loss_streak"] = 0
             if profit > Decimal("0"):
                 self._wins += 1
             elif profit < Decimal("0"):
+                stats["losses"] += 1
+                stats["loss_streak"] += 1
                 self._losses += 1
             else:
+                stats["break_even"] += 1
+                stats["loss_streak"] = 0
                 self._break_even += 1
+            if profit < Decimal("0") and stats["loss_streak"] >= 3:
+                cooldown_period = 180.0
+                until = time.time() + cooldown_period
+                self._pair_cooldowns[(order.exchange_id, order.symbol)] = until
+                logger.warning(
+                    "[FILL] Activated cooldown for %s %s after %s consecutive losses (%.1fs)",
+                    order.exchange_id.upper(),
+                    order.symbol,
+                    stats["loss_streak"],
+                    cooldown_period,
+                )
             self._log_pnl_summary(order.exchange_id)
 
     async def _place_inventory_hedge(self, cfg: PairConfig, amount: Decimal) -> bool:

@@ -1,76 +1,254 @@
 #!/usr/bin/env python3
 """
-Simplified Gemini market making engine built on top of the instant-fill OMS.
+Dynamic Gemini market making engine built on the instant-fill OMS.
+
+This wrapper discovers Gemini spot markets whose 24h quote volume exceeds
+$50,000 and produces `PairConfig` entries for each. Core pairs keep tuned
+spread/order sizing overrides; everything else inherits safe defaults that
+respect fee floors and minimum notionals.
 """
 
 from __future__ import annotations
 
 import asyncio
-from decimal import Decimal
 import logging
-from typing import List, Optional
+from decimal import Decimal
+from typing import Dict, List, Optional, Tuple
 
-from coinbase_gemini_exchanges import CoinbaseGeminiExchangeManager
+from coinbase_gemini_exchanges import (
+    CoinbaseGeminiExchangeManager,
+    EXCHANGE_GEMINI,
+)
 from database_manager import DatabaseManager
 from instant_fill_oms import ExchangeManagerAdapter, InstantFillMarketMaker, PairConfig
 
+logger = logging.getLogger(__name__)
 
-def _gemini_pair_configs() -> List[PairConfig]:
-    configs = [
-        PairConfig(
-            "gemini",
-            "BTC/USD",
-            Decimal("25.00"),
-            min_spread_bps=110,
-            max_quote_interval_s=20.0,
-            price_improve_bps=2,
-            min_notional_usd=Decimal("15.00"),
-            fee_floor_bps=100,
-            min_volume_usd=Decimal("100000"),
-        ),
-        PairConfig(
-            "gemini",
-            "ETH/USD",
-            Decimal("18.00"),
-            min_spread_bps=125,
-            max_quote_interval_s=20.0,
-            price_improve_bps=2,
-            min_notional_usd=Decimal("12.00"),
-            fee_floor_bps=115,
-            min_volume_usd=Decimal("100000"),
-        ),
-        PairConfig(
-            "gemini",
-            "SOL/USD",
-            Decimal("15.00"),
-            min_spread_bps=140,
-            max_quote_interval_s=20.0,
-            price_improve_bps=2,
-            min_notional_usd=Decimal("10.00"),
-            fee_floor_bps=125,
-            min_volume_usd=Decimal("100000"),
-        ),
-        PairConfig(
-            "gemini",
-            "LINK/USD",
-            Decimal("12.00"),
-            min_spread_bps=150,
-            max_quote_interval_s=20.0,
-            price_improve_bps=2,
-            min_notional_usd=Decimal("10.00"),
-            fee_floor_bps=135,
-            min_volume_usd=Decimal("100000"),
-        ),
-    ]
-    for cfg in configs:
-        logging.getLogger(__name__).info(
-            "[CONFIG] Gemini pair %s size_usd=%s min_spread_bps=%s quote_interval=%s",
-            cfg.symbol,
-            cfg.order_size_usd,
-            cfg.min_spread_bps,
-            cfg.max_quote_interval_s,
+MIN_VOLUME_USD = Decimal("50000")
+DEFAULT_ORDER_SIZE_USD = Decimal("12.00")
+DEFAULT_MIN_SPREAD_BPS = 160
+DEFAULT_PRICE_IMPROVEMENT_BPS = 3
+DEFAULT_MAX_QUOTE_INTERVAL_S = 20.0
+DEFAULT_FEE_FLOOR_BPS = 110
+DEFAULT_MIN_NOTIONAL_USD = Decimal("10.00")
+DEFAULT_MIN_DEPTH_USD = Decimal("15000")
+ALLOWED_QUOTES = {"USD", "USDC", "GUSD"}
+
+PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
+    "BTC/USD": {
+        "order_size_usd": Decimal("25.00"),
+        "min_spread_bps": 110,
+        "price_improve_bps": 2,
+        "min_depth_usd": Decimal("40000"),
+        "fee_floor_bps": 100,
+    },
+    "BTC/USDC": {
+        "order_size_usd": Decimal("25.00"),
+        "min_spread_bps": 110,
+        "price_improve_bps": 2,
+        "min_depth_usd": Decimal("40000"),
+        "fee_floor_bps": 100,
+    },
+    "ETH/USD": {
+        "order_size_usd": Decimal("18.00"),
+        "min_spread_bps": 125,
+        "price_improve_bps": 2,
+        "fee_floor_bps": 115,
+    },
+    "ETH/USDC": {
+        "order_size_usd": Decimal("18.00"),
+        "min_spread_bps": 125,
+        "price_improve_bps": 2,
+        "fee_floor_bps": 115,
+    },
+    "SOL/USD": {
+        "order_size_usd": Decimal("15.00"),
+        "min_spread_bps": 140,
+        "price_improve_bps": 2,
+        "fee_floor_bps": 125,
+    },
+    "SOL/USDC": {
+        "order_size_usd": Decimal("15.00"),
+        "min_spread_bps": 140,
+        "price_improve_bps": 2,
+        "fee_floor_bps": 125,
+    },
+    "LINK/USD": {
+        "order_size_usd": Decimal("12.00"),
+        "min_spread_bps": 150,
+        "price_improve_bps": 2,
+        "fee_floor_bps": 135,
+    },
+    "XRP/USD": {
+        "order_size_usd": Decimal("12.00"),
+        "min_spread_bps": 155,
+        "price_improve_bps": 3,
+    },
+    "DOGE/USD": {
+        "order_size_usd": Decimal("12.00"),
+        "min_spread_bps": 175,
+        "price_improve_bps": 4,
+    },
+}
+
+
+def _market_is_spot(market: Dict) -> bool:
+    if not market:
+        return False
+    if not market.get("active", True):
+        return False
+    if market.get("future") or market.get("swap"):
+        return False
+    if ":" in str(market.get("symbol", "")):
+        return False
+    return True
+
+
+def _extract_quote_volume_usd(symbol: str, ticker: Dict) -> Optional[Decimal]:
+    if not ticker:
+        return None
+
+    for key in ("quoteVolume", "quote_volume"):
+        volume_val = ticker.get(key)
+        if volume_val:
+            try:
+                return Decimal(str(volume_val))
+            except Exception:  # pragma: no cover - defensive
+                logger.debug("[GEMINI CONFIG] Unable to parse %s %s", symbol, key)
+                break
+
+    base_volume = ticker.get("baseVolume") or ticker.get("volume")
+    last_price = ticker.get("last") or ticker.get("close")
+    if base_volume and last_price:
+        try:
+            return Decimal(str(base_volume)) * Decimal(str(last_price))
+        except Exception:  # pragma: no cover - defensive
+            logger.debug(
+                "[GEMINI CONFIG] Failed fallback volume computation for %s", symbol
+            )
+
+    info = ticker.get("info") or {}
+    for key in ("volumeUsd", "volume_usd", "quoteVolumeUsd"):
+        if key in info:
+            try:
+                return Decimal(str(info[key]))
+            except Exception:  # pragma: no cover - defensive
+                logger.debug("[GEMINI CONFIG] Unable to parse info[%s] for %s", key, symbol)
+    return None
+
+
+def _resolve_decimal(value: object, default: Decimal) -> Decimal:
+    if value is None:
+        return default
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("[GEMINI CONFIG] Falling back to default decimal %s", default)
+        return default
+
+
+def _make_pair_config(symbol: str, override: Dict[str, object]) -> PairConfig:
+    order_size = _resolve_decimal(
+        override.get("order_size_usd"), DEFAULT_ORDER_SIZE_USD
+    )
+    min_notional = _resolve_decimal(
+        override.get("min_notional_usd"), DEFAULT_MIN_NOTIONAL_USD
+    )
+    min_depth = _resolve_decimal(
+        override.get("min_depth_usd"), DEFAULT_MIN_DEPTH_USD
+    )
+    min_spread_bps = int(override.get("min_spread_bps", DEFAULT_MIN_SPREAD_BPS))
+    price_improve_bps = int(
+        override.get("price_improve_bps", DEFAULT_PRICE_IMPROVEMENT_BPS)
+    )
+    max_quote_interval = float(
+        override.get("max_quote_interval_s", DEFAULT_MAX_QUOTE_INTERVAL_S)
+    )
+    fee_floor_bps = int(override.get("fee_floor_bps", DEFAULT_FEE_FLOOR_BPS))
+
+    return PairConfig(
+        EXCHANGE_GEMINI,
+        symbol,
+        order_size_usd=order_size,
+        min_spread_bps=min_spread_bps,
+        max_quote_interval_s=max_quote_interval,
+        min_depth_usd=min_depth,
+        min_notional_usd=min_notional,
+        price_improve_bps=price_improve_bps,
+        fee_floor_bps=fee_floor_bps,
+        min_volume_usd=MIN_VOLUME_USD,
+    )
+
+
+async def _gemini_pair_configs(
+    exchange_manager: CoinbaseGeminiExchangeManager,
+) -> List[PairConfig]:
+    exchange = exchange_manager.get_exchange(EXCHANGE_GEMINI)
+    markets = getattr(exchange, "markets", {}) or {}
+
+    candidates: List[str] = []
+    for symbol, market in markets.items():
+        if not _market_is_spot(market):
+            continue
+        quote = str(market.get("quote", "")).upper()
+        if quote not in ALLOWED_QUOTES:
+            continue
+        candidates.append(symbol)
+
+    discovered: List[Tuple[str, Decimal, PairConfig]] = []
+    for symbol in sorted(candidates):
+        try:
+            ticker = await exchange_manager.fetch_ticker(EXCHANGE_GEMINI, symbol)
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.info(
+                "[GEMINI CONFIG] Skipping %s fetch_ticker error: %s",
+                symbol,
+                exc,
+            )
+            continue
+
+        volume = _extract_quote_volume_usd(symbol, ticker)
+        if volume is None:
+            logger.debug(
+                "[GEMINI CONFIG] Skipping %s: unable to determine 24h volume", symbol
+            )
+            continue
+        if volume < MIN_VOLUME_USD:
+            logger.debug(
+                "[GEMINI CONFIG] Skipping %s: volume %s < %s",
+                symbol,
+                volume,
+                MIN_VOLUME_USD,
+            )
+            continue
+
+        override = PAIR_OVERRIDES.get(symbol, {})
+        cfg = _make_pair_config(symbol, override)
+        discovered.append((symbol, volume, cfg))
+
+    discovered.sort(key=lambda item: item[1], reverse=True)
+
+    if not discovered:
+        raise RuntimeError(
+            "No Gemini markets satisfied the $50k 24h volume filter."
         )
-    return configs
+
+    logger.info(
+        "[GEMINI CONFIG] Gemini high-volume markets selected: %d (threshold=%s)",
+        len(discovered),
+        MIN_VOLUME_USD,
+    )
+    for symbol, volume, _ in discovered[:40]:
+        logger.info("[GEMINI CONFIG]   - %s volume≈%s", symbol, volume)
+    if len(discovered) > 40:
+        logger.info(
+            "[GEMINI CONFIG]   ... %d additional markets omitted from log",
+            len(discovered) - 40,
+        )
+
+    return [cfg for _, _, cfg in discovered]
 
 
 class GeminiMarketMakingEngine:
@@ -82,16 +260,18 @@ class GeminiMarketMakingEngine:
         db_manager: DatabaseManager,
         pair_configs: Optional[List[PairConfig]] = None,
     ) -> None:
-        adapter = ExchangeManagerAdapter(exchange_manager)
-        configs = pair_configs or _gemini_pair_configs()
-        logging.getLogger(__name__).info(
-            "[INIT] GeminiMarketMakingEngine pairs=%s",
-            [cfg.symbol for cfg in configs],
-        )
-        self._maker = InstantFillMarketMaker(adapter, db_manager, configs)
+        self._exchange_manager = exchange_manager
+        self._db_manager = db_manager
+        self._adapter = ExchangeManagerAdapter(exchange_manager)
+        self._provided_configs = pair_configs
+        self._maker: Optional[InstantFillMarketMaker] = None
         self._task: Optional[asyncio.Task] = None
+        self._maker_lock = asyncio.Lock()
 
     async def start(self) -> None:
+        await self._ensure_maker()
+        if self._maker is None:  # pragma: no cover - defensive
+            raise RuntimeError("InstantFillMarketMaker failed to initialize")
         await self._maker.start()
         if self._task is None:
             self._task = asyncio.create_task(self._run_forever())
@@ -104,7 +284,30 @@ class GeminiMarketMakingEngine:
             except asyncio.CancelledError:
                 pass
             self._task = None
-        await self._maker.stop()
+        if self._maker:
+            await self._maker.stop()
+            self._maker = None
+
+    async def _ensure_maker(self) -> None:
+        if self._maker:
+            return
+        async with self._maker_lock:
+            if self._maker:
+                return
+            configs = self._provided_configs
+            if configs is None:
+                configs = await _gemini_pair_configs(self._exchange_manager)
+            if not configs:
+                raise RuntimeError("No Gemini pair configs available")
+            logger.info(
+                "[GEMINI INIT] Market maker configured for %d pairs",
+                len(configs),
+            )
+            self._maker = InstantFillMarketMaker(
+                self._adapter,
+                self._db_manager,
+                configs,
+            )
 
     async def _run_forever(self) -> None:
         try:
