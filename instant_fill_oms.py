@@ -50,6 +50,7 @@ class PairConfig:
     min_notional_usd: Decimal = Decimal("10.00")
     price_improve_bps: int = 5  # 0.05%
     fee_floor_bps: int = 0
+    min_volume_usd: Decimal = Decimal("0")
 
 
 @dataclass(slots=True)
@@ -755,6 +756,37 @@ class DualSideQuoteManager:
                 cfg.exchange_id,
             )
             return
+
+        if cfg.min_volume_usd > 0:
+            try:
+                ticker = await self._adapter.fetch_ticker(cfg.exchange_id, cfg.symbol)
+            except Exception as exc:
+                logger.info(
+                    "[QUOTE] Skip %s %s: failed to fetch ticker for volume check (%s)",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    exc,
+                )
+                return
+            quote_volume = self._extract_quote_volume_usd(ticker, cfg.symbol)
+            if quote_volume is None:
+                logger.debug(
+                    "[QUOTE] Skip %s %s: unable to determine quote volume from ticker %s",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    ticker,
+                )
+                return
+            if quote_volume < cfg.min_volume_usd:
+                logger.info(
+                    "[QUOTE] Skip %s %s: 24h volume %s < min_volume_usd %s",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    quote_volume,
+                    cfg.min_volume_usd,
+                )
+                return
+
         try:
             order_book = await self._adapter.fetch_order_book(
                 cfg.exchange_id, cfg.symbol, depth=5
@@ -1182,6 +1214,48 @@ class DualSideQuoteManager:
             )
 
         return cancelled
+
+    @staticmethod
+    def _extract_quote_volume_usd(ticker: Dict[str, Any], symbol: str) -> Optional[Decimal]:
+        keys = (
+            "quoteVolume",
+            "quote_volume",
+            "quoteVolume24h",
+            "info.quoteVolume",
+            "info.quote_volume",
+        )
+        for key in keys:
+            ref = ticker
+            for part in key.split("."):
+                if isinstance(ref, dict) and part in ref:
+                    ref = ref[part]
+                else:
+                    ref = None
+                    break
+            if ref is not None:
+                try:
+                    volume = Decimal(str(ref))
+                    if volume >= Decimal("0"):
+                        return volume
+                except Exception:
+                    continue
+        base_volume = ticker.get("baseVolume") or ticker.get("base_volume")
+        last_price = (
+            ticker.get("last")
+            or ticker.get("close")
+            or ticker.get("average")
+            or ticker.get("ask")
+            or ticker.get("bid")
+        )
+        if base_volume is not None and last_price is not None:
+            try:
+                base = Decimal(str(base_volume))
+                price = Decimal(str(last_price))
+                if base >= Decimal("0") and price > Decimal("0"):
+                    return base * price
+            except Exception:
+                return None
+        return None
 
     async def _sync_side(
         self,

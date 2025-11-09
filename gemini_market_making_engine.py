@@ -26,6 +26,7 @@ def _gemini_pair_configs() -> List[PairConfig]:
             price_improve_bps=2,
             min_notional_usd=Decimal("15.00"),
             fee_floor_bps=100,
+            min_volume_usd=Decimal("100000"),
         ),
         PairConfig(
             "gemini",
@@ -36,6 +37,7 @@ def _gemini_pair_configs() -> List[PairConfig]:
             price_improve_bps=2,
             min_notional_usd=Decimal("12.00"),
             fee_floor_bps=115,
+            min_volume_usd=Decimal("100000"),
         ),
         PairConfig(
             "gemini",
@@ -46,6 +48,7 @@ def _gemini_pair_configs() -> List[PairConfig]:
             price_improve_bps=2,
             min_notional_usd=Decimal("10.00"),
             fee_floor_bps=125,
+            min_volume_usd=Decimal("100000"),
         ),
         PairConfig(
             "gemini",
@@ -56,6 +59,7 @@ def _gemini_pair_configs() -> List[PairConfig]:
             price_improve_bps=2,
             min_notional_usd=Decimal("10.00"),
             fee_floor_bps=135,
+            min_volume_usd=Decimal("100000"),
         ),
     ]
     for cfg in configs:

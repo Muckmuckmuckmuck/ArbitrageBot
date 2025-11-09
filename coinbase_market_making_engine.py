@@ -15,9 +15,9 @@ from instant_fill_oms import ExchangeManagerAdapter, InstantFillMarketMaker, Pai
 
 def _coinbase_pair_configs() -> List[PairConfig]:
     return [
-        PairConfig("coinbase", "BTC/USD", Decimal("35.00"), min_spread_bps=135, min_notional_usd=Decimal("20.00"), fee_floor_bps=120),
-        PairConfig("coinbase", "BTC/USDC", Decimal("35.00"), min_spread_bps=135, min_notional_usd=Decimal("20.00"), fee_floor_bps=120),
-        PairConfig("coinbase", "BTC/USDT", Decimal("35.00"), min_spread_bps=135, min_notional_usd=Decimal("20.00"), fee_floor_bps=120),
+        PairConfig("coinbase", "BTC/USD", Decimal("35.00"), min_spread_bps=135, min_notional_usd=Decimal("20.00"), fee_floor_bps=120, min_volume_usd=Decimal("100000")),
+        PairConfig("coinbase", "BTC/USDC", Decimal("35.00"), min_spread_bps=135, min_notional_usd=Decimal("20.00"), fee_floor_bps=120, min_volume_usd=Decimal("100000")),
+        PairConfig("coinbase", "BTC/USDT", Decimal("35.00"), min_spread_bps=135, min_notional_usd=Decimal("20.00"), fee_floor_bps=120, min_volume_usd=Decimal("100000")),
         PairConfig(
             "coinbase",
             "ETH/USD",
@@ -25,12 +25,13 @@ def _coinbase_pair_configs() -> List[PairConfig]:
             min_spread_bps=150,
             min_notional_usd=Decimal("20.00"),
             fee_floor_bps=130,
+            min_volume_usd=Decimal("100000"),
         ),
-        PairConfig("coinbase", "ETH/USDC", Decimal("25.00"), min_spread_bps=150, min_notional_usd=Decimal("20.00"), fee_floor_bps=130),
-        PairConfig("coinbase", "ETH/USDT", Decimal("25.00"), min_spread_bps=150, min_notional_usd=Decimal("20.00"), fee_floor_bps=130),
-        PairConfig("coinbase", "SOL/USD", Decimal("18.00"), min_spread_bps=160, min_notional_usd=Decimal("12.00"), fee_floor_bps=140),
-        PairConfig("coinbase", "SOL/USDC", Decimal("18.00"), min_spread_bps=160, min_notional_usd=Decimal("12.00"), fee_floor_bps=140),
-        PairConfig("coinbase", "SOL/USDT", Decimal("18.00"), min_spread_bps=160, min_notional_usd=Decimal("12.00"), fee_floor_bps=140),
+        PairConfig("coinbase", "ETH/USDC", Decimal("25.00"), min_spread_bps=150, min_notional_usd=Decimal("20.00"), fee_floor_bps=130, min_volume_usd=Decimal("100000")),
+        PairConfig("coinbase", "ETH/USDT", Decimal("25.00"), min_spread_bps=150, min_notional_usd=Decimal("20.00"), fee_floor_bps=130, min_volume_usd=Decimal("100000")),
+        PairConfig("coinbase", "SOL/USD", Decimal("18.00"), min_spread_bps=160, min_notional_usd=Decimal("12.00"), fee_floor_bps=140, min_volume_usd=Decimal("100000")),
+        PairConfig("coinbase", "SOL/USDC", Decimal("18.00"), min_spread_bps=160, min_notional_usd=Decimal("12.00"), fee_floor_bps=140, min_volume_usd=Decimal("100000")),
+        PairConfig("coinbase", "SOL/USDT", Decimal("18.00"), min_spread_bps=160, min_notional_usd=Decimal("12.00"), fee_floor_bps=140, min_volume_usd=Decimal("100000")),
         PairConfig(
             "coinbase",
             "AVAX/USD",
@@ -38,9 +39,10 @@ def _coinbase_pair_configs() -> List[PairConfig]:
             min_spread_bps=175,
             min_notional_usd=Decimal("12.00"),
             fee_floor_bps=150,
+            min_volume_usd=Decimal("100000"),
         ),
-        PairConfig("coinbase", "AVAX/USDC", Decimal("15.00"), min_spread_bps=175, min_notional_usd=Decimal("12.00"), fee_floor_bps=150),
-        PairConfig("coinbase", "AVAX/USDT", Decimal("15.00"), min_spread_bps=175, min_notional_usd=Decimal("12.00"), fee_floor_bps=150),
+        PairConfig("coinbase", "AVAX/USDC", Decimal("15.00"), min_spread_bps=175, min_notional_usd=Decimal("12.00"), fee_floor_bps=150, min_volume_usd=Decimal("100000")),
+        PairConfig("coinbase", "AVAX/USDT", Decimal("15.00"), min_spread_bps=175, min_notional_usd=Decimal("12.00"), fee_floor_bps=150, min_volume_usd=Decimal("100000")),
         PairConfig(
             "coinbase",
             "LINK/USD",
@@ -48,23 +50,10 @@ def _coinbase_pair_configs() -> List[PairConfig]:
             min_spread_bps=185,
             min_notional_usd=Decimal("12.00"),
             fee_floor_bps=165,
+            min_volume_usd=Decimal("100000"),
         ),
-        PairConfig(
-            "coinbase",
-            "LINK/USDC",
-            Decimal("15.00"),
-            min_spread_bps=185,
-            min_notional_usd=Decimal("12.00"),
-            fee_floor_bps=165,
-        ),
-        PairConfig(
-            "coinbase",
-            "LINK/USDT",
-            Decimal("15.00"),
-            min_spread_bps=185,
-            min_notional_usd=Decimal("12.00"),
-            fee_floor_bps=165,
-        ),
+        PairConfig("coinbase", "LINK/USDC", Decimal("15.00"), min_spread_bps=185, min_notional_usd=Decimal("12.00"), fee_floor_bps=165, min_volume_usd=Decimal("100000")),
+        PairConfig("coinbase", "LINK/USDT", Decimal("15.00"), min_spread_bps=185, min_notional_usd=Decimal("12.00"), fee_floor_bps=165, min_volume_usd=Decimal("100000")),
         PairConfig(
             "coinbase",
             "UNI/USD",
@@ -72,9 +61,10 @@ def _coinbase_pair_configs() -> List[PairConfig]:
             min_spread_bps=190,
             min_notional_usd=Decimal("12.00"),
             fee_floor_bps=170,
+            min_volume_usd=Decimal("100000"),
         ),
-        PairConfig("coinbase", "UNI/USDC", Decimal("15.00"), min_spread_bps=190, min_notional_usd=Decimal("12.00"), fee_floor_bps=170),
-        PairConfig("coinbase", "UNI/USDT", Decimal("15.00"), min_spread_bps=190, min_notional_usd=Decimal("12.00"), fee_floor_bps=170),
+        PairConfig("coinbase", "UNI/USDC", Decimal("15.00"), min_spread_bps=190, min_notional_usd=Decimal("12.00"), fee_floor_bps=170, min_volume_usd=Decimal("100000")),
+        PairConfig("coinbase", "UNI/USDT", Decimal("15.00"), min_spread_bps=190, min_notional_usd=Decimal("12.00"), fee_floor_bps=170, min_volume_usd=Decimal("100000")),
     ]
 
 
