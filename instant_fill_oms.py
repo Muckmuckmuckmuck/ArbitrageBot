@@ -1074,10 +1074,15 @@ class DualSideQuoteManager:
                 )
                 if required <= Decimal("0"):
                     break
-                convert_amount = min(
-                    usable_alt,
-                    (required * Decimal("1.2")).quantize(Decimal("0.01"), rounding=ROUND_DOWN),
-                )
+                buffered_usable = (
+                    usable_alt * Decimal("0.92")
+                ).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+                if buffered_usable < self._min_conversion_chunk:
+                    continue
+                convert_target = (
+                    required * Decimal("1.15")
+                ).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+                convert_amount = min(buffered_usable, convert_target)
                 if convert_amount < self._min_conversion_chunk:
                     continue
                 logger.info(
