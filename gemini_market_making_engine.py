@@ -31,7 +31,7 @@ DEFAULT_PRICE_IMPROVEMENT_BPS = 3
 DEFAULT_MAX_QUOTE_INTERVAL_S = 20.0
 DEFAULT_FEE_FLOOR_BPS = 110
 DEFAULT_MIN_NOTIONAL_USD = Decimal("10.00")
-DEFAULT_MIN_DEPTH_USD = Decimal("15000")
+DEFAULT_MIN_DEPTH_USD = Decimal("5000")
 ALLOWED_QUOTES = {"USD", "USDC", "GUSD"}
 
 PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
@@ -39,14 +39,14 @@ PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
         "order_size_usd": Decimal("25.00"),
         "min_spread_bps": 110,
         "price_improve_bps": 2,
-        "min_depth_usd": Decimal("40000"),
+        "min_depth_usd": Decimal("7000"),
         "fee_floor_bps": 100,
     },
     "BTC/USDC": {
         "order_size_usd": Decimal("25.00"),
         "min_spread_bps": 110,
         "price_improve_bps": 2,
-        "min_depth_usd": Decimal("40000"),
+        "min_depth_usd": Decimal("7000"),
         "fee_floor_bps": 100,
     },
     "ETH/USD": {
