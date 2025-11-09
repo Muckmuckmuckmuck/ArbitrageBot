@@ -140,7 +140,28 @@ class ExchangeManagerAdapter:
             symbol,
             order_id,
         )
-        await self._manager.cancel_order(exchange_id, order_id, symbol)
+        await self._manager.cancel_order(exchange_id, symbol, order_id)
+
+    async def convert_currency(
+        self,
+        exchange_id: str,
+        from_currency: str,
+        to_currency: str,
+        amount: Decimal,
+    ) -> bool:
+        logger.info(
+            "[ADAPTER] convert_currency %s %s -> %s amount=%s",
+            exchange_id.upper(),
+            from_currency,
+            to_currency,
+            amount,
+        )
+        return await self._manager.convert_currency(
+            exchange_id,
+            from_currency,
+            to_currency,
+            float(amount),
+        )
 
     async def fetch_order_book(
         self, exchange_id: str, symbol: str, depth: int = 10
@@ -233,6 +254,12 @@ class BalanceCache:
             len(balances),
             list(balances.items())[:5],
         )
+
+    async def force_refresh(self, exchange_id: str) -> Dict[str, Decimal]:
+        async with self._lock:
+            self._last_refresh[exchange_id] = 0.0
+            await self._maybe_refresh(exchange_id)
+            return dict(self._balances.get(exchange_id, {}))
 
 
 # ---------------------------------------------------------------------------
@@ -677,6 +704,15 @@ class DualSideQuoteManager:
         self._pair_cooldowns = pair_cooldowns
         self._inactivity_tighten_threshold = 600.0
         self._exchange_fee_floor_bps = fee_floor_bps
+        self._stable_aliases: Dict[str, Sequence[str]] = {
+            "USD": ("USDC", "USDT", "GUSD"),
+            "USDC": ("USD", "USDT"),
+            "USDT": ("USD", "USDC"),
+            "GUSD": ("USD",),
+        }
+        self._stale_quote_multiplier = 2.0
+        self._ioc_slippage = Decimal("0.0015")
+        self._min_conversion_chunk = Decimal("10")
 
     async def ensure_quotes(self) -> None:
         for cfg in self._pair_configs:
@@ -811,6 +847,67 @@ class DualSideQuoteManager:
         usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
         usable_base = max(Decimal("0"), base_balance - base_reserved)
 
+        convertible_sources = self._stable_aliases.get(quote, ())
+        if (
+            convertible_sources
+            and usable_quote < Decimal(cfg.min_notional_usd)
+        ):
+            for alt_currency in convertible_sources:
+                if alt_currency == quote:
+                    continue
+                alt_balance = await self._balance_cache.get_balance(cfg.exchange_id, alt_currency)
+                if alt_balance <= self._min_conversion_chunk:
+                    continue
+                required = (
+                    max(Decimal(cfg.order_size_usd), Decimal(cfg.min_notional_usd))
+                    - usable_quote
+                )
+                if required <= Decimal("0"):
+                    break
+                convert_amount = min(
+                    alt_balance,
+                    (required * Decimal("1.2")).quantize(Decimal("0.01"), rounding=ROUND_DOWN),
+                )
+                if convert_amount < self._min_conversion_chunk:
+                    continue
+                logger.info(
+                    "[QUOTE] Converting %s -> %s amount=%s to fund %s %s",
+                    alt_currency,
+                    quote,
+                    convert_amount,
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                )
+                try:
+                    success = await self._adapter.convert_currency(
+                        cfg.exchange_id,
+                        alt_currency,
+                        quote,
+                        convert_amount,
+                    )
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning(
+                        "[QUOTE] Conversion %s -> %s failed on %s: %s",
+                        alt_currency,
+                        quote,
+                        cfg.exchange_id.upper(),
+                        exc,
+                    )
+                    success = False
+                if success:
+                    logger.info(
+                        "[QUOTE] Conversion %s -> %s succeeded on %s amount=%s",
+                        alt_currency,
+                        quote,
+                        cfg.exchange_id.upper(),
+                        convert_amount,
+                    )
+                    await self._balance_cache.force_refresh(cfg.exchange_id)
+                    quote_balance = await self._balance_cache.get_balance(cfg.exchange_id, quote)
+                    quote_reserved = self._response_engine.reserved_quote(cfg.exchange_id, quote)
+                    usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
+                    break
+
         if usable_quote > target_order_value * Decimal("4"):
             dynamic_multiplier = Decimal("1.5")
         order_value = target_order_value * dynamic_multiplier
@@ -842,8 +939,68 @@ class DualSideQuoteManager:
 
         sell_amount = min(sell_amount, usable_base.quantize(Decimal("0.00001")))
 
+        now_ts = time.time()
+        stale_threshold = max(cfg.max_quote_interval_s * self._stale_quote_multiplier, 10.0)
+        escalate_buy = False
+        escalate_sell = False
+        buy_params: Optional[Dict[str, Any]] = None
+        sell_params: Optional[Dict[str, Any]] = None
+
+        existing_buy = self._response_engine.get_active_order(
+            cfg.exchange_id, cfg.symbol, OrderSide.BUY
+        )
+        if existing_buy:
+            age = now_ts - existing_buy.created_at
+            if age > stale_threshold:
+                escalate_buy = True
+                buy_amount = existing_buy.amount
+                buy_price = (best_ask * (Decimal("1") + self._ioc_slippage)).quantize(
+                    Decimal("0.00001")
+                )
+                if cfg.exchange_id == "gemini":
+                    buy_params = {"options": ["immediate-or-cancel"]}
+                elif cfg.exchange_id == "coinbase":
+                    buy_params = {"time_in_force": "IOC"}
+                logger.info(
+                    "[QUOTE] Escalating stale BUY for %s %s age=%.2fs new_price=%s amount=%s",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    age,
+                    buy_price,
+                    buy_amount,
+                )
+
+        existing_sell = self._response_engine.get_active_order(
+            cfg.exchange_id, cfg.symbol, OrderSide.SELL
+        )
+        if existing_sell:
+            age = now_ts - existing_sell.created_at
+            if age > stale_threshold:
+                escalate_sell = True
+                sell_amount = existing_sell.amount
+                sell_price = (best_bid * (Decimal("1") - self._ioc_slippage)).quantize(
+                    Decimal("0.00001")
+                )
+                if cfg.exchange_id == "gemini":
+                    sell_params = {"options": ["immediate-or-cancel"]}
+                elif cfg.exchange_id == "coinbase":
+                    sell_params = {"time_in_force": "IOC"}
+                logger.info(
+                    "[QUOTE] Escalating stale SELL for %s %s age=%.2fs new_price=%s amount=%s",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    age,
+                    sell_price,
+                    sell_amount,
+                )
+
         need_buy = buy_amount > Decimal("0") and (buy_amount * buy_price) >= cfg.min_notional_usd
         need_sell = sell_amount > Decimal("0") and (sell_amount * sell_price) >= cfg.min_notional_usd
+
+        if escalate_buy:
+            need_buy = True
+        if escalate_sell:
+            need_sell = True
 
         logger.info(
             "[QUOTE] Computed orders %s %s buy_amount=%s buy_price=%s sell_amount=%s sell_price=%s need_buy=%s need_sell=%s",
@@ -871,8 +1028,24 @@ class DualSideQuoteManager:
                 "notional below minimum" if sell_amount * sell_price < cfg.min_notional_usd else "insufficient inventory",
             )
 
-        await self._sync_side(cfg, OrderSide.BUY, buy_amount, buy_price, need_buy)
-        await self._sync_side(cfg, OrderSide.SELL, sell_amount, sell_price, need_sell)
+        await self._sync_side(
+            cfg,
+            OrderSide.BUY,
+            buy_amount,
+            buy_price,
+            need_buy,
+            escalate_buy,
+            buy_params,
+        )
+        await self._sync_side(
+            cfg,
+            OrderSide.SELL,
+            sell_amount,
+            sell_price,
+            need_sell,
+            escalate_sell,
+            sell_params,
+        )
 
     async def _sync_side(
         self,
@@ -881,6 +1054,8 @@ class DualSideQuoteManager:
         amount: Decimal,
         price: Decimal,
         allowed: bool,
+        escalate: bool = False,
+        order_params: Optional[Dict[str, Any]] = None,
     ) -> None:
         existing = self._response_engine.get_active_order(
             cfg.exchange_id, cfg.symbol, side
@@ -915,13 +1090,19 @@ class DualSideQuoteManager:
             and abs(existing.price - price) / price < Decimal("0.0015")
             and abs(existing.amount - amount) / amount < Decimal("0.1")
         ):
-            logger.info(
-                "[QUOTE] %s %s reusing existing order %s",
-                cfg.exchange_id.upper(),
-                cfg.symbol,
-                existing.order_id,
-            )
-            return
+            if escalate:
+                logger.info(
+                    "[QUOTE] Escalation requested but existing order %s still within tolerance; cancelling to replace.",
+                    existing.order_id,
+                )
+            else:
+                logger.info(
+                    "[QUOTE] %s %s reusing existing order %s",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    existing.order_id,
+                )
+                return
 
         if existing:
             logger.info(
@@ -954,6 +1135,7 @@ class DualSideQuoteManager:
             amount=amount,
             price=price,
             order_type="limit",
+            params=order_params,
         )
         order_id = response.get("id") or response.get("order_id")
         if not order_id:

@@ -17,6 +17,7 @@ import json
 import aiohttp
 import asyncio
 from datetime import datetime
+from decimal import Decimal, ROUND_DOWN
 from typing import Dict, Optional, List, Tuple, Any
 
 import ccxt
@@ -651,24 +652,36 @@ class CoinbaseGeminiExchangeManager:
     
     async def convert_currency(self, exchange_id: str, from_currency: str, to_currency: str, amount: float) -> bool:
         """
-        Convert currency - simplified for USD/USDC/USDT only
-        
-        Note: USD, USDC, and USDT are interchangeable at 1:1 rate
-        No actual conversion needed - just return True if currencies are compatible
-        
-        Returns True if conversion successful (or not needed)
+        Convert currency between supported stablecoins.
         """
-        # USD/USDC/USDT are interchangeable - no conversion needed
-        if from_currency in ['USD', 'USDC', 'USDT'] and to_currency in ['USD', 'USDC', 'USDT']:
-            logger.debug(f"   ✅ USD/USDC/USDT are interchangeable - no conversion needed")
-            return True
-        
         if from_currency == to_currency:
+            logger.debug("   🔄 convert_currency no-op for identical currencies %s", from_currency)
             return True
-        
-        # For other currencies, conversion is not supported
-        logger.warning(f"   ⚠️ Currency conversion not supported: {from_currency} → {to_currency}")
-        logger.warning(f"   💡 Only USD/USDC/USDT pairs are supported for intra-exchange arbitrage")
+
+        amount_decimal = Decimal(str(amount))
+        if amount_decimal <= Decimal("0"):
+            logger.debug("   ⚠️ convert_currency amount <= 0 (%.8f) – skipping", amount)
+            return False
+
+        stable_set = {"USD", "USDC", "USDT", "GUSD"}
+        if from_currency not in stable_set or to_currency not in stable_set:
+            logger.warning(
+                "   ⚠️ Currency conversion not supported: %s → %s on %s",
+                from_currency,
+                to_currency,
+                exchange_id.upper(),
+            )
+            return False
+
+        if exchange_id == EXCHANGE_COINBASE:
+            return await self._convert_on_coinbase(from_currency, to_currency, amount_decimal)
+        if exchange_id == EXCHANGE_GEMINI:
+            return await self._convert_on_gemini(from_currency, to_currency, amount_decimal)
+
+        logger.warning(
+            "   ⚠️ Currency conversion not implemented for exchange %s",
+            exchange_id,
+        )
         return False
     
     def get_conversion_cost_percent(self, exchange_id: str) -> float:
@@ -720,6 +733,151 @@ class CoinbaseGeminiExchangeManager:
         
         return False
     
+    async def _convert_on_coinbase(
+        self,
+        from_currency: str,
+        to_currency: str,
+        amount: Decimal,
+    ) -> bool:
+        if not self.coinbase:
+            logger.warning("   ⚠️ Coinbase client unavailable for conversion.")
+            return False
+
+        quantized_amount = amount.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        if quantized_amount <= Decimal("0"):
+            logger.debug(
+                "   ⚠️ Coinbase conversion amount below precision threshold: %s",
+                amount,
+            )
+            return False
+
+        str_amount = format(quantized_amount, "f")
+        logger.info(
+            "   🔄 Coinbase conversion requested: %s → %s amount=%s",
+            from_currency,
+            to_currency,
+            str_amount,
+        )
+
+        try_api = await self._try_coinbase_conversion_api(
+            self.coinbase,
+            from_currency,
+            to_currency,
+            float(str_amount),
+        )
+        if try_api:
+            logger.info(
+                "   ✅ Coinbase conversion succeeded via direct API: %s → %s amount=%s",
+                from_currency,
+                to_currency,
+                str_amount,
+            )
+            return True
+
+        # Fallback: use market order on available stable pair
+        symbol = f"{from_currency}/{to_currency}"
+        inverse = False
+        if symbol not in self.coinbase.markets:
+            alt_symbol = f"{to_currency}/{from_currency}"
+            if alt_symbol in self.coinbase.markets:
+                symbol = alt_symbol
+                inverse = True
+            else:
+                logger.warning(
+                    "   ⚠️ No market available to convert %s -> %s on Coinbase",
+                    from_currency,
+                    to_currency,
+                )
+                return False
+
+        try:
+            await self._call_with_retries(
+                lambda: self.create_order(
+                    EXCHANGE_COINBASE,
+                    symbol,
+                    "market",
+                    "buy" if inverse else "sell",
+                    float(str_amount),
+                ),
+                retry_context=f"coinbase convert {from_currency}->{to_currency}",
+            )
+            logger.info(
+                "   ✅ Coinbase conversion via market order succeeded: %s → %s amount=%s",
+                from_currency,
+                to_currency,
+                str_amount,
+            )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "   ⚠️ Coinbase conversion via market order failed: %s",
+                exc,
+            )
+            return False
+
+    async def _convert_on_gemini(
+        self,
+        from_currency: str,
+        to_currency: str,
+        amount: Decimal,
+    ) -> bool:
+        if not self.gemini:
+            logger.warning("   ⚠️ Gemini client unavailable for conversion.")
+            return False
+
+        quantized_amount = amount.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        if quantized_amount <= Decimal("0"):
+            logger.debug(
+                "   ⚠️ Gemini conversion amount below precision threshold: %s",
+                amount,
+            )
+            return False
+
+        symbol = f"{from_currency}/{to_currency}"
+        inverse = False
+        if symbol not in self.gemini.markets:
+            alt_symbol = f"{to_currency}/{from_currency}"
+            if alt_symbol in self.gemini.markets:
+                symbol = alt_symbol
+                inverse = True
+            else:
+                logger.warning(
+                    "   ⚠️ No market available to convert %s -> %s on Gemini",
+                    from_currency,
+                    to_currency,
+                )
+                return False
+
+        try:
+            base_amount = float(format(quantized_amount, "f"))
+            params = {"options": ["immediate-or-cancel"]}
+            await self._call_with_retries(
+                lambda: self.create_order(
+                    EXCHANGE_GEMINI,
+                    symbol,
+                    "market",
+                    "buy" if inverse else "sell",
+                    base_amount,
+                    None,
+                    params,
+                ),
+                retry_context=f"gemini convert {from_currency}->{to_currency}",
+            )
+            logger.info(
+                "   ✅ Gemini conversion succeeded via market order: %s → %s amount=%.2f",
+                from_currency,
+                to_currency,
+                base_amount,
+            )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "   ⚠️ Gemini conversion failed: %s",
+                exc,
+            )
+            return False
+# REMOVED: Bridge currency conversion methods (BTC bridge)
+# These methods were used for EUR/GBP conversion but are no longer needed
     # REMOVED: Bridge currency conversion methods (BTC bridge)
     # These methods were used for EUR/GBP conversion but are no longer needed
     # since we only support USD/USDC/USDT pairs now
