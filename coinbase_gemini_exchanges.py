@@ -445,13 +445,11 @@ class CoinbaseGeminiExchangeManager:
         # 🔵 COINBASE-SPECIFIC: Parameter cleanup
         # ====================================================================
         # 🔵 For Coinbase, remove invalid params (same as BTC script approach)
-        if exchange_id == EXCHANGE_COINBASE and params:
-            order_params = params.copy()
+        order_params = dict(params or {})
+        if exchange_id == EXCHANGE_COINBASE:
             # 🔵 Remove params that cause errors (same approach as BTC script)
             order_params.pop('portfolio_id', None)
             order_params.pop('retail_portfolio_id', None)
-        else:
-            order_params = params
         
         # ====================================================================
         # ⚪ COMMON: Precision and validation (works for both exchanges)
