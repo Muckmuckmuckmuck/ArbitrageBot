@@ -242,10 +242,9 @@ class BalanceCache:
         balances: Dict[str, Decimal] = {}
         free = raw.get("free", {})
         total = raw.get("total", {})
-        for currency, value in total.items():
+        for currency, _ in total.items():
             free_value = Decimal(str(free.get(currency, 0)))
-            total_value = Decimal(str(value))
-            balances[currency] = max(free_value, total_value)
+            balances[currency] = free_value
         self._balances[exchange_id] = balances
         self._last_refresh[exchange_id] = now
         logger.info(
@@ -847,6 +846,28 @@ class DualSideQuoteManager:
         usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
         usable_base = max(Decimal("0"), base_balance - base_reserved)
 
+        if (
+            quote_balance >= Decimal(cfg.min_notional_usd)
+            and usable_quote < Decimal(cfg.min_notional_usd)
+        ):
+            cancelled = await self._cancel_orphan_orders(cfg, OrderSide.BUY)
+            if cancelled:
+                await self._balance_cache.force_refresh(cfg.exchange_id)
+                quote_balance = await self._balance_cache.get_balance(cfg.exchange_id, quote)
+                quote_reserved = self._response_engine.reserved_quote(cfg.exchange_id, quote)
+                usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
+
+        if (
+            base_balance >= (Decimal(cfg.min_notional_usd) / max(Decimal("1"), sell_price))
+            and usable_base < (Decimal(cfg.min_notional_usd) / max(Decimal("1"), sell_price))
+        ):
+            cancelled = await self._cancel_orphan_orders(cfg, OrderSide.SELL)
+            if cancelled:
+                await self._balance_cache.force_refresh(cfg.exchange_id)
+                base_balance = await self._balance_cache.get_balance(cfg.exchange_id, base)
+                base_reserved = self._response_engine.reserved_base(cfg.exchange_id, base)
+                usable_base = max(Decimal("0"), base_balance - base_reserved)
+
         convertible_sources = self._stable_aliases.get(quote, ())
         if (
             convertible_sources
@@ -1046,6 +1067,65 @@ class DualSideQuoteManager:
             escalate_sell,
             sell_params,
         )
+
+    async def _cancel_orphan_orders(self, cfg: PairConfig, side: OrderSide) -> bool:
+        try:
+            open_orders = await self._adapter.fetch_open_orders(cfg.exchange_id, cfg.symbol)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(
+                "[QUOTE] Unable to fetch open orders for %s %s: %s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                exc,
+            )
+            return False
+
+        if not open_orders:
+            return False
+
+        tracked = self._response_engine.get_active_order(cfg.exchange_id, cfg.symbol, side)
+        tracked_id = tracked.order_id if tracked else None
+        cancelled = False
+
+        for order in open_orders:
+            raw_side = str(
+                order.get("side")
+                or order.get("info", {}).get("side", "")
+            ).lower()
+            if raw_side != side.value:
+                continue
+            order_id = str(
+                order.get("id")
+                or order.get("order_id")
+                or order.get("clientOrderId")
+                or order.get("client_order_id")
+                or ""
+            )
+            if not order_id:
+                continue
+            if tracked_id and order_id == tracked_id:
+                continue
+            try:
+                await self._adapter.cancel_order(cfg.exchange_id, cfg.symbol, order_id)
+                await self._response_engine.mark_cancelled(cfg.exchange_id, cfg.symbol, side)
+                logger.info(
+                    "[QUOTE] Cancelled orphan %s order %s on %s %s",
+                    side.value.upper(),
+                    order_id,
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                )
+                cancelled = True
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "[QUOTE] Failed to cancel orphan %s order %s on %s %s: %s",
+                    side.value.upper(),
+                    order_id,
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    exc,
+                )
+        return cancelled
 
     async def _sync_side(
         self,
