@@ -25,68 +25,56 @@ from instant_fill_oms import ExchangeManagerAdapter, InstantFillMarketMaker, Pai
 logger = logging.getLogger(__name__)
 
 MIN_VOLUME_USD = Decimal("20000")
-DEFAULT_ORDER_SIZE_USD = Decimal("12.00")
+DEFAULT_ORDER_SIZE_USD = Decimal("6.00")
 DEFAULT_MIN_SPREAD_BPS = 220
 DEFAULT_PRICE_IMPROVEMENT_BPS = 3
 DEFAULT_MAX_QUOTE_INTERVAL_S = 20.0
-DEFAULT_FEE_FLOOR_BPS = 130
-DEFAULT_MIN_NOTIONAL_USD = Decimal("10.00")
-DEFAULT_MIN_DEPTH_USD = Decimal("5000")
-ALLOWED_QUOTES = {"USD", "USDC", "GUSD"}
+DEFAULT_FEE_FLOOR_BPS = 150
+DEFAULT_MIN_NOTIONAL_USD = Decimal("5.00")
+DEFAULT_MIN_DEPTH_USD = Decimal("1500")
+ALLOWED_QUOTES = {"USD", "USDC"}
 
 PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
     "BTC/USD": {
-        "order_size_usd": Decimal("25.00"),
+        "order_size_usd": Decimal("8.00"),
         "min_spread_bps": 200,
         "price_improve_bps": 2,
-        "min_depth_usd": Decimal("7000"),
-        "fee_floor_bps": 150,
+        "min_depth_usd": Decimal("3000"),
+        "fee_floor_bps": 160,
     },
     "BTC/USDC": {
-        "order_size_usd": Decimal("25.00"),
+        "order_size_usd": Decimal("8.00"),
         "min_spread_bps": 200,
         "price_improve_bps": 2,
-        "min_depth_usd": Decimal("7000"),
-        "fee_floor_bps": 150,
+        "min_depth_usd": Decimal("3000"),
+        "fee_floor_bps": 160,
     },
     "ETH/USD": {
-        "order_size_usd": Decimal("18.00"),
+        "order_size_usd": Decimal("7.00"),
         "min_spread_bps": 230,
         "price_improve_bps": 2,
-        "fee_floor_bps": 165,
+        "fee_floor_bps": 175,
     },
     "ETH/USDC": {
-        "order_size_usd": Decimal("18.00"),
+        "order_size_usd": Decimal("7.00"),
         "min_spread_bps": 230,
         "price_improve_bps": 2,
-        "fee_floor_bps": 165,
+        "fee_floor_bps": 175,
     },
     "SOL/USD": {
-        "order_size_usd": Decimal("15.00"),
+        "order_size_usd": Decimal("6.00"),
         "min_spread_bps": 260,
         "price_improve_bps": 2,
-        "fee_floor_bps": 180,
-    },
-    "SOL/USDC": {
-        "order_size_usd": Decimal("15.00"),
-        "min_spread_bps": 260,
-        "price_improve_bps": 2,
-        "fee_floor_bps": 180,
+        "fee_floor_bps": 190,
     },
     "LINK/USD": {
-        "order_size_usd": Decimal("12.00"),
+        "order_size_usd": Decimal("6.00"),
         "min_spread_bps": 280,
         "price_improve_bps": 2,
         "fee_floor_bps": 195,
     },
-    "XRP/USD": {
-        "order_size_usd": Decimal("12.00"),
-        "min_spread_bps": 300,
-        "price_improve_bps": 3,
-        "fee_floor_bps": 200,
-    },
     "DOGE/USD": {
-        "order_size_usd": Decimal("12.00"),
+        "order_size_usd": Decimal("6.00"),
         "min_spread_bps": 320,
         "price_improve_bps": 4,
         "fee_floor_bps": 210,
