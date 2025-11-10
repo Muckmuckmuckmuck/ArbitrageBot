@@ -2153,7 +2153,7 @@ class InstantFillMarketMaker:
             "gemini": Decimal("80"),
         }
         self._pair_stats: Dict[Tuple[str, str], Dict[str, Any]] = {}
-        self._max_active_pairs: int = 12
+        self._max_active_pairs: int = 6
         self._last_rank_snapshot: List[Dict[str, Any]] = []
         minimum_notional = Decimal("3.00")
         self._fast_fill_signal: Dict[
