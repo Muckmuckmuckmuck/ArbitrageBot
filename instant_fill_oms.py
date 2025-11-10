@@ -777,10 +777,10 @@ class DualSideQuoteManager:
         self._min_conversion_chunk = Decimal("5")
         self._orphan_cancel_age_s = 90.0
         self._slippage_buffer_bps: Dict[str, Decimal] = {
-            "coinbase": Decimal("15"),
-            "gemini": Decimal("12"),
+            "coinbase": Decimal("12"),
+            "gemini": Decimal("10"),
         }
-        self._minimum_target_edge_bps = Decimal("120")
+        self._minimum_target_edge_bps = Decimal("100")
         self._probe_edge_floor_bps = Decimal("90")
         self._probe_order_usd = Decimal("3.00")
         self._probe_cooldown_s = 180.0
