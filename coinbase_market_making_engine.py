@@ -2,10 +2,9 @@
 Dynamic Coinbase market-making engine that relies on the instant-fill OMS.
 
 This wrapper discovers every active Coinbase spot market with at least
-$1,000,000 of 24h quote volume and builds `PairConfig` objects for them. The
+$500,000 of 24h quote volume and builds `PairConfig` objects for them. The
 core pairs retain hand-tuned overrides, while everything else inherits safe
-defaults that respect the fee floor, minimum notional requirements, and the
-user's constraint to avoid sub-$10 orders.
+defaults sized for low-capital operation while still respecting the fee floors.
 """
 
 from __future__ import annotations
@@ -24,52 +23,58 @@ from instant_fill_oms import ExchangeManagerAdapter, InstantFillMarketMaker, Pai
 
 logger = logging.getLogger(__name__)
 
-MIN_VOLUME_USD = Decimal("100000")
-DEFAULT_ORDER_SIZE_USD = Decimal("6.00")
+MIN_VOLUME_USD = Decimal("500000")
+DEFAULT_ORDER_SIZE_USD = Decimal("3.50")
 DEFAULT_MIN_SPREAD_BPS = 280
 DEFAULT_PRICE_IMPROVEMENT_BPS = 3
 DEFAULT_MAX_QUOTE_INTERVAL_S = 20.0
 DEFAULT_FEE_FLOOR_BPS = 200
-DEFAULT_MIN_NOTIONAL_USD = Decimal("5.00")
-DEFAULT_MIN_DEPTH_USD = Decimal("2000")
+DEFAULT_MIN_NOTIONAL_USD = Decimal("3.25")
+DEFAULT_MIN_DEPTH_USD = Decimal("2500")
 ALLOWED_QUOTES = {"USD", "USDC"}
 
 PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
     "BTC/USD": {
-        "order_size_usd": Decimal("8.00"),
+        "order_size_usd": Decimal("4.50"),
         "min_spread_bps": 230,
         "price_improve_bps": 2,
-        "min_depth_usd": Decimal("3000"),
+        "min_depth_usd": Decimal("3500"),
+        "target_edge_bps": 300,
     },
     "BTC/USDC": {
-        "order_size_usd": Decimal("8.00"),
+        "order_size_usd": Decimal("4.50"),
         "min_spread_bps": 230,
         "price_improve_bps": 2,
-        "min_depth_usd": Decimal("3000"),
+        "min_depth_usd": Decimal("3500"),
+        "target_edge_bps": 300,
     },
     "ETH/USD": {
-        "order_size_usd": Decimal("7.00"),
+        "order_size_usd": Decimal("4.00"),
         "min_spread_bps": 240,
         "price_improve_bps": 2,
-        "min_depth_usd": Decimal("2500"),
+        "min_depth_usd": Decimal("3200"),
+        "target_edge_bps": 310,
     },
     "ETH/USDC": {
-        "order_size_usd": Decimal("7.00"),
+        "order_size_usd": Decimal("4.00"),
         "min_spread_bps": 240,
         "price_improve_bps": 2,
-        "min_depth_usd": Decimal("2500"),
+        "min_depth_usd": Decimal("3200"),
+        "target_edge_bps": 310,
     },
     "SOL/USD": {
-        "order_size_usd": Decimal("6.00"),
+        "order_size_usd": Decimal("3.50"),
         "min_spread_bps": 270,
         "price_improve_bps": 3,
-        "min_depth_usd": Decimal("2000"),
+        "min_depth_usd": Decimal("2800"),
+        "target_edge_bps": 330,
     },
     "SOL/USDC": {
-        "order_size_usd": Decimal("6.00"),
+        "order_size_usd": Decimal("3.50"),
         "min_spread_bps": 270,
         "price_improve_bps": 3,
-        "min_depth_usd": Decimal("2000"),
+        "min_depth_usd": Decimal("2800"),
+        "target_edge_bps": 330,
     },
 }
 
@@ -148,6 +153,7 @@ def _make_pair_config(symbol: str, override: Dict[str, object]) -> PairConfig:
         override.get("max_quote_interval_s", DEFAULT_MAX_QUOTE_INTERVAL_S)
     )
     fee_floor_bps = int(override.get("fee_floor_bps", DEFAULT_FEE_FLOOR_BPS))
+    target_edge_bps = int(override.get("target_edge_bps", min_spread_bps + 60))
 
     return PairConfig(
         EXCHANGE_COINBASE,
@@ -160,6 +166,7 @@ def _make_pair_config(symbol: str, override: Dict[str, object]) -> PairConfig:
         price_improve_bps=price_improve_bps,
         fee_floor_bps=fee_floor_bps,
         min_volume_usd=MIN_VOLUME_USD,
+        target_edge_bps=target_edge_bps,
     )
 
 

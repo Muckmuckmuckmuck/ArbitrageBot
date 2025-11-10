@@ -44,14 +44,15 @@ class OrderStatus(str, Enum):
 class PairConfig:
     exchange_id: str
     symbol: str
-    order_size_usd: Decimal = Decimal("10.00")
+    order_size_usd: Decimal = Decimal("5.00")
     min_spread_bps: int = 30  # 0.30%
     max_quote_interval_s: float = 5.0
-    min_depth_usd: Decimal = Decimal("10000")
-    min_notional_usd: Decimal = Decimal("10.00")
+    min_depth_usd: Decimal = Decimal("5000")
+    min_notional_usd: Decimal = Decimal("5.00")
     price_improve_bps: int = 5  # 0.05%
     fee_floor_bps: int = 0
     min_volume_usd: Decimal = Decimal("0")
+    target_edge_bps: int = 0
 
 
 @dataclass(slots=True)
@@ -338,6 +339,11 @@ class InstantFillResponseEngine:
         self._last_fill_by_pair: Dict[Tuple[str, str], float] = {}
         self._fill_count_by_pair: Dict[Tuple[str, str], int] = defaultdict(int)
         self._pending_by_pair: Dict[Tuple[str, str], int] = defaultdict(int)
+        self._hedge_fee_guard_bps = Decimal("30")
+        self._maker_preferences: Dict[str, Dict[str, Any]] = {
+            "coinbase": {"post_only": True},
+            "gemini": {"options": ["maker-or-cancel"]},
+        }
 
     def get_metrics(self) -> Dict[str, float]:
         latencies = self._metrics["latency_ms"]
@@ -664,6 +670,18 @@ class InstantFillResponseEngine:
         else:
             price = min(mid * (Decimal("1") - spread / Decimal("2")), best_bid + mid * improve)
 
+        entry_price = fill.price
+        if filled_order.side == OrderSide.BUY:
+            min_exit = entry_price * (
+                Decimal("1") + self._hedge_fee_guard_bps / Decimal("10000")
+            )
+            price = max(price, min_exit)
+        else:
+            max_entry = entry_price * (
+                Decimal("1") - self._hedge_fee_guard_bps / Decimal("10000")
+            )
+            price = min(price, max_entry)
+
         price = price.quantize(Decimal("0.00001"))
         amount = target_amount
 
@@ -676,6 +694,10 @@ class InstantFillResponseEngine:
             amount,
         )
         try:
+            params: Dict[str, Any] = {}
+            maker_pref = self._maker_preferences.get(filled_order.exchange_id)
+            if maker_pref:
+                params.update(maker_pref)
             response = await self._adapter.create_order(
                 filled_order.exchange_id,
                 filled_order.symbol,
@@ -683,6 +705,7 @@ class InstantFillResponseEngine:
                 amount=amount,
                 price=price,
                 order_type="limit",
+                params=params or None,
             )
             order_id = response.get("id") or response.get("order_id")
             if not order_id:
@@ -728,6 +751,11 @@ class DualSideQuoteManager:
         pair_configs: Sequence[PairConfig],
         pair_cooldowns: Dict[Tuple[str, str], float],
         fee_floor_bps: Dict[str, Decimal],
+        inventory_lookup: Optional[
+            Callable[[str, str], Tuple[Decimal, Optional[float], Decimal]]
+        ] = None,
+        stats_lookup: Optional[Callable[[str, str], Dict[str, Any]]] = None,
+        fill_quality_lookup: Optional[Callable[[str, str], Dict[str, Decimal]]] = None,
     ) -> None:
         self._adapter = adapter
         self._response_engine = response_engine
@@ -748,6 +776,28 @@ class DualSideQuoteManager:
         self._ioc_slippage = Decimal("0.0015")
         self._min_conversion_chunk = Decimal("5")
         self._orphan_cancel_age_s = 90.0
+        self._slippage_buffer_bps: Dict[str, Decimal] = {
+            "coinbase": Decimal("30"),
+            "gemini": Decimal("25"),
+        }
+        self._minimum_target_edge_bps = Decimal("180")
+        self._inventory_cap_multiple = Decimal("0.9")
+        self._max_inventory_hold_s = 120.0
+        self._inventory_lookup = (
+            inventory_lookup
+            if inventory_lookup is not None
+            else lambda _exchange, _symbol: (Decimal("0"), None, Decimal("0"))
+        )
+        self._stats_lookup = (
+            stats_lookup
+            if stats_lookup is not None
+            else lambda _exchange, _symbol: {}
+        )
+        self._fill_quality_lookup = (
+            fill_quality_lookup
+            if fill_quality_lookup is not None
+            else lambda _exchange, _symbol: {"buy": Decimal("0"), "sell": Decimal("0")}
+        )
         self._volatility_cache: Dict[
             Tuple[str, str], Tuple[float, Optional[float]]
         ] = {}
@@ -837,6 +887,10 @@ class DualSideQuoteManager:
         return volatility
 
     async def _ensure_pair(self, cfg: PairConfig) -> None:
+        stats = self._stats_lookup(cfg.exchange_id, cfg.symbol)
+        loss_streak = int(stats.get("loss_streak", 0) or 0)
+        avg_edge_stats = Decimal(str(stats.get("avg_edge_bps", Decimal("0"))))
+
         if not self._adapter.is_symbol_supported(cfg.exchange_id, cfg.symbol):
             logger.debug(
                 "[FILTER] Skipping unsupported symbol %s on %s",
@@ -889,6 +943,7 @@ class DualSideQuoteManager:
                 order_book["bids"],
                 order_book["asks"],
             )
+            await self._cancel_both_sides(cfg)
             return
 
         best_bid = Decimal(str(order_book["bids"][0][0]))
@@ -914,15 +969,35 @@ class DualSideQuoteManager:
                 bid_depth,
                 ask_depth,
             )
+            await self._cancel_both_sides(cfg)
             return
 
         mid = (best_bid + best_ask) / Decimal("2")
+        inventory_amount, inventory_age, inventory_notional = self._inventory_lookup(
+            cfg.exchange_id, cfg.symbol
+        )
+        current_inventory_usd = (
+            inventory_notional
+            if inventory_notional > Decimal("0")
+            else inventory_amount * mid
+        )
+
         last_fill_time = self._response_engine.last_fill_time(cfg.exchange_id, cfg.symbol)
         last_fill_age = None
         if last_fill_time:
             last_fill_age = time.time() - last_fill_time
-        adjusted_spread_bps = Decimal(cfg.min_spread_bps)
+        dynamic_spread_floor = Decimal(cfg.min_spread_bps)
+        if loss_streak > 0:
+            dynamic_spread_floor += Decimal(loss_streak) * Decimal("40")
+        elif avg_edge_stats < Decimal("50"):
+            dynamic_spread_floor += Decimal("30")
+
+        adjusted_spread_bps = max(Decimal(cfg.min_spread_bps), dynamic_spread_floor)
         adjusted_price_improve_bps = Decimal(cfg.price_improve_bps)
+        if loss_streak > 0:
+            adjusted_price_improve_bps += Decimal(loss_streak)
+        if avg_edge_stats < Decimal("30"):
+            adjusted_price_improve_bps += Decimal("1")
         if last_fill_age and last_fill_age > self._inactivity_tighten_threshold:
             adjusted_spread_bps = max(adjusted_spread_bps - Decimal("5"), Decimal("5"))
             adjusted_price_improve_bps = max(adjusted_price_improve_bps - Decimal("1"), Decimal("1"))
@@ -968,16 +1043,86 @@ class DualSideQuoteManager:
                 vol_bump,
                 adjusted_price_improve_bps,
             )
+        inventory_pressure_bps = Decimal("0")
+        if inventory_amount > Decimal("0"):
+            inventory_pressure_bps = (
+                current_inventory_usd
+                / max(Decimal("1"), cfg.order_size_usd)
+            ) * Decimal("5")
+            inventory_pressure_bps = min(Decimal("12"), max(Decimal("0"), inventory_pressure_bps))
+            adjusted_price_improve_bps += inventory_pressure_bps
+            adjusted_spread_bps += inventory_pressure_bps
+        adjusted_spread_bps = max(adjusted_spread_bps, dynamic_spread_floor)
+        base_spread = dynamic_spread_floor / Decimal("10000")
         min_spread = adjusted_spread_bps / Decimal("10000")
         spread = max((best_ask - best_bid) / mid, min_spread)
         price_improve = adjusted_price_improve_bps / Decimal("10000")
-        buy_price = mid * (Decimal("1") - spread / Decimal("2"))
+        buy_price = mid * (Decimal("1") - max(spread, base_spread) / Decimal("2"))
         sell_price = mid * (Decimal("1") + spread / Decimal("2"))
         if price_improve > 0:
             buy_price -= mid * price_improve
             sell_price += mid * price_improve
+        fill_quality = self._fill_quality_lookup(cfg.exchange_id, cfg.symbol)
+        buy_bias = Decimal(str(fill_quality.get("buy", Decimal("0"))))
+        sell_bias = Decimal(str(fill_quality.get("sell", Decimal("0"))))
+        if buy_bias > 0:
+            buy_price -= mid * (buy_bias / Decimal("10000"))
+        if sell_bias > 0:
+            sell_price += mid * (sell_bias / Decimal("10000"))
+        if current_inventory_usd > Decimal("0"):
+            lean_bps = (
+                current_inventory_usd
+                / max(order_value, Decimal("1"))
+            ) * Decimal("25")
+            lean_bps = min(Decimal("60"), max(lean_bps, Decimal("0")))
+            if lean_bps > 0:
+                buy_price -= mid * (lean_bps / Decimal("10000"))
+                sell_price += mid * (lean_bps / Decimal("10000"))
+        buy_price = min(buy_price, best_bid)
+        sell_price = max(sell_price, best_ask)
         buy_price = buy_price.quantize(Decimal("0.00001"))
         sell_price = sell_price.quantize(Decimal("0.00001"))
+
+        if buy_price <= 0:
+            logger.info(
+                "[QUOTE] Invalid buy price computed for %s %s (buy_price=%s)",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                buy_price,
+            )
+            await self._cancel_both_sides(cfg)
+            return
+
+        gross_edge_bps = ((sell_price - buy_price) / buy_price) * Decimal("10000")
+        taker_fee_bps = max(
+            Decimal(cfg.fee_floor_bps),
+            self._exchange_fee_floor_bps.get(cfg.exchange_id, Decimal("0")),
+        )
+        slippage_buffer = self._slippage_buffer_bps.get(cfg.exchange_id, Decimal("20"))
+        net_edge_bps = gross_edge_bps - (taker_fee_bps * Decimal("2")) - slippage_buffer
+        target_edge_bps = Decimal(
+            cfg.target_edge_bps if cfg.target_edge_bps > 0 else cfg.min_spread_bps
+        )
+        if loss_streak > 0:
+            target_edge_bps += Decimal(loss_streak) * Decimal("40")
+        elif avg_edge_stats < Decimal("50"):
+            target_edge_bps += Decimal("30")
+        if inventory_pressure_bps > 0:
+            target_edge_bps += inventory_pressure_bps
+        target_edge_bps = max(target_edge_bps, self._minimum_target_edge_bps)
+        if net_edge_bps < target_edge_bps:
+            logger.info(
+                "[QUOTE] Skipping %s %s net_edge_bps=%s target=%s gross=%s fees=%s slip=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                net_edge_bps.quantize(Decimal("0.01")),
+                target_edge_bps,
+                gross_edge_bps.quantize(Decimal("0.01")),
+                taker_fee_bps,
+                slippage_buffer,
+            )
+            await self._cancel_both_sides(cfg)
+            return
 
         base, quote = cfg.symbol.split("/")
         quote_balance = await self._balance_cache.get_balance(cfg.exchange_id, quote)
@@ -1005,9 +1150,9 @@ class DualSideQuoteManager:
             scaled_floor = (total_stable_equity * Decimal("0.25")).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP
             )
-            scaled_floor = max(Decimal("5"), scaled_floor)
+            scaled_floor = max(Decimal("3"), scaled_floor)
             effective_min_notional = min(effective_min_notional, scaled_floor)
-        effective_min_notional = max(Decimal("5"), effective_min_notional)
+        effective_min_notional = max(Decimal("3"), effective_min_notional)
 
         target_order_value = Decimal(cfg.order_size_usd)
         if total_stable_equity > Decimal("0"):
@@ -1177,6 +1322,37 @@ class DualSideQuoteManager:
         buy_amount = (order_value / buy_price).quantize(Decimal("0.00001"))
         sell_amount = (order_value / sell_price).quantize(Decimal("0.00001"))
 
+        current_inventory_usd = (
+            inventory_notional if inventory_notional > Decimal("0") else inventory_amount * mid
+        )
+        max_inventory_usd = order_value * self._inventory_cap_multiple
+        if inventory_amount > Decimal("0"):
+            sell_amount = max(
+                sell_amount,
+                min(usable_base, inventory_amount.quantize(Decimal("0.00001"))),
+            )
+        if current_inventory_usd >= max_inventory_usd:
+            logger.info(
+                "[QUOTE] Skipping buy for %s %s due to inventory cap inventory_usd=%s cap=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                current_inventory_usd.quantize(Decimal("0.0001")),
+                max_inventory_usd.quantize(Decimal("0.0001")),
+            )
+            buy_amount = Decimal("0")
+        if inventory_age is not None and inventory_age > self._max_inventory_hold_s:
+            logger.info(
+                "[QUOTE] Inventory aged %.1fs for %s %s – prioritising sell, pausing buys",
+                inventory_age,
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+            )
+            buy_amount = Decimal("0")
+            sell_amount = max(
+                sell_amount,
+                min(usable_base, inventory_amount.quantize(Decimal("0.00001"))),
+            )
+
         if usable_base > Decimal("0") and sell_amount > Decimal("0") and usable_base > sell_amount * Decimal("3"):
             sell_amount = min(
                 (usable_base * Decimal("0.5")).quantize(Decimal("0.00001")),
@@ -1190,6 +1366,7 @@ class DualSideQuoteManager:
                 cfg.symbol,
                 order_value,
             )
+            await self._cancel_both_sides(cfg)
             return
 
         max_buy_amount = (
@@ -1212,23 +1389,30 @@ class DualSideQuoteManager:
         if existing_buy:
             age = now_ts - existing_buy.created_at
             if age > stale_threshold:
-                escalate_buy = True
-                buy_amount = existing_buy.amount
-                buy_price = (best_ask * (Decimal("1") + self._ioc_slippage)).quantize(
-                    Decimal("0.00001")
-                )
-                if cfg.exchange_id == "gemini":
-                    buy_params = {"options": ["immediate-or-cancel"]}
-                elif cfg.exchange_id == "coinbase":
-                    buy_params = {"time_in_force": "IOC"}
                 logger.info(
-                    "[QUOTE] Escalating stale BUY for %s %s age=%.2fs new_price=%s amount=%s",
+                    "[QUOTE] Cancelling stale BUY for %s %s age=%.2fs order=%s",
                     cfg.exchange_id.upper(),
                     cfg.symbol,
                     age,
-                    buy_price,
-                    buy_amount,
+                    existing_buy.order_id,
                 )
+                try:
+                    await self._adapter.cancel_order(
+                        cfg.exchange_id, cfg.symbol, existing_buy.order_id
+                    )
+                    await self._response_engine.mark_cancelled(
+                        cfg.exchange_id, cfg.symbol, OrderSide.BUY
+                    )
+                    await self._balance_cache.force_refresh(cfg.exchange_id)
+                    existing_buy = None
+                except Exception as exc:
+                    logger.warning(
+                        "[QUOTE] Failed to cancel stale BUY %s %s order=%s: %s",
+                        cfg.exchange_id.upper(),
+                        cfg.symbol,
+                        existing_buy.order_id,
+                        exc,
+                    )
 
         existing_sell = self._response_engine.get_active_order(
             cfg.exchange_id, cfg.symbol, OrderSide.SELL
@@ -1236,23 +1420,30 @@ class DualSideQuoteManager:
         if existing_sell:
             age = now_ts - existing_sell.created_at
             if age > stale_threshold:
-                escalate_sell = True
-                sell_amount = existing_sell.amount
-                sell_price = (best_bid * (Decimal("1") - self._ioc_slippage)).quantize(
-                    Decimal("0.00001")
-                )
-                if cfg.exchange_id == "gemini":
-                    sell_params = {"options": ["immediate-or-cancel"]}
-                elif cfg.exchange_id == "coinbase":
-                    sell_params = {"time_in_force": "IOC"}
                 logger.info(
-                    "[QUOTE] Escalating stale SELL for %s %s age=%.2fs new_price=%s amount=%s",
+                    "[QUOTE] Cancelling stale SELL for %s %s age=%.2fs order=%s",
                     cfg.exchange_id.upper(),
                     cfg.symbol,
                     age,
-                    sell_price,
-                    sell_amount,
+                    existing_sell.order_id,
                 )
+                try:
+                    await self._adapter.cancel_order(
+                        cfg.exchange_id, cfg.symbol, existing_sell.order_id
+                    )
+                    await self._response_engine.mark_cancelled(
+                        cfg.exchange_id, cfg.symbol, OrderSide.SELL
+                    )
+                    await self._balance_cache.force_refresh(cfg.exchange_id)
+                    existing_sell = None
+                except Exception as exc:
+                    logger.warning(
+                        "[QUOTE] Failed to cancel stale SELL %s %s order=%s: %s",
+                        cfg.exchange_id.upper(),
+                        cfg.symbol,
+                        existing_sell.order_id,
+                        exc,
+                    )
 
         need_buy = buy_amount > Decimal("0") and (buy_amount * buy_price) >= cfg.min_notional_usd
         need_sell = sell_amount > Decimal("0") and (sell_amount * sell_price) >= cfg.min_notional_usd
@@ -1426,6 +1617,29 @@ class DualSideQuoteManager:
 
         return cancelled
 
+    async def _cancel_both_sides(self, cfg: PairConfig) -> None:
+        for side in (OrderSide.BUY, OrderSide.SELL):
+            existing = self._response_engine.get_active_order(
+                cfg.exchange_id, cfg.symbol, side
+            )
+            if not existing or existing.tag != "quote":
+                continue
+            try:
+                await self._adapter.cancel_order(
+                    cfg.exchange_id, cfg.symbol, existing.order_id
+                )
+                await self._response_engine.mark_cancelled(
+                    cfg.exchange_id, cfg.symbol, side
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug(
+                    "[QUOTE] Failed to cancel %s side=%s order=%s: %s",
+                    cfg.symbol,
+                    side.value,
+                    existing.order_id,
+                    exc,
+                )
+
     @staticmethod
     def _extract_quote_volume_usd(ticker: Dict[str, Any], symbol: str) -> Optional[Decimal]:
         keys = (
@@ -1541,6 +1755,18 @@ class DualSideQuoteManager:
             # refresh balances after cancellation to avoid stale locked funds
             await self._balance_cache.get_balances(cfg.exchange_id)
 
+        params: Dict[str, Any] = dict(order_params or {})
+        if not escalate:
+            if cfg.exchange_id == "coinbase":
+                params.setdefault("post_only", True)
+            elif cfg.exchange_id == "gemini":
+                existing_options = params.get("options")
+                if isinstance(existing_options, list):
+                    if "maker-or-cancel" not in existing_options:
+                        params["options"] = existing_options + ["maker-or-cancel"]
+                else:
+                    params["options"] = ["maker-or-cancel"]
+
         logger.info(
             "[QUOTE] %s %s creating order side=%s amount=%s price=%s",
             cfg.exchange_id.upper(),
@@ -1556,7 +1782,7 @@ class DualSideQuoteManager:
             amount=amount,
             price=price,
             order_type="limit",
-            params=order_params,
+            params=params or None,
         )
         order_id = response.get("id") or response.get("order_id")
         if not order_id:
@@ -1771,11 +1997,14 @@ class InstantFillMarketMaker:
         self._pair_index: Dict[str, Dict[str, List[PairConfig]]] = {}
         self._inventory_check_interval = 2.0
         self._inventory_threshold = Decimal("0.00001")
+        self._inventory_hedge_fee_guard_bps = Decimal("30")
         self._dust_threshold = Decimal("10.00")
         self._balance_cache = BalanceCache(adapter)
         self._pair_cooldowns: Dict[Tuple[str, str], float] = {}
         self._hedge_attempts: Dict[Tuple[str, str], int] = {}
-        self._position_tracker: Dict[Tuple[str, str], List[Tuple[Decimal, Decimal]]] = defaultdict(list)
+        self._position_tracker: Dict[
+            Tuple[str, str], List[Dict[str, Any]]
+        ] = defaultdict(list)
         self._realized_pnl: Decimal = Decimal("0")
         self._realized_volume: Decimal = Decimal("0")
         self._trade_count: int = 0
@@ -1789,7 +2018,15 @@ class InstantFillMarketMaker:
         self._pair_stats: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._max_active_pairs: int = 12
         self._last_rank_snapshot: List[Dict[str, Any]] = []
-        minimum_notional = Decimal("10.00")
+        minimum_notional = Decimal("3.00")
+        self._fast_fill_signal: Dict[
+            Tuple[str, str], Dict[str, Any]
+        ] = {}
+        self._fast_fill_decay_s: float = 30.0
+        self._recent_pnl: Deque[Decimal] = deque(maxlen=20)
+        self._circuit_breaker_trades: int = 20
+        self._circuit_breaker_threshold: Decimal = Decimal("0")
+        self._circuit_breaker_cooldown_s: float = 600.0
         for cfg in self._pair_configs:
             if cfg.order_size_usd < minimum_notional:
                 logger.info(
@@ -1834,6 +2071,9 @@ class InstantFillMarketMaker:
             self._pair_configs,
             self._pair_cooldowns,
             self._fee_floor_bps,
+            self._inventory_snapshot,
+            self._stats_snapshot,
+            self._fill_quality_snapshot,
         )
         self._monitors: Dict[str, WebSocketFillMonitor] = {}
         self._tasks: List[asyncio.Task] = []
@@ -1860,6 +2100,62 @@ class InstantFillMarketMaker:
             }
             self._pair_stats[pair_key] = stats
         return stats
+
+    def _inventory_snapshot(
+        self, exchange_id: str, symbol: str
+    ) -> Tuple[Decimal, Optional[float], Decimal]:
+        entries = self._position_tracker.get((exchange_id, symbol), [])
+        if not entries:
+            return Decimal("0"), None, Decimal("0")
+        total_amount = sum(entry["amount"] for entry in entries)
+        total_notional = sum(entry["amount"] * entry["price"] for entry in entries)
+        valid_timestamps = [entry["ts"] for entry in entries if entry["amount"] > 0]
+        age: Optional[float] = None
+        if valid_timestamps:
+            oldest = min(valid_timestamps)
+            age = max(0.0, time.time() - oldest)
+        return total_amount, age, total_notional
+
+    def _stats_snapshot(self, exchange_id: str, symbol: str) -> Dict[str, Any]:
+        return self._pair_stats.get((exchange_id, symbol), {})
+
+    def _fill_quality_snapshot(
+        self, exchange_id: str, symbol: str
+    ) -> Dict[str, Decimal]:
+        key = (exchange_id, symbol)
+        data = self._fast_fill_signal.get(key)
+        if not data:
+            return {"buy": Decimal("0"), "sell": Decimal("0")}
+        now = time.time()
+        elapsed = now - data.get("ts", now)
+        decay = Decimal(max(0.0, elapsed) / self._fast_fill_decay_s) if self._fast_fill_decay_s > 0 else Decimal("0")
+        buy_level = max(Decimal("0"), data.get("buy", Decimal("0")) - decay)
+        sell_level = max(Decimal("0"), data.get("sell", Decimal("0")) - decay)
+        data["buy"] = buy_level
+        data["sell"] = sell_level
+        data["ts"] = now
+        return {"buy": buy_level, "sell": sell_level}
+
+    def _record_fast_fill(self, order: ManagedOrder, latency_ms: float) -> None:
+        if order.tag != "quote":
+            return
+        key = (order.exchange_id, order.symbol)
+        record = self._fast_fill_signal.setdefault(
+            key,
+            {
+                "buy": Decimal("0"),
+                "sell": Decimal("0"),
+                "ts": time.time(),
+            },
+        )
+        side_key = "buy" if order.side == OrderSide.BUY else "sell"
+        level = record.get(side_key, Decimal("0"))
+        if latency_ms < 1000.0:
+            level = min(Decimal("20"), level + Decimal("1"))
+        else:
+            level = max(Decimal("0"), level - Decimal("0.5"))
+        record[side_key] = level
+        record["ts"] = time.time()
 
     def _select_active_pairs(self) -> List[PairConfig]:
         metrics = self._fill_engine.get_metrics()
@@ -1936,8 +2232,8 @@ class InstantFillMarketMaker:
             symbols_by_exchange[cfg.exchange_id].append(cfg.symbol)
 
         for exchange_id, symbols in symbols_by_exchange.items():
-            poll_interval = 0.5 if exchange_id == "gemini" else 1.0
-            jitter = 0.35 if exchange_id == "gemini" else 0.2
+            poll_interval = 0.3 if exchange_id == "gemini" else 0.5
+            jitter = 0.25 if exchange_id == "gemini" else 0.15
             monitor = WebSocketFillMonitor(
                 self._adapter,
                 self._fill_engine,
@@ -2042,6 +2338,27 @@ class InstantFillMarketMaker:
                     metrics.get("fills_by_pair"),
                     exposure_snapshot,
                 )
+                pnl_rows: List[str] = []
+                for (exchange_id, symbol), stats in self._pair_stats.items():
+                    trades = stats.get("trade_count", 0)
+                    if trades <= 0:
+                        continue
+                    pnl_value: Decimal = stats.get("pnl", Decimal("0"))
+                    avg_edge: Decimal = stats.get("avg_edge_bps", Decimal("0"))
+                    wins = stats.get("wins", 0)
+                    win_rate_pct = (
+                        (Decimal(wins) / Decimal(trades)) * Decimal("100")
+                        if trades
+                        else Decimal("0")
+                    )
+                    pnl_rows.append(
+                        f"{exchange_id.upper()}:{symbol} pnl={pnl_value:.4f} edge_bps={avg_edge:.1f} win_rate={win_rate_pct:.1f}% trades={trades}"
+                    )
+                if pnl_rows:
+                    logger.info(
+                        "[PNL] Snapshot %s",
+                        " | ".join(sorted(pnl_rows)[:8]),
+                    )
                 if self._last_rank_snapshot:
                     logger.info(
                         "[METRICS] ranking_top=%s",
@@ -2170,22 +2487,31 @@ class InstantFillMarketMaker:
             )
 
     async def _on_fill(self, order: ManagedOrder, fill: FillEvent) -> None:
+        latency_ms = (time.time() - order.created_at) * 1000.0
+        self._record_fast_fill(order, latency_ms)
         if order.tag == "hedge":
             self._hedge_attempts.pop((order.exchange_id, order.symbol), None)
         self._pair_cooldowns.pop((order.exchange_id, order.symbol), None)
         self._last_inactivity_warning = 0.0
         logger.info(
-            "[FILL] %s %s filled amount=%s price=%s",
+            "[FILL] %s %s filled amount=%s price=%s latency=%.1fms",
             order.exchange_id.upper(),
             order.symbol,
             fill.amount,
             fill.price,
+            latency_ms,
         )
         pair_key = (order.exchange_id, order.symbol)
         stats = self._get_pair_stats(pair_key)
         stats["last_fill_ts"] = time.time()
         if order.side == OrderSide.BUY:
-            self._position_tracker[pair_key].append((fill.amount, fill.price))
+            self._position_tracker[pair_key].append(
+                {
+                    "amount": fill.amount,
+                    "price": fill.price,
+                    "ts": time.time(),
+                }
+            )
             logger.info(
                 "[PNL] Recorded buy leg %s %s amount=%s price=%s",
                 order.exchange_id.upper(),
@@ -2197,12 +2523,15 @@ class InstantFillMarketMaker:
             remaining = fill.amount
             profit = Decimal("0")
             fifo = self._position_tracker[pair_key]
-            updated_fifo: List[Tuple[Decimal, Decimal]] = []
+            updated_fifo: List[Dict[str, Any]] = []
             entry_notional = Decimal("0")
             exit_notional = Decimal("0")
-            for bought_amount, bought_price in fifo:
+            for entry in fifo:
+                bought_amount = entry["amount"]
+                bought_price = entry["price"]
+                entry_ts = entry["ts"]
                 if remaining <= Decimal("0"):
-                    updated_fifo.append((bought_amount, bought_price))
+                    updated_fifo.append(entry)
                     continue
                 matched = min(remaining, bought_amount)
                 entry_value = matched * bought_price
@@ -2213,7 +2542,13 @@ class InstantFillMarketMaker:
                 remaining -= matched
                 leftover = bought_amount - matched
                 if leftover > Decimal("0"):
-                    updated_fifo.append((leftover, bought_price))
+                    updated_fifo.append(
+                        {
+                            "amount": leftover,
+                            "price": bought_price,
+                            "ts": entry_ts,
+                        }
+                    )
             if remaining > Decimal("0"):
                 logger.warning(
                     "[PNL] SELL exceeded tracked inventory for %s %s remaining=%s",
@@ -2239,6 +2574,28 @@ class InstantFillMarketMaker:
                     ) / Decimal(trades)
                 else:
                     stats["avg_edge_bps"] = edge_bps
+            inventory_remaining = sum(
+                entry["amount"] for entry in self._position_tracker[pair_key]
+            )
+            if entry_notional > Decimal("0"):
+                logger.info(
+                    "[PNL] %s %s realized=%s edge_bps=%s entry_notional=%s exit_notional=%s inventory_remaining=%s",
+                    order.exchange_id.upper(),
+                    order.symbol,
+                    profit,
+                    edge_bps.quantize(Decimal("0.01")),
+                    entry_notional.quantize(Decimal("0.0001")),
+                    exit_notional.quantize(Decimal("0.0001")),
+                    inventory_remaining,
+                )
+            else:
+                logger.info(
+                    "[PNL] %s %s sell amount=%s price=%s (no tracked cost basis)",
+                    order.exchange_id.upper(),
+                    order.symbol,
+                    fill.amount,
+                    fill.price,
+                )
             if profit > Decimal("0"):
                 stats["wins"] += 1
                 stats["loss_streak"] = 0
@@ -2252,12 +2609,26 @@ class InstantFillMarketMaker:
                 stats["break_even"] += 1
                 stats["loss_streak"] = 0
                 self._break_even += 1
-            if profit < Decimal("0") and stats["loss_streak"] >= 3:
-                cooldown_period = 180.0
+            self._recent_pnl.append(profit)
+            rolling_sum = sum(self._recent_pnl, Decimal("0"))
+            if (
+                len(self._recent_pnl) >= self._circuit_breaker_trades
+                and rolling_sum <= self._circuit_breaker_threshold
+            ):
+                logger.error(
+                    "[PNL] 🔌 Circuit breaker triggered after %s trades (rolling PnL=%s)",
+                    self._circuit_breaker_trades,
+                    rolling_sum,
+                )
+                self._activate_cooldown(self._circuit_breaker_cooldown_s)
+                self._recent_pnl.clear()
+
+            if profit < Decimal("0"):
+                cooldown_period = 300.0
                 until = time.time() + cooldown_period
                 self._pair_cooldowns[(order.exchange_id, order.symbol)] = until
                 logger.warning(
-                    "[FILL] Activated cooldown for %s %s after %s consecutive losses (%.1fs)",
+                    "[FILL] Activated cooldown for %s %s after loss (streak=%s, cooldown=%.1fs)",
                     order.exchange_id.upper(),
                     order.symbol,
                     stats["loss_streak"],
@@ -2300,6 +2671,27 @@ class InstantFillMarketMaker:
         if best_bid <= 0:
             return False
 
+        inventory_amount, _, inventory_notional = self._inventory_snapshot(
+            cfg.exchange_id, cfg.symbol
+        )
+        avg_entry_price: Optional[Decimal] = None
+        if inventory_amount > Decimal("0"):
+            avg_entry_price = (inventory_notional / inventory_amount).quantize(
+                Decimal("0.00001")
+            )
+            if best_bid < avg_entry_price * Decimal("0.98"):
+                cooldown_until = time.time() + 180.0
+                self._pair_cooldowns[(cfg.exchange_id, cfg.symbol)] = cooldown_until
+                logger.warning(
+                    "[INVENTORY] Skipping hedge for %s %s: best_bid=%s more than 2%% below avg_entry=%s – cooldown activated until %.0f",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    best_bid,
+                    avg_entry_price,
+                    cooldown_until,
+                )
+                return False
+
         sell_amount = amount.quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
         sell_value = sell_amount * best_bid
         min_notional = cfg.min_notional_usd if cfg else Decimal("5.00")
@@ -2334,6 +2726,23 @@ class InstantFillMarketMaker:
             price if price is not None else "MARKET",
             sell_amount,
         )
+        if avg_entry_price is not None:
+            breakeven_price = avg_entry_price * (
+                Decimal("1") + self._inventory_hedge_fee_guard_bps / Decimal("10000")
+            )
+            if order_type == "market" and best_bid < breakeven_price:
+                logger.info(
+                    "[INVENTORY] Aborting market hedge for %s %s: breakeven=%s best_bid=%s",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    breakeven_price,
+                    best_bid,
+                )
+                return False
+            if order_type == "limit":
+                clamp_price = breakeven_price.quantize(Decimal("0.00001"))
+                price = max(price or clamp_price, clamp_price)
+
         try:
             response = await self._adapter.create_order(
                 cfg.exchange_id,
@@ -2408,6 +2817,9 @@ class InstantFillMarketMaker:
             self._pair_configs,
             self._pair_cooldowns,
             self._fee_floor_bps,
+            self._inventory_snapshot,
+            self._stats_snapshot,
+            self._fill_quality_snapshot,
         )
         self._hedge_attempts.clear()
         self._rebuild_pair_maps()

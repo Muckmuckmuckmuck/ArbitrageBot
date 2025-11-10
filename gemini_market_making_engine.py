@@ -3,9 +3,9 @@
 Dynamic Gemini market making engine built on the instant-fill OMS.
 
 This wrapper discovers Gemini spot markets whose 24h quote volume exceeds
-$50,000 and produces `PairConfig` entries for each. Core pairs keep tuned
+$75,000 and produces `PairConfig` entries for each. Core pairs keep tuned
 spread/order sizing overrides; everything else inherits safe defaults that
-respect fee floors and minimum notionals.
+respect fee floors, minimum notionals, and the small-capital constraints.
 """
 
 from __future__ import annotations
@@ -24,60 +24,67 @@ from instant_fill_oms import ExchangeManagerAdapter, InstantFillMarketMaker, Pai
 
 logger = logging.getLogger(__name__)
 
-MIN_VOLUME_USD = Decimal("20000")
-DEFAULT_ORDER_SIZE_USD = Decimal("6.00")
+MIN_VOLUME_USD = Decimal("75000")
+DEFAULT_ORDER_SIZE_USD = Decimal("3.25")
 DEFAULT_MIN_SPREAD_BPS = 220
 DEFAULT_PRICE_IMPROVEMENT_BPS = 3
 DEFAULT_MAX_QUOTE_INTERVAL_S = 20.0
 DEFAULT_FEE_FLOOR_BPS = 150
-DEFAULT_MIN_NOTIONAL_USD = Decimal("5.00")
-DEFAULT_MIN_DEPTH_USD = Decimal("1500")
+DEFAULT_MIN_NOTIONAL_USD = Decimal("3.00")
+DEFAULT_MIN_DEPTH_USD = Decimal("2000")
 ALLOWED_QUOTES = {"USD", "USDC"}
 
 PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
     "BTC/USD": {
-        "order_size_usd": Decimal("8.00"),
+        "order_size_usd": Decimal("4.00"),
         "min_spread_bps": 200,
         "price_improve_bps": 2,
-        "min_depth_usd": Decimal("3000"),
+        "min_depth_usd": Decimal("3500"),
         "fee_floor_bps": 160,
+        "target_edge_bps": 260,
     },
     "BTC/USDC": {
-        "order_size_usd": Decimal("8.00"),
+        "order_size_usd": Decimal("4.00"),
         "min_spread_bps": 200,
         "price_improve_bps": 2,
-        "min_depth_usd": Decimal("3000"),
+        "min_depth_usd": Decimal("3500"),
         "fee_floor_bps": 160,
+        "target_edge_bps": 260,
     },
     "ETH/USD": {
-        "order_size_usd": Decimal("7.00"),
+        "order_size_usd": Decimal("3.75"),
         "min_spread_bps": 230,
         "price_improve_bps": 2,
         "fee_floor_bps": 175,
+        "target_edge_bps": 290,
     },
     "ETH/USDC": {
-        "order_size_usd": Decimal("7.00"),
+        "order_size_usd": Decimal("3.75"),
         "min_spread_bps": 230,
         "price_improve_bps": 2,
         "fee_floor_bps": 175,
+        "target_edge_bps": 290,
     },
     "SOL/USD": {
-        "order_size_usd": Decimal("6.00"),
+        "order_size_usd": Decimal("3.25"),
         "min_spread_bps": 260,
         "price_improve_bps": 2,
         "fee_floor_bps": 190,
+        "target_edge_bps": 320,
     },
     "LINK/USD": {
-        "order_size_usd": Decimal("6.00"),
+        "order_size_usd": Decimal("3.25"),
         "min_spread_bps": 280,
         "price_improve_bps": 2,
         "fee_floor_bps": 195,
+        "target_edge_bps": 340,
     },
     "DOGE/USD": {
-        "order_size_usd": Decimal("6.00"),
+        "order_size_usd": Decimal("3.25"),
         "min_spread_bps": 320,
         "price_improve_bps": 4,
         "fee_floor_bps": 210,
+        "target_edge_bps": 380,
     },
 }
 
@@ -157,6 +164,7 @@ def _make_pair_config(symbol: str, override: Dict[str, object]) -> PairConfig:
         override.get("max_quote_interval_s", DEFAULT_MAX_QUOTE_INTERVAL_S)
     )
     fee_floor_bps = int(override.get("fee_floor_bps", DEFAULT_FEE_FLOOR_BPS))
+    target_edge_bps = int(override.get("target_edge_bps", min_spread_bps + 60))
 
     return PairConfig(
         EXCHANGE_GEMINI,
@@ -169,6 +177,7 @@ def _make_pair_config(symbol: str, override: Dict[str, object]) -> PairConfig:
         price_improve_bps=price_improve_bps,
         fee_floor_bps=fee_floor_bps,
         min_volume_usd=MIN_VOLUME_USD,
+        target_edge_bps=target_edge_bps,
     )
 
 
