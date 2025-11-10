@@ -1957,7 +1957,7 @@ class WebSocketFillMonitor:
         self._symbols: List[str] = []
         self._running = False
         self._task: Optional[asyncio.Task] = None
-        self._last_trade_ts: Optional[int] = None
+        self._last_trade_ts: Dict[str, Optional[int]] = {}
 
     async def start(self, symbols: Iterable[str]) -> None:
         self._symbols = list(symbols)
@@ -1966,6 +1966,8 @@ class WebSocketFillMonitor:
         if self._running:
             return
         self._running = True
+        for symbol in self._symbols:
+            self._last_trade_ts.setdefault(symbol, None)
         self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
@@ -1997,19 +1999,22 @@ class WebSocketFillMonitor:
 
     async def _poll_once(self) -> None:
         for symbol in self._symbols:
+            since_ts = self._last_trade_ts.get(symbol)
             logger.info(
                 "[WS] Polling trades for %s %s since=%s",
                 self._exchange_id.upper(),
                 symbol,
-                self._last_trade_ts,
+                since_ts,
             )
             trades = await self._adapter.fetch_trades(
                 self._exchange_id,
                 symbol,
-                since=self._last_trade_ts,
+                since=since_ts,
             )
             if trades:
-                self._last_trade_ts = max(t.get("timestamp", 0) for t in trades)
+                latest_ts = max(t.get("timestamp", 0) for t in trades)
+                if latest_ts:
+                    self._last_trade_ts[symbol] = latest_ts + 1
             logger.info(
                 "[WS] %s %s fetched %d trades",
                 self._exchange_id.upper(),
