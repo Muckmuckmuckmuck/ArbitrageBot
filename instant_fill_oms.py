@@ -1019,29 +1019,6 @@ class DualSideQuoteManager:
             return
 
         mid = (best_bid + best_ask) / Decimal("2")
-        if is_probe:
-            probe_size = min(order_value, self._probe_order_usd)
-            if probe_size < effective_min_notional:
-                logger.info(
-                    "[QUOTE] Skip %s %s reason=probe_min_notional probe_size=%s min_notional=%s",
-                    cfg.exchange_id.upper(),
-                    cfg.symbol,
-                    probe_size,
-                    effective_min_notional,
-                )
-                self._record_skip(cfg, "probe_min_notional")
-                await self._cancel_both_sides(cfg)
-                return
-            order_value = probe_size
-            buy_tag = "probe"
-            sell_tag = "probe"
-            logger.info(
-                "[QUOTE] Probe sizing for %s %s net_edge=%s order_value=%s",
-                cfg.exchange_id.upper(),
-                cfg.symbol,
-                net_edge_bps.quantize(Decimal("0.01")),
-                order_value,
-            )
 
         inventory_amount, inventory_age, inventory_notional = self._inventory_lookup(
             cfg.exchange_id, cfg.symbol
@@ -1431,6 +1408,30 @@ class DualSideQuoteManager:
         order_value = min(order_value, usable_quote) if usable_quote > 0 else order_value
         buy_tag = "quote"
         sell_tag = "quote"
+
+        if is_probe:
+            probe_size = min(order_value, self._probe_order_usd)
+            if probe_size < effective_min_notional:
+                logger.info(
+                    "[QUOTE] Skip %s %s reason=probe_min_notional probe_size=%s min_notional=%s",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    probe_size,
+                    effective_min_notional,
+                )
+                self._record_skip(cfg, "probe_min_notional")
+                await self._cancel_both_sides(cfg)
+                return
+            order_value = probe_size
+            buy_tag = "probe"
+            sell_tag = "probe"
+            logger.info(
+                "[QUOTE] Probe sizing for %s %s net_edge=%s order_value=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                net_edge_bps.quantize(Decimal("0.01")),
+                order_value,
+            )
 
         inventory_amount, inventory_age, inventory_notional = self._inventory_lookup(
             cfg.exchange_id, cfg.symbol
