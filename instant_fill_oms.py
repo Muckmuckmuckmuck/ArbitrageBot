@@ -1056,8 +1056,23 @@ class DualSideQuoteManager:
         convertible_sources = self._stable_aliases.get(quote, ())
         if (
             convertible_sources
-            and usable_quote < Decimal(cfg.min_notional_usd)
+            and usable_quote < effective_min_notional
         ):
+            base_symbol = base
+            if quote in {"USDC", "USDT", "GUSD"}:
+                sibling_has_usd = any(
+                    pc.symbol == f"{base_symbol}/USD"
+                    for pc in self._pair_configs
+                    if pc.exchange_id == cfg.exchange_id
+                )
+                if sibling_has_usd:
+                    logger.info(
+                        "[QUOTE] Skip %s %s: opting out of %s conversion while USD sibling exists",
+                        cfg.exchange_id.upper(),
+                        cfg.symbol,
+                        quote,
+                    )
+                    return
             for alt_currency in convertible_sources:
                 if alt_currency == quote:
                     continue
