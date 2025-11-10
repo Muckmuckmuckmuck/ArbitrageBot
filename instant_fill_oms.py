@@ -780,7 +780,7 @@ class DualSideQuoteManager:
             "coinbase": Decimal("30"),
             "gemini": Decimal("25"),
         }
-        self._minimum_target_edge_bps = Decimal("180")
+        self._minimum_target_edge_bps = Decimal("150")
         self._inventory_cap_multiple = Decimal("0.9")
         self._max_inventory_hold_s = 120.0
         self._inventory_lookup = (
@@ -963,11 +963,13 @@ class DualSideQuoteManager:
         )
 
         if bid_depth < cfg.min_depth_usd or ask_depth < cfg.min_depth_usd:
-            logger.debug(
-                "[QUOTE] Depth too low for %s (%s/%s)",
+            logger.info(
+                "[QUOTE] Skip %s %s reason=depth bid_depth=%s ask_depth=%s min=%s",
+                cfg.exchange_id.upper(),
                 cfg.symbol,
                 bid_depth,
                 ask_depth,
+                cfg.min_depth_usd,
             )
             await self._cancel_both_sides(cfg)
             return
@@ -1085,7 +1087,7 @@ class DualSideQuoteManager:
 
         if buy_price <= 0:
             logger.info(
-                "[QUOTE] Invalid buy price computed for %s %s (buy_price=%s)",
+                "[QUOTE] Skip %s %s reason=price_invalid buy_price=%s",
                 cfg.exchange_id.upper(),
                 cfg.symbol,
                 buy_price,
@@ -1112,7 +1114,7 @@ class DualSideQuoteManager:
         target_edge_bps = max(target_edge_bps, self._minimum_target_edge_bps)
         if net_edge_bps < target_edge_bps:
             logger.info(
-                "[QUOTE] Skipping %s %s net_edge_bps=%s target=%s gross=%s fees=%s slip=%s",
+                "[QUOTE] Skip %s %s reason=edge net_edge_bps=%s target=%s gross=%s fees=%s slip=%s",
                 cfg.exchange_id.upper(),
                 cfg.symbol,
                 net_edge_bps.quantize(Decimal("0.01")),
@@ -1182,6 +1184,13 @@ class DualSideQuoteManager:
         )
 
         if usable_quote < Decimal(cfg.min_notional_usd):
+            logger.info(
+                "[QUOTE] Skip %s %s reason=quote_balance usable_quote=%s required=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                usable_quote,
+                cfg.min_notional_usd,
+            )
             cancelled = await self._cancel_orphan_orders(cfg, OrderSide.BUY)
             if cancelled:
                 await self._balance_cache.force_refresh(cfg.exchange_id)
@@ -1191,6 +1200,13 @@ class DualSideQuoteManager:
 
         min_base_required = Decimal(cfg.min_notional_usd) / max(Decimal("1"), sell_price)
         if usable_base < min_base_required:
+            logger.info(
+                "[QUOTE] Skip %s %s reason=base_balance usable_base=%s required=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                usable_base,
+                min_base_required,
+            )
             cancelled = await self._cancel_orphan_orders(cfg, OrderSide.SELL)
             if cancelled:
                 await self._balance_cache.force_refresh(cfg.exchange_id)
@@ -1333,7 +1349,7 @@ class DualSideQuoteManager:
             )
         if current_inventory_usd >= max_inventory_usd:
             logger.info(
-                "[QUOTE] Skipping buy for %s %s due to inventory cap inventory_usd=%s cap=%s",
+                "[QUOTE] Skip %s %s reason=inventory_cap inventory_usd=%s cap=%s",
                 cfg.exchange_id.upper(),
                 cfg.symbol,
                 current_inventory_usd.quantize(Decimal("0.0001")),
@@ -1342,10 +1358,10 @@ class DualSideQuoteManager:
             buy_amount = Decimal("0")
         if inventory_age is not None and inventory_age > self._max_inventory_hold_s:
             logger.info(
-                "[QUOTE] Inventory aged %.1fs for %s %s – prioritising sell, pausing buys",
-                inventory_age,
+                "[QUOTE] Skip %s %s reason=inventory_age age=%.1fs",
                 cfg.exchange_id.upper(),
                 cfg.symbol,
+                inventory_age,
             )
             buy_amount = Decimal("0")
             sell_amount = max(
@@ -1361,10 +1377,12 @@ class DualSideQuoteManager:
 
         if bid_depth < order_value * Decimal("2") or ask_depth < order_value * Decimal("2"):
             logger.info(
-                "[QUOTE] Skipping %s %s depth insufficient for order_value=%s",
+                "[QUOTE] Skip %s %s reason=depth_for_size order_value=%s bid_depth=%s ask_depth=%s",
                 cfg.exchange_id.upper(),
                 cfg.symbol,
                 order_value,
+                bid_depth,
+                ask_depth,
             )
             await self._cancel_both_sides(cfg)
             return
@@ -1998,7 +2016,7 @@ class InstantFillMarketMaker:
         self._inventory_check_interval = 2.0
         self._inventory_threshold = Decimal("0.00001")
         self._inventory_hedge_fee_guard_bps = Decimal("30")
-        self._dust_threshold = Decimal("10.00")
+        self._dust_threshold = Decimal("1.00")
         self._balance_cache = BalanceCache(adapter)
         self._pair_cooldowns: Dict[Tuple[str, str], float] = {}
         self._hedge_attempts: Dict[Tuple[str, str], int] = {}
@@ -2123,16 +2141,24 @@ class InstantFillMarketMaker:
         self, exchange_id: str, symbol: str
     ) -> Dict[str, Decimal]:
         key = (exchange_id, symbol)
-        data = self._fast_fill_signal.get(key)
-        if not data:
-            return {"buy": Decimal("0"), "sell": Decimal("0")}
+        data = self._fast_fill_signal.setdefault(
+            key,
+            {"buy": Decimal("0"), "sell": Decimal("0"), "ts": time.time()},
+        )
         now = time.time()
         elapsed = now - data.get("ts", now)
-        decay = Decimal(max(0.0, elapsed) / self._fast_fill_decay_s) if self._fast_fill_decay_s > 0 else Decimal("0")
-        buy_level = max(Decimal("0"), data.get("buy", Decimal("0")) - decay)
-        sell_level = max(Decimal("0"), data.get("sell", Decimal("0")) - decay)
-        data["buy"] = buy_level
-        data["sell"] = sell_level
+        if self._fast_fill_decay_s > 0:
+            decay_factor = Decimal(math.exp(-elapsed / self._fast_fill_decay_s))
+        else:
+            decay_factor = Decimal("0")
+        buy_level = (data.get("buy", Decimal("0")) * decay_factor).quantize(
+            Decimal("0.0001"), rounding=ROUND_HALF_UP
+        )
+        sell_level = (data.get("sell", Decimal("0")) * decay_factor).quantize(
+            Decimal("0.0001"), rounding=ROUND_HALF_UP
+        )
+        data["buy"] = max(Decimal("0"), buy_level)
+        data["sell"] = max(Decimal("0"), sell_level)
         data["ts"] = now
         return {"buy": buy_level, "sell": sell_level}
 
@@ -2150,10 +2176,10 @@ class InstantFillMarketMaker:
         )
         side_key = "buy" if order.side == OrderSide.BUY else "sell"
         level = record.get(side_key, Decimal("0"))
-        if latency_ms < 1000.0:
-            level = min(Decimal("20"), level + Decimal("1"))
+        if latency_ms < 600.0:
+            level = min(Decimal("15"), level + Decimal("1.5"))
         else:
-            level = max(Decimal("0"), level - Decimal("0.5"))
+            level = max(Decimal("0"), level - Decimal("0.75"))
         record[side_key] = level
         record["ts"] = time.time()
 
