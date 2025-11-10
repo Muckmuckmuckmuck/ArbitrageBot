@@ -781,6 +781,9 @@ class DualSideQuoteManager:
             "gemini": Decimal("25"),
         }
         self._minimum_target_edge_bps = Decimal("150")
+        self._probe_edge_floor_bps = Decimal("120")
+        self._probe_order_usd = Decimal("3.00")
+        self._probe_cooldown_s = 180.0
         self._inventory_cap_multiple = Decimal("0.9")
         self._max_inventory_hold_s = 120.0
         self._inventory_lookup = (
@@ -798,6 +801,12 @@ class DualSideQuoteManager:
             if fill_quality_lookup is not None
             else lambda _exchange, _symbol: {"buy": Decimal("0"), "sell": Decimal("0")}
         )
+        self._probe_state: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._skip_counters: Dict[Tuple[str, str, str], int] = defaultdict(int)
+        self._skip_last_alert: Dict[Tuple[str, str, str], float] = {}
+        self._skip_alert_threshold = 5
+        self._skip_alert_cooldown = 180.0
+        self._balance_skip_cooldown = 60.0
         self._volatility_cache: Dict[
             Tuple[str, str], Tuple[float, Optional[float]]
         ] = {}
@@ -836,6 +845,26 @@ class DualSideQuoteManager:
                 )
             finally:
                 self._last_quote_time[(cfg.exchange_id, cfg.symbol)] = time.time()
+
+    def _record_skip(self, cfg: PairConfig, reason: str) -> None:
+        key = (cfg.exchange_id, cfg.symbol, reason)
+        self._skip_counters[key] += 1
+        now = time.time()
+        if reason in ("quote_balance", "base_balance"):
+            self._pair_cooldowns[(cfg.exchange_id, cfg.symbol)] = now + self._balance_skip_cooldown
+        last_warn = self._skip_last_alert.get(key, 0.0)
+        if (
+            self._skip_counters[key] >= self._skip_alert_threshold
+            and now - last_warn >= self._skip_alert_cooldown
+        ):
+            logger.warning(
+                "[ALERT] Skip threshold hit for %s %s reason=%s count=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                reason,
+                self._skip_counters[key],
+            )
+            self._skip_last_alert[key] = now
 
     async def _get_short_term_volatility(
         self, cfg: PairConfig, limit: int = 30
@@ -890,6 +919,13 @@ class DualSideQuoteManager:
         stats = self._stats_lookup(cfg.exchange_id, cfg.symbol)
         loss_streak = int(stats.get("loss_streak", 0) or 0)
         avg_edge_stats = Decimal(str(stats.get("avg_edge_bps", Decimal("0"))))
+        trades = int(stats.get("trade_count", 0) or 0)
+        wins = int(stats.get("wins", 0) or 0)
+        win_rate_decimal = (
+            (Decimal(wins) / Decimal(trades))
+            if trades > 0
+            else Decimal("0.55")
+        )
 
         if not self._adapter.is_symbol_supported(cfg.exchange_id, cfg.symbol):
             logger.debug(
@@ -929,6 +965,7 @@ class DualSideQuoteManager:
                 )
                 return
 
+        pair_key = (cfg.exchange_id, cfg.symbol)
         try:
             order_book = await self._adapter.fetch_order_book(
                 cfg.exchange_id, cfg.symbol, depth=5
@@ -971,10 +1008,35 @@ class DualSideQuoteManager:
                 ask_depth,
                 cfg.min_depth_usd,
             )
+            self._record_skip(cfg, "depth")
             await self._cancel_both_sides(cfg)
             return
 
         mid = (best_bid + best_ask) / Decimal("2")
+        if is_probe:
+            probe_size = min(order_value, self._probe_order_usd)
+            if probe_size < effective_min_notional:
+                logger.info(
+                    "[QUOTE] Skip %s %s reason=probe_min_notional probe_size=%s min_notional=%s",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    probe_size,
+                    effective_min_notional,
+                )
+                self._record_skip(cfg, "probe_min_notional")
+                await self._cancel_both_sides(cfg)
+                return
+            order_value = probe_size
+            buy_tag = "probe"
+            sell_tag = "probe"
+            logger.info(
+                "[QUOTE] Probe sizing for %s %s net_edge=%s order_value=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                net_edge_bps.quantize(Decimal("0.01")),
+                order_value,
+            )
+
         inventory_amount, inventory_age, inventory_notional = self._inventory_lookup(
             cfg.exchange_id, cfg.symbol
         )
@@ -1065,10 +1127,7 @@ class DualSideQuoteManager:
             buy_price -= mid * price_improve
             sell_price += mid * price_improve
         fill_quality = self._fill_quality_lookup(cfg.exchange_id, cfg.symbol)
-        buy_bias = Decimal(str(fill_quality.get("buy", Decimal("0"))))
         sell_bias = Decimal(str(fill_quality.get("sell", Decimal("0"))))
-        if buy_bias > 0:
-            buy_price -= mid * (buy_bias / Decimal("10000"))
         if sell_bias > 0:
             sell_price += mid * (sell_bias / Decimal("10000"))
         if current_inventory_usd > Decimal("0"):
@@ -1092,6 +1151,7 @@ class DualSideQuoteManager:
                 cfg.symbol,
                 buy_price,
             )
+            self._record_skip(cfg, "price")
             await self._cancel_both_sides(cfg)
             return
 
@@ -1105,6 +1165,11 @@ class DualSideQuoteManager:
         target_edge_bps = Decimal(
             cfg.target_edge_bps if cfg.target_edge_bps > 0 else cfg.min_spread_bps
         )
+        if trades >= 5:
+            if win_rate_decimal >= Decimal("0.70") and avg_edge_stats > Decimal("60"):
+                target_edge_bps -= Decimal("20")
+            elif win_rate_decimal <= Decimal("0.45"):
+                target_edge_bps += Decimal("30")
         if loss_streak > 0:
             target_edge_bps += Decimal(loss_streak) * Decimal("40")
         elif avg_edge_stats < Decimal("50"):
@@ -1112,19 +1177,40 @@ class DualSideQuoteManager:
         if inventory_pressure_bps > 0:
             target_edge_bps += inventory_pressure_bps
         target_edge_bps = max(target_edge_bps, self._minimum_target_edge_bps)
+        is_probe = False
+        probe_info = self._probe_state.setdefault(
+            pair_key, {"cooldown_until": 0.0, "recent_success": 0}
+        )
         if net_edge_bps < target_edge_bps:
-            logger.info(
-                "[QUOTE] Skip %s %s reason=edge net_edge_bps=%s target=%s gross=%s fees=%s slip=%s",
-                cfg.exchange_id.upper(),
-                cfg.symbol,
-                net_edge_bps.quantize(Decimal("0.01")),
-                target_edge_bps,
-                gross_edge_bps.quantize(Decimal("0.01")),
-                taker_fee_bps,
-                slippage_buffer,
-            )
-            await self._cancel_both_sides(cfg)
-            return
+            now_probe = time.time()
+            if net_edge_bps >= self._probe_edge_floor_bps:
+                if now_probe >= probe_info.get("cooldown_until", 0.0):
+                    is_probe = True
+                else:
+                    logger.info(
+                        "[QUOTE] Skip %s %s reason=probe_cooldown net_edge_bps=%s available_in=%.1fs",
+                        cfg.exchange_id.upper(),
+                        cfg.symbol,
+                        net_edge_bps.quantize(Decimal("0.01")),
+                        probe_info.get("cooldown_until", 0.0) - now_probe,
+                    )
+                    self._record_skip(cfg, "probe_cooldown")
+                    await self._cancel_both_sides(cfg)
+                    return
+            else:
+                logger.info(
+                    "[QUOTE] Skip %s %s reason=edge net_edge_bps=%s target=%s gross=%s fees=%s slip=%s",
+                    cfg.exchange_id.upper(),
+                    cfg.symbol,
+                    net_edge_bps.quantize(Decimal("0.01")),
+                    target_edge_bps,
+                    gross_edge_bps.quantize(Decimal("0.01")),
+                    taker_fee_bps,
+                    slippage_buffer,
+                )
+                self._record_skip(cfg, "edge")
+                await self._cancel_both_sides(cfg)
+                return
 
         base, quote = cfg.symbol.split("/")
         quote_balance = await self._balance_cache.get_balance(cfg.exchange_id, quote)
@@ -1191,6 +1277,7 @@ class DualSideQuoteManager:
                 usable_quote,
                 cfg.min_notional_usd,
             )
+            self._record_skip(cfg, "quote_balance")
             cancelled = await self._cancel_orphan_orders(cfg, OrderSide.BUY)
             if cancelled:
                 await self._balance_cache.force_refresh(cfg.exchange_id)
@@ -1207,6 +1294,7 @@ class DualSideQuoteManager:
                 usable_base,
                 min_base_required,
             )
+            self._record_skip(cfg, "base_balance")
             cancelled = await self._cancel_orphan_orders(cfg, OrderSide.SELL)
             if cancelled:
                 await self._balance_cache.force_refresh(cfg.exchange_id)
@@ -1335,14 +1423,23 @@ class DualSideQuoteManager:
         order_value = target_order_value * dynamic_multiplier
         order_value = max(order_value, effective_min_notional)
         order_value = min(order_value, usable_quote) if usable_quote > 0 else order_value
-        buy_amount = (order_value / buy_price).quantize(Decimal("0.00001"))
-        sell_amount = (order_value / sell_price).quantize(Decimal("0.00001"))
+        buy_tag = "quote"
+        sell_tag = "quote"
 
+        inventory_amount, inventory_age, inventory_notional = self._inventory_lookup(
+            cfg.exchange_id, cfg.symbol
+        )
         current_inventory_usd = (
             inventory_notional if inventory_notional > Decimal("0") else inventory_amount * mid
         )
         max_inventory_usd = order_value * self._inventory_cap_multiple
+        buy_amount = (order_value / buy_price).quantize(Decimal("0.00001"))
+        sell_amount = (order_value / sell_price).quantize(Decimal("0.00001"))
         if inventory_amount > Decimal("0"):
+            buy_amount = max(
+                Decimal("0"),
+                (buy_amount * Decimal("0.35")).quantize(Decimal("0.00001")),
+            )
             sell_amount = max(
                 sell_amount,
                 min(usable_base, inventory_amount.quantize(Decimal("0.00001"))),
@@ -1355,6 +1452,7 @@ class DualSideQuoteManager:
                 current_inventory_usd.quantize(Decimal("0.0001")),
                 max_inventory_usd.quantize(Decimal("0.0001")),
             )
+            self._record_skip(cfg, "inventory_cap")
             buy_amount = Decimal("0")
         if inventory_age is not None and inventory_age > self._max_inventory_hold_s:
             logger.info(
@@ -1363,6 +1461,7 @@ class DualSideQuoteManager:
                 cfg.symbol,
                 inventory_age,
             )
+            self._record_skip(cfg, "inventory_age")
             buy_amount = Decimal("0")
             sell_amount = max(
                 sell_amount,
@@ -1375,7 +1474,8 @@ class DualSideQuoteManager:
                 (sell_amount * Decimal("2")).quantize(Decimal("0.00001")),
             )
 
-        if bid_depth < order_value * Decimal("2") or ask_depth < order_value * Decimal("2"):
+        max_supported_value = depth_capacity / Decimal("3")
+        if max_supported_value < effective_min_notional:
             logger.info(
                 "[QUOTE] Skip %s %s reason=depth_for_size order_value=%s bid_depth=%s ask_depth=%s",
                 cfg.exchange_id.upper(),
@@ -1384,8 +1484,13 @@ class DualSideQuoteManager:
                 bid_depth,
                 ask_depth,
             )
+            self._record_skip(cfg, "depth_for_size")
             await self._cancel_both_sides(cfg)
             return
+        order_value = min(order_value, max_supported_value)
+        max_inventory_usd = order_value * self._inventory_cap_multiple
+        buy_amount = (order_value / buy_price).quantize(Decimal("0.00001"))
+        sell_amount = (order_value / sell_price).quantize(Decimal("0.00001"))
 
         max_buy_amount = (
             usable_quote / (buy_price * Decimal("1.01"))
@@ -1505,6 +1610,7 @@ class DualSideQuoteManager:
             need_buy,
             escalate_buy,
             buy_params,
+            buy_tag,
         )
         await self._sync_side(
             cfg,
@@ -1514,6 +1620,7 @@ class DualSideQuoteManager:
             need_sell,
             escalate_sell,
             sell_params,
+            sell_tag,
         )
 
     async def _cancel_orphan_orders(self, cfg: PairConfig, side: OrderSide) -> bool:
@@ -1709,6 +1816,7 @@ class DualSideQuoteManager:
         allowed: bool,
         escalate: bool = False,
         order_params: Optional[Dict[str, Any]] = None,
+        order_tag: str = "quote",
     ) -> None:
         existing = self._response_engine.get_active_order(
             cfg.exchange_id, cfg.symbol, side
@@ -1812,7 +1920,7 @@ class DualSideQuoteManager:
             order_id=str(order_id),
             price=price,
             amount=amount,
-            tag="quote",
+            tag=order_tag,
         )
         await self._response_engine.register_order(managed)
         logger.info(
@@ -2174,13 +2282,17 @@ class InstantFillMarketMaker:
                 "ts": time.time(),
             },
         )
-        side_key = "buy" if order.side == OrderSide.BUY else "sell"
-        level = record.get(side_key, Decimal("0"))
-        if latency_ms < 600.0:
-            level = min(Decimal("15"), level + Decimal("1.5"))
+        if order.side == OrderSide.SELL:
+            level = record.get("sell", Decimal("0"))
+            if latency_ms < 600.0:
+                level = min(Decimal("15"), level + Decimal("1.5"))
+            else:
+                level = max(Decimal("0"), level - Decimal("0.75"))
+            record["sell"] = level
         else:
-            level = max(Decimal("0"), level - Decimal("0.75"))
-        record[side_key] = level
+            level = record.get("buy", Decimal("0"))
+            level = max(Decimal("0"), level - Decimal("1.0"))
+            record["buy"] = level
         record["ts"] = time.time()
 
     def _select_active_pairs(self) -> List[PairConfig]:
@@ -2223,6 +2335,10 @@ class InstantFillMarketMaker:
             score -= loss_streak * 15.0
             if pending:
                 score -= min(pending * 8.0, 24.0)
+            skip_penalty = 0.0
+            for reason in ("edge", "quote_balance", "base_balance", "inventory_cap"):
+                skip_penalty += self._skip_counters.get((cfg.exchange_id, cfg.symbol, reason), 0) * 3.0
+            score -= min(skip_penalty, 30.0)
 
             ranked.append((cfg, score))
             snapshot.append(
@@ -2530,6 +2646,12 @@ class InstantFillMarketMaker:
         pair_key = (order.exchange_id, order.symbol)
         stats = self._get_pair_stats(pair_key)
         stats["last_fill_ts"] = time.time()
+        if order.tag == "probe":
+            probe_state = self._quote_manager._probe_state.setdefault(
+                pair_key, {"cooldown_until": 0.0, "recent_success": 0}
+            )
+        else:
+            probe_state = None
         if order.side == OrderSide.BUY:
             self._position_tracker[pair_key].append(
                 {
@@ -2545,6 +2667,10 @@ class InstantFillMarketMaker:
                 fill.amount,
                 fill.price,
             )
+            if probe_state is not None:
+                probe_state["recent_success"] = max(
+                    0, probe_state.get("recent_success", 0) - 1
+                )
         elif order.side == OrderSide.SELL:
             remaining = fill.amount
             profit = Decimal("0")
@@ -2627,10 +2753,24 @@ class InstantFillMarketMaker:
                 stats["loss_streak"] = 0
             if profit > Decimal("0"):
                 self._wins += 1
+                if probe_state is not None:
+                    probe_state["recent_success"] = probe_state.get("recent_success", 0) + 1
+                    probe_state["cooldown_until"] = 0.0
+                    if probe_state["recent_success"] >= 3:
+                        logger.info(
+                            "[PROBE] %s %s promoting to normal size after %s successful probes",
+                            order.exchange_id.upper(),
+                            order.symbol,
+                            probe_state["recent_success"],
+                        )
+                        probe_state["recent_success"] = 0
             elif profit < Decimal("0"):
                 stats["losses"] += 1
                 stats["loss_streak"] += 1
                 self._losses += 1
+                if probe_state is not None:
+                    probe_state["recent_success"] = 0
+                    probe_state["cooldown_until"] = time.time() + self._quote_manager._probe_cooldown_s
             else:
                 stats["break_even"] += 1
                 stats["loss_streak"] = 0
