@@ -866,6 +866,12 @@ class DualSideQuoteManager:
             )
             self._skip_last_alert[key] = now
 
+    def get_skip_counters(self) -> Dict[Tuple[str, str, str], int]:
+        return self._skip_counters
+
+    def get_skip_last_alert(self) -> Dict[Tuple[str, str, str], float]:
+        return self._skip_last_alert
+
     async def _get_short_term_volatility(
         self, cfg: PairConfig, limit: int = 30
     ) -> Optional[float]:
@@ -2210,6 +2216,8 @@ class InstantFillMarketMaker:
             self._stats_snapshot,
             self._fill_quality_snapshot,
         )
+        self._skip_counters = self._quote_manager.get_skip_counters()
+        self._skip_last_alert = self._quote_manager.get_skip_last_alert()
         self._monitors: Dict[str, WebSocketFillMonitor] = {}
         self._tasks: List[asyncio.Task] = []
         self._running = False
