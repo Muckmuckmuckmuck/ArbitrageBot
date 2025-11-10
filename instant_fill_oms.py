@@ -2158,6 +2158,10 @@ class InstantFillMarketMaker:
         self._circuit_breaker_trades: int = 20
         self._circuit_breaker_threshold: Decimal = Decimal("0")
         self._circuit_breaker_cooldown_s: float = 600.0
+        self._last_quote_tick: float = 0.0
+        self._quote_watchdog_threshold: float = 10.0
+        self._quote_watchdog_interval: float = 5.0
+        self._quote_watchdog_alerted: bool = False
         for cfg in self._pair_configs:
             if cfg.order_size_usd < minimum_notional:
                 logger.info(
@@ -2398,6 +2402,7 @@ class InstantFillMarketMaker:
         self._tasks.append(asyncio.create_task(self._hedge_refresh_loop()))
         self._tasks.append(asyncio.create_task(self._metrics_loop()))
         self._tasks.append(asyncio.create_task(self._inactivity_monitor_loop()))
+        self._tasks.append(asyncio.create_task(self._quote_watchdog_loop()))
 
     async def stop(self) -> None:
         self._running = False
@@ -2414,21 +2419,30 @@ class InstantFillMarketMaker:
 
     async def _quote_loop(self) -> None:
         while self._running:
-            logger.info("[LOOP] Quote loop tick")
-            active_pairs = self._select_active_pairs()
-            if active_pairs:
-                summary = [
-                    f"{cfg.exchange_id.upper()}:{cfg.symbol}"
-                    for cfg in active_pairs[:5]
-                ]
-                logger.info(
-                    "[LOOP] Active quoting set (%s/%s): %s%s",
-                    len(active_pairs),
-                    len(self._pair_configs),
-                    ", ".join(summary),
-                    " ..." if len(active_pairs) > 5 else "",
-                )
-            await self._quote_manager.ensure_quotes(active_pairs)
+            try:
+                logger.info("[LOOP] Quote loop tick")
+                active_pairs = self._select_active_pairs()
+                if active_pairs:
+                    summary = [
+                        f"{cfg.exchange_id.upper()}:{cfg.symbol}"
+                        for cfg in active_pairs[:5]
+                    ]
+                    logger.info(
+                        "[LOOP] Active quoting set (%s/%s): %s%s",
+                        len(active_pairs),
+                        len(self._pair_configs),
+                        ", ".join(summary),
+                        " ..." if len(active_pairs) > 5 else "",
+                    )
+                self._last_quote_tick = time.time()
+                self._quote_watchdog_alerted = False
+                await self._quote_manager.ensure_quotes(active_pairs)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception("[LOOP] Quote loop error: %s", exc)
+                await asyncio.sleep(3.0)
+                continue
             await asyncio.sleep(1.0)
 
     async def _balance_refresh_loop(self) -> None:
@@ -2544,6 +2558,23 @@ class InstantFillMarketMaker:
                     await self._balance_cache.get_balances(exchange)
                 except Exception as exc:
                     logger.debug("[OMS] Balance refresh during inactivity failed: %s", exc)
+
+    async def _quote_watchdog_loop(self) -> None:
+        while self._running:
+            await asyncio.sleep(self._quote_watchdog_interval)
+            if not self._running:
+                break
+            last_tick = self._last_quote_tick
+            if last_tick <= 0:
+                continue
+            idle = time.time() - last_tick
+            if idle > self._quote_watchdog_threshold and not self._quote_watchdog_alerted:
+                logger.warning(
+                    "[WATCHDOG] Quote loop idle for %.1fs (threshold=%.1fs)",
+                    idle,
+                    self._quote_watchdog_threshold,
+                )
+                self._quote_watchdog_alerted = True
 
     async def _run_inventory_guard(self) -> None:
         stable_quotes = {"USD", "USDC", "USDT", "GUSD"}
