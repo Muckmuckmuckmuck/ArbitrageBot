@@ -777,11 +777,11 @@ class DualSideQuoteManager:
         self._min_conversion_chunk = Decimal("5")
         self._orphan_cancel_age_s = 90.0
         self._slippage_buffer_bps: Dict[str, Decimal] = {
-            "coinbase": Decimal("30"),
-            "gemini": Decimal("25"),
+            "coinbase": Decimal("15"),
+            "gemini": Decimal("12"),
         }
-        self._minimum_target_edge_bps = Decimal("150")
-        self._probe_edge_floor_bps = Decimal("120")
+        self._minimum_target_edge_bps = Decimal("120")
+        self._probe_edge_floor_bps = Decimal("90")
         self._probe_order_usd = Decimal("3.00")
         self._probe_cooldown_s = 180.0
         self._inventory_cap_multiple = Decimal("0.9")
@@ -1167,7 +1167,7 @@ class DualSideQuoteManager:
             self._exchange_fee_floor_bps.get(cfg.exchange_id, Decimal("0")),
         )
         slippage_buffer = self._slippage_buffer_bps.get(cfg.exchange_id, Decimal("20"))
-        net_edge_bps = gross_edge_bps - (taker_fee_bps * Decimal("2")) - slippage_buffer
+        net_edge_bps = gross_edge_bps - taker_fee_bps - slippage_buffer
         target_edge_bps = Decimal(
             cfg.target_edge_bps if cfg.target_edge_bps > 0 else cfg.min_spread_bps
         )
