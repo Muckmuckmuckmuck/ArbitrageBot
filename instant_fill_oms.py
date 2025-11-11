@@ -782,7 +782,7 @@ class DualSideQuoteManager:
         }
         self._minimum_target_edge_bps = Decimal("100")
         self._probe_edge_floor_bps = Decimal("90")
-        self._probe_order_usd = Decimal("3.00")
+        self._probe_order_usd = Decimal("5.00")
         self._probe_cooldown_s = 180.0
         self._inventory_cap_multiple = Decimal("0.9")
         self._max_inventory_hold_s = 120.0
@@ -807,6 +807,7 @@ class DualSideQuoteManager:
         self._skip_alert_threshold = 5
         self._skip_alert_cooldown = 180.0
         self._balance_skip_cooldown = 60.0
+        self._allow_sibling_stable_conversion = True
         self._volatility_cache: Dict[
             Tuple[str, str], Tuple[float, Optional[float]]
         ] = {}
@@ -1269,6 +1270,7 @@ class DualSideQuoteManager:
                 usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
 
         min_base_required = Decimal(cfg.min_notional_usd) / max(Decimal("1"), sell_price)
+        sell_blocked = False
         if usable_base < min_base_required:
             logger.info(
                 "[QUOTE] Skip %s %s reason=base_balance usable_base=%s required=%s",
@@ -1278,12 +1280,14 @@ class DualSideQuoteManager:
                 min_base_required,
             )
             self._record_skip(cfg, "base_balance")
+            sell_blocked = True
             cancelled = await self._cancel_orphan_orders(cfg, OrderSide.SELL)
             if cancelled:
                 await self._balance_cache.force_refresh(cfg.exchange_id)
                 base_balance = await self._balance_cache.get_balance(cfg.exchange_id, base)
                 base_reserved = self._response_engine.reserved_base(cfg.exchange_id, base)
                 usable_base = max(Decimal("0"), base_balance - base_reserved)
+                sell_blocked = usable_base < min_base_required
 
         convertible_sources = self._stable_aliases.get(quote, ())
         if (
@@ -1297,7 +1301,7 @@ class DualSideQuoteManager:
                     for pc in self._pair_configs
                     if pc.exchange_id == cfg.exchange_id
                 )
-                if sibling_has_usd:
+                if sibling_has_usd and not self._allow_sibling_stable_conversion:
                     logger.info(
                         "[QUOTE] Skip %s %s: opting out of %s conversion while USD sibling exists",
                         cfg.exchange_id.upper(),
@@ -1409,6 +1413,9 @@ class DualSideQuoteManager:
         buy_tag = "quote"
         sell_tag = "quote"
 
+        if sell_blocked:
+            sell_tag = "inventory_hold"
+
         if is_probe:
             probe_size = min(order_value, self._probe_order_usd)
             if probe_size < effective_min_notional:
@@ -1442,6 +1449,8 @@ class DualSideQuoteManager:
         max_inventory_usd = order_value * self._inventory_cap_multiple
         buy_amount = (order_value / buy_price).quantize(Decimal("0.00001"))
         sell_amount = (order_value / sell_price).quantize(Decimal("0.00001"))
+        if sell_blocked:
+            sell_amount = Decimal("0")
         if inventory_amount > Decimal("0"):
             buy_amount = max(
                 Decimal("0"),
@@ -1498,6 +1507,8 @@ class DualSideQuoteManager:
         max_inventory_usd = order_value * self._inventory_cap_multiple
         buy_amount = (order_value / buy_price).quantize(Decimal("0.00001"))
         sell_amount = (order_value / sell_price).quantize(Decimal("0.00001"))
+        if sell_blocked:
+            sell_amount = Decimal("0")
 
         max_buy_amount = (
             usable_quote / (buy_price * Decimal("1.01"))
