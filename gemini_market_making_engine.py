@@ -24,7 +24,7 @@ from instant_fill_oms import ExchangeManagerAdapter, InstantFillMarketMaker, Pai
 
 logger = logging.getLogger(__name__)
 
-MIN_VOLUME_USD = Decimal("50000")
+MIN_VOLUME_USD = Decimal("20000")
 DEFAULT_ORDER_SIZE_USD = Decimal("5.00")
 DEFAULT_MIN_SPREAD_BPS = 55
 DEFAULT_PRICE_IMPROVEMENT_BPS = 1

@@ -811,6 +811,7 @@ class DualSideQuoteManager:
         self._scalping_passive_clip_bps = Decimal("5")
         self._scalping_stale_floor = 12.0
         self._allow_sibling_stable_conversion = True
+        self._scalp_candidates: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._volatility_cache: Dict[
             Tuple[str, str], Tuple[float, Optional[float]]
         ] = {}
@@ -875,6 +876,9 @@ class DualSideQuoteManager:
 
     def get_skip_last_alert(self) -> Dict[Tuple[str, str, str], float]:
         return self._skip_last_alert
+
+    def get_scalp_candidates(self) -> Dict[Tuple[str, str], Dict[str, Any]]:
+        return self._scalp_candidates
 
     async def _get_short_term_volatility(
         self, cfg: PairConfig, limit: int = 30
@@ -1198,17 +1202,14 @@ class DualSideQuoteManager:
         )
         target_edge_bps = base_target
         if trades <= 0:
-            target_edge_bps = max(self._minimum_target_edge_bps, base_target)
+            target_edge_bps = self._minimum_target_edge_bps
         else:
-            if trades >= 5:
-                if win_rate_decimal >= Decimal("0.70") and avg_edge_stats > Decimal("60"):
-                    target_edge_bps -= Decimal("20")
-                elif win_rate_decimal <= Decimal("0.45"):
-                    target_edge_bps += Decimal("30")
+            if avg_edge_stats > Decimal("40"):
+                target_edge_bps = max(self._minimum_target_edge_bps, avg_edge_stats * Decimal("0.6"))
+            else:
+                target_edge_bps = self._minimum_target_edge_bps
             if loss_streak > 0:
-                target_edge_bps += Decimal(loss_streak) * Decimal("30")
-            elif avg_edge_stats < Decimal("50"):
-                target_edge_bps += Decimal("20")
+                target_edge_bps += Decimal(loss_streak) * Decimal("8")
         if inventory_pressure_bps > 0:
             target_edge_bps += inventory_pressure_bps
         last_edge_bps = Decimal(str(stats.get("last_edge_bps", Decimal("0"))))
@@ -1217,11 +1218,30 @@ class DualSideQuoteManager:
             if last_result == "win" and last_edge_bps > Decimal("0"):
                 target_edge_bps = max(
                     self._minimum_target_edge_bps,
-                    min(target_edge_bps, last_edge_bps - Decimal("4")),
+                    min(target_edge_bps, last_edge_bps * Decimal("0.7")),
                 )
             elif last_result == "loss":
-                target_edge_bps += Decimal("10")
+                target_edge_bps += Decimal("6")
         target_edge_bps = max(target_edge_bps, self._minimum_target_edge_bps)
+        self._scalp_candidates[pair_key] = {
+            "net_edge_bps": net_edge_bps,
+            "gross_edge_bps": gross_edge_bps,
+            "target_edge_bps": target_edge_bps,
+            "bid_depth": bid_depth,
+            "ask_depth": ask_depth,
+            "timestamp": now_ts,
+        }
+        if net_edge_bps >= Decimal("0"):
+            logger.info(
+                "[SCALP] %s %s net_edge=%s gross=%s target=%s depth_bid=%s depth_ask=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                net_edge_bps.quantize(Decimal("0.01")),
+                gross_edge_bps.quantize(Decimal("0.01")),
+                target_edge_bps,
+                bid_depth,
+                ask_depth,
+            )
         is_probe = False
         probe_info = self._probe_state.setdefault(
             pair_key,
@@ -2335,6 +2355,7 @@ class InstantFillMarketMaker:
         )
         self._skip_counters = self._quote_manager.get_skip_counters()
         self._skip_last_alert = self._quote_manager.get_skip_last_alert()
+        self._scalp_candidates = self._quote_manager.get_scalp_candidates()
         self._monitors: Dict[str, WebSocketFillMonitor] = {}
         self._tasks: List[asyncio.Task] = []
         self._running = False
@@ -2487,6 +2508,18 @@ class InstantFillMarketMaker:
             for reason in ("edge", "quote_balance", "base_balance", "inventory_cap"):
                 skip_penalty += self._skip_counters.get((cfg.exchange_id, cfg.symbol, reason), 0) * 3.0
             score -= min(skip_penalty, 30.0)
+            candidate = self._scalp_candidates.get(pair_key)
+            net_edge_snapshot = None
+            if candidate:
+                cand_age = now - candidate.get("timestamp", now)
+                if cand_age < 30.0:
+                    net_edge = Decimal(candidate.get("net_edge_bps", Decimal("0")))
+                    score += float(net_edge)
+                    net_edge_snapshot = float(net_edge)
+                else:
+                    net_edge_snapshot = float(candidate.get("net_edge_bps", Decimal("0")))
+            else:
+                net_edge_snapshot = None
 
             ranked.append((cfg, score))
             snapshot.append(
@@ -2501,6 +2534,7 @@ class InstantFillMarketMaker:
                     "pending": pending,
                     "last_fill_age_s": round(last_fill_age, 1) if last_fill_age is not None else None,
                     "fills_last_min": fills_last_min,
+                    "last_net_edge_bps": net_edge_snapshot,
                 }
             )
 
@@ -2660,6 +2694,29 @@ class InstantFillMarketMaker:
                         "[PNL] Snapshot %s",
                         " | ".join(sorted(pnl_rows)[:8]),
                     )
+                if self._scalp_candidates:
+                    now_ts = time.time()
+                    recent = [
+                        ((exchange_id, symbol), candidate)
+                        for (exchange_id, symbol), candidate in self._scalp_candidates.items()
+                        if now_ts - candidate.get("timestamp", now_ts) < 60.0
+                    ]
+                    if recent:
+                        recent.sort(
+                            key=lambda item: item[1].get("net_edge_bps", Decimal("0")),
+                            reverse=True,
+                        )
+                        lines: List[str] = []
+                        for (exchange_id, symbol), candidate in recent[:5]:
+                            net_edge = Decimal(candidate.get("net_edge_bps", Decimal("0")))
+                            gross_edge = Decimal(candidate.get("gross_edge_bps", Decimal("0")))
+                            target_edge = Decimal(candidate.get("target_edge_bps", Decimal("0")))
+                            bid_depth = candidate.get("bid_depth", Decimal("0"))
+                            ask_depth = candidate.get("ask_depth", Decimal("0"))
+                            lines.append(
+                                f"{exchange_id.upper()}:{symbol} net={net_edge:.2f} gross={gross_edge:.2f} target={target_edge:.2f} depth={bid_depth:.0f}/{ask_depth:.0f}"
+                            )
+                        logger.info("[SCALP] recent=%s", " | ".join(lines))
                 if self._last_rank_snapshot:
                     logger.info(
                         "[METRICS] ranking_top=%s",
@@ -3220,6 +3277,9 @@ class InstantFillMarketMaker:
             self._stats_snapshot,
             self._fill_quality_snapshot,
         )
+        self._skip_counters = self._quote_manager.get_skip_counters()
+        self._skip_last_alert = self._quote_manager.get_skip_last_alert()
+        self._scalp_candidates = self._quote_manager.get_scalp_candidates()
         self._hedge_attempts.clear()
         self._rebuild_pair_maps()
         self._last_inactivity_warning = 0.0
