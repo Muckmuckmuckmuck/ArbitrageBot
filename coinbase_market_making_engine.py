@@ -25,10 +25,10 @@ logger = logging.getLogger(__name__)
 
 MIN_VOLUME_USD = Decimal("250000")
 DEFAULT_ORDER_SIZE_USD = Decimal("3.75")
-DEFAULT_MIN_SPREAD_BPS = 140
+DEFAULT_MIN_SPREAD_BPS = 60
 DEFAULT_PRICE_IMPROVEMENT_BPS = 1
 DEFAULT_MAX_QUOTE_INTERVAL_S = 3.0
-DEFAULT_FEE_FLOOR_BPS = 80
+DEFAULT_FEE_FLOOR_BPS = 10
 DEFAULT_MIN_NOTIONAL_USD = Decimal("3.25")
 DEFAULT_MIN_DEPTH_USD = Decimal("1500")
 ALLOWED_QUOTES = {"USD", "USDC"}
@@ -36,50 +36,56 @@ ALLOWED_QUOTES = {"USD", "USDC"}
 PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
     "BTC/USD": {
         "order_size_usd": Decimal("4.00"),
-        "min_spread_bps": 150,
+        "min_spread_bps": 65,
         "price_improve_bps": 1,
         "min_depth_usd": Decimal("2000"),
-        "target_edge_bps": 170,
+        "fee_floor_bps": 10,
+        "target_edge_bps": 40,
         "max_quote_interval_s": 2.5,
     },
     "BTC/USDC": {
         "order_size_usd": Decimal("4.00"),
-        "min_spread_bps": 150,
+        "min_spread_bps": 65,
         "price_improve_bps": 1,
         "min_depth_usd": Decimal("2000"),
-        "target_edge_bps": 170,
+        "fee_floor_bps": 10,
+        "target_edge_bps": 40,
         "max_quote_interval_s": 2.5,
     },
     "ETH/USD": {
         "order_size_usd": Decimal("3.75"),
-        "min_spread_bps": 160,
+        "min_spread_bps": 70,
         "price_improve_bps": 1,
         "min_depth_usd": Decimal("2000"),
-        "target_edge_bps": 180,
+        "fee_floor_bps": 10,
+        "target_edge_bps": 42,
         "max_quote_interval_s": 2.5,
     },
     "ETH/USDC": {
         "order_size_usd": Decimal("3.75"),
-        "min_spread_bps": 160,
+        "min_spread_bps": 70,
         "price_improve_bps": 1,
         "min_depth_usd": Decimal("2000"),
-        "target_edge_bps": 180,
+        "fee_floor_bps": 10,
+        "target_edge_bps": 42,
         "max_quote_interval_s": 2.5,
     },
     "SOL/USD": {
         "order_size_usd": Decimal("3.50"),
-        "min_spread_bps": 170,
+        "min_spread_bps": 75,
         "price_improve_bps": 2,
         "min_depth_usd": Decimal("1800"),
-        "target_edge_bps": 190,
+        "fee_floor_bps": 12,
+        "target_edge_bps": 45,
         "max_quote_interval_s": 2.5,
     },
     "SOL/USDC": {
         "order_size_usd": Decimal("3.50"),
-        "min_spread_bps": 170,
+        "min_spread_bps": 75,
         "price_improve_bps": 2,
         "min_depth_usd": Decimal("1800"),
-        "target_edge_bps": 190,
+        "fee_floor_bps": 12,
+        "target_edge_bps": 45,
         "max_quote_interval_s": 2.5,
     },
 }

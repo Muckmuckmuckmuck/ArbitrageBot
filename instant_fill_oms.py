@@ -777,11 +777,11 @@ class DualSideQuoteManager:
         self._min_conversion_chunk = Decimal("3")
         self._orphan_cancel_age_s = 90.0
         self._slippage_buffer_bps: Dict[str, Decimal] = {
-            "coinbase": Decimal("8"),
-            "gemini": Decimal("6"),
+            "coinbase": Decimal("3"),
+            "gemini": Decimal("3"),
         }
-        self._minimum_target_edge_bps = Decimal("45")
-        self._probe_edge_floor_bps = Decimal("90")
+        self._minimum_target_edge_bps = Decimal("8")
+        self._probe_edge_floor_bps = Decimal("4")
         self._probe_order_usd = Decimal("5.00")
         self._probe_cooldown_s = 60.0
         self._inventory_cap_multiple = Decimal("0.9")
@@ -1193,29 +1193,34 @@ class DualSideQuoteManager:
         )
         slippage_buffer = self._slippage_buffer_bps.get(cfg.exchange_id, Decimal("20"))
         net_edge_bps = gross_edge_bps - taker_fee_bps - slippage_buffer
-        target_edge_bps = Decimal(
+        base_target = Decimal(
             cfg.target_edge_bps if cfg.target_edge_bps > 0 else cfg.min_spread_bps
         )
-        if trades >= 5:
-            if win_rate_decimal >= Decimal("0.70") and avg_edge_stats > Decimal("60"):
-                target_edge_bps -= Decimal("20")
-            elif win_rate_decimal <= Decimal("0.45"):
-                target_edge_bps += Decimal("30")
-        if loss_streak > 0:
-            target_edge_bps += Decimal(loss_streak) * Decimal("40")
-        elif avg_edge_stats < Decimal("50"):
-            target_edge_bps += Decimal("30")
+        target_edge_bps = base_target
+        if trades <= 0:
+            target_edge_bps = max(self._minimum_target_edge_bps, base_target)
+        else:
+            if trades >= 5:
+                if win_rate_decimal >= Decimal("0.70") and avg_edge_stats > Decimal("60"):
+                    target_edge_bps -= Decimal("20")
+                elif win_rate_decimal <= Decimal("0.45"):
+                    target_edge_bps += Decimal("30")
+            if loss_streak > 0:
+                target_edge_bps += Decimal(loss_streak) * Decimal("30")
+            elif avg_edge_stats < Decimal("50"):
+                target_edge_bps += Decimal("20")
         if inventory_pressure_bps > 0:
             target_edge_bps += inventory_pressure_bps
         last_edge_bps = Decimal(str(stats.get("last_edge_bps", Decimal("0"))))
         last_result = stats.get("last_result")
-        if last_result == "win" and last_edge_bps > Decimal("0"):
-            target_edge_bps = max(
-                self._minimum_target_edge_bps,
-                min(target_edge_bps, last_edge_bps - Decimal("5")),
-            )
-        elif last_result == "loss":
-            target_edge_bps += Decimal("15")
+        if trades > 0:
+            if last_result == "win" and last_edge_bps > Decimal("0"):
+                target_edge_bps = max(
+                    self._minimum_target_edge_bps,
+                    min(target_edge_bps, last_edge_bps - Decimal("4")),
+                )
+            elif last_result == "loss":
+                target_edge_bps += Decimal("10")
         target_edge_bps = max(target_edge_bps, self._minimum_target_edge_bps)
         is_probe = False
         probe_info = self._probe_state.setdefault(
