@@ -1268,6 +1268,14 @@ class DualSideQuoteManager:
                 quote_balance = await self._balance_cache.get_balance(cfg.exchange_id, quote)
                 quote_reserved = self._response_engine.reserved_quote(cfg.exchange_id, quote)
                 usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
+            if usable_quote < Decimal(cfg.min_notional_usd):
+                cooldown_key = (cfg.exchange_id, cfg.symbol)
+                next_time = time.time() + self._balance_skip_cooldown
+                current = self._pair_cooldowns.get(cooldown_key, 0.0)
+                if next_time > current:
+                    self._pair_cooldowns[cooldown_key] = next_time
+                await self._cancel_both_sides(cfg)
+                return
 
         min_base_required = Decimal(cfg.min_notional_usd) / max(Decimal("1"), sell_price)
         sell_blocked = False
@@ -1374,6 +1382,23 @@ class DualSideQuoteManager:
                     usable_quote = max(Decimal("0"), quote_balance - quote_reserved)
                     break
 
+        if usable_quote < effective_min_notional:
+            cooldown_key = (cfg.exchange_id, cfg.symbol)
+            next_time = time.time() + self._balance_skip_cooldown
+            current = self._pair_cooldowns.get(cooldown_key, 0.0)
+            if next_time > current:
+                self._pair_cooldowns[cooldown_key] = next_time
+            logger.info(
+                "[QUOTE] Skip %s %s reason=quote_balance usable_quote=%s required=%s",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                usable_quote,
+                effective_min_notional,
+            )
+            self._record_skip(cfg, "quote_balance")
+            await self._cancel_both_sides(cfg)
+            return
+
         if volatility is not None:
             if volatility > 0.015:
                 dynamic_multiplier *= Decimal("0.6")
@@ -1427,6 +1452,11 @@ class DualSideQuoteManager:
                     effective_min_notional,
                 )
                 self._record_skip(cfg, "probe_min_notional")
+                cooldown_key = (cfg.exchange_id, cfg.symbol)
+                next_time = time.time() + self._balance_skip_cooldown
+                current = self._pair_cooldowns.get(cooldown_key, 0.0)
+                if next_time > current:
+                    self._pair_cooldowns[cooldown_key] = next_time
                 await self._cancel_both_sides(cfg)
                 return
             order_value = probe_size
