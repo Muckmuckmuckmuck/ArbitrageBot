@@ -46,7 +46,7 @@ class PairConfig:
     symbol: str
     order_size_usd: Decimal = Decimal("5.00")
     min_spread_bps: int = 30  # 0.30%
-    max_quote_interval_s: float = 5.0
+    max_quote_interval_s: float = 3.0
     min_depth_usd: Decimal = Decimal("5000")
     min_notional_usd: Decimal = Decimal("5.00")
     price_improve_bps: int = 5  # 0.05%
@@ -927,6 +927,14 @@ class DualSideQuoteManager:
 
     async def _ensure_pair(self, cfg: PairConfig) -> None:
         stats = self._stats_lookup(cfg.exchange_id, cfg.symbol)
+        now_ts = time.time()
+        recent_fills: Deque[float] = stats.setdefault(
+            "recent_fill_ts", deque(maxlen=120)
+        )
+        while recent_fills and now_ts - recent_fills[0] > 60.0:
+            recent_fills.popleft()
+        fills_per_min = len(recent_fills)
+        stats["fills_per_min"] = fills_per_min
         loss_streak = int(stats.get("loss_streak", 0) or 0)
         avg_edge_stats = Decimal(str(stats.get("avg_edge_bps", Decimal("0"))))
         trades = int(stats.get("trade_count", 0) or 0)
@@ -998,6 +1006,11 @@ class DualSideQuoteManager:
         bid_depth = sum(Decimal(str(entry[1])) * Decimal(str(entry[0])) for entry in order_book["bids"][:3])
         ask_depth = sum(Decimal(str(entry[1])) * Decimal(str(entry[0])) for entry in order_book["asks"][:3])
         depth_capacity = min(bid_depth, ask_depth)
+        live_spread_bps = (
+            ((best_ask - best_bid) / best_bid) * Decimal("10000")
+            if best_bid > 0
+            else Decimal("0")
+        )
 
         logger.info(
             "[QUOTE] %s %s best_bid=%s best_ask=%s bid_depth=%.2f ask_depth=%.2f",
@@ -1008,6 +1021,11 @@ class DualSideQuoteManager:
             bid_depth,
             ask_depth,
         )
+
+        imbalance = Decimal("0")
+        depth_sum = bid_depth + ask_depth
+        if depth_sum > Decimal("0"):
+            imbalance = (bid_depth - ask_depth) / depth_sum
 
         if bid_depth < cfg.min_depth_usd or ask_depth < cfg.min_depth_usd:
             logger.info(
@@ -1113,6 +1131,10 @@ class DualSideQuoteManager:
         if price_improve > 0:
             buy_price -= mid * price_improve
             sell_price += mid * price_improve
+        if imbalance > Decimal("0.4"):
+            buy_price -= mid * Decimal("0.0002")
+        elif imbalance < Decimal("-0.4"):
+            buy_price += mid * Decimal("0.0002")
         fill_quality = self._fill_quality_lookup(cfg.exchange_id, cfg.symbol)
         sell_bias = Decimal(str(fill_quality.get("sell", Decimal("0"))))
         if sell_bias > 0:
@@ -1128,8 +1150,24 @@ class DualSideQuoteManager:
                 sell_price += mid * (lean_bps / Decimal("10000"))
         buy_price = min(buy_price, best_bid)
         sell_price = max(sell_price, best_ask)
+        clip_bps = self._scalping_passive_clip_bps
         if self._scalping_mode:
-            clip = self._scalping_passive_clip_bps / Decimal("10000")
+            last_result = stats.get("last_result")
+            last_profit = stats.get("last_profit", Decimal("0"))
+            last_latency_ms = stats.get("last_fill_latency_ms")
+            if last_fill_age is not None and last_fill_age > 20.0:
+                clip_bps = max(Decimal("2"), clip_bps - Decimal("2"))
+            if fills_per_min >= 3:
+                clip_bps = max(Decimal("2"), clip_bps - Decimal("1"))
+            if last_latency_ms and last_latency_ms < 400.0:
+                clip_bps = max(Decimal("2"), clip_bps - Decimal("1"))
+            if last_result == "loss":
+                clip_bps = min(Decimal("15"), clip_bps + Decimal("3"))
+            elif last_result == "win" and last_profit > Decimal("0"):
+                clip_bps = max(Decimal("3"), clip_bps - Decimal("1"))
+        stats["last_clip_bps"] = clip_bps
+        if self._scalping_mode:
+            clip = clip_bps / Decimal("10000")
             min_buy_price = best_bid * (Decimal("1") - clip)
             max_sell_price = best_ask * (Decimal("1") + clip)
             buy_price = max(buy_price, min_buy_price)
@@ -1169,11 +1207,27 @@ class DualSideQuoteManager:
             target_edge_bps += Decimal("30")
         if inventory_pressure_bps > 0:
             target_edge_bps += inventory_pressure_bps
+        last_edge_bps = Decimal(str(stats.get("last_edge_bps", Decimal("0"))))
+        last_result = stats.get("last_result")
+        if last_result == "win" and last_edge_bps > Decimal("0"):
+            target_edge_bps = max(
+                self._minimum_target_edge_bps,
+                min(target_edge_bps, last_edge_bps - Decimal("5")),
+            )
+        elif last_result == "loss":
+            target_edge_bps += Decimal("15")
         target_edge_bps = max(target_edge_bps, self._minimum_target_edge_bps)
         is_probe = False
         probe_info = self._probe_state.setdefault(
-            pair_key, {"cooldown_until": 0.0, "recent_success": 0}
+            pair_key,
+            {
+                "cooldown_until": 0.0,
+                "recent_success": 0,
+                "size_usd": self._probe_order_usd,
+            },
         )
+        if "size_usd" not in probe_info:
+            probe_info["size_usd"] = self._probe_order_usd
         if net_edge_bps < target_edge_bps:
             now_probe = time.time()
             if net_edge_bps >= self._probe_edge_floor_bps:
@@ -1442,6 +1496,10 @@ class DualSideQuoteManager:
             usable_quote,
         )
         order_value = target_order_value * dynamic_multiplier
+        if live_spread_bps > Decimal("0") and live_spread_bps < Decimal("8"):
+            order_value = (order_value * Decimal("0.5")).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
         order_value = max(order_value, effective_min_notional)
         order_value = min(order_value, usable_quote) if usable_quote > 0 else order_value
         buy_tag = "quote"
@@ -1451,7 +1509,8 @@ class DualSideQuoteManager:
             sell_tag = "inventory_hold"
 
         if is_probe:
-            probe_size = min(order_value, self._probe_order_usd)
+            desired_probe = Decimal(str(probe_info.get("size_usd", self._probe_order_usd)))
+            probe_size = min(order_value, desired_probe, usable_quote if usable_quote > 0 else desired_probe)
             if probe_size < effective_min_notional:
                 logger.info(
                     "[QUOTE] Skip %s %s reason=probe_min_notional probe_size=%s min_notional=%s",
@@ -1472,11 +1531,12 @@ class DualSideQuoteManager:
             buy_tag = "probe"
             sell_tag = "probe"
             logger.info(
-                "[QUOTE] Probe sizing for %s %s net_edge=%s order_value=%s",
+                "[QUOTE] Probe sizing for %s %s net_edge=%s order_value=%s ladder_size=%s",
                 cfg.exchange_id.upper(),
                 cfg.symbol,
                 net_edge_bps.quantize(Decimal("0.01")),
                 order_value,
+                desired_probe,
             )
 
         inventory_amount, inventory_age, inventory_notional = self._inventory_lookup(
@@ -2275,25 +2335,31 @@ class InstantFillMarketMaker:
         self._running = False
         self._last_inactivity_warning: float = 0.0
         self._hedge_refresh_interval = 5.0
-        self._hedge_max_age = 10.0
+        self._hedge_max_age = 8.0
         self._metrics_interval = 300.0
         self._rebuild_pair_maps()
 
     def _get_pair_stats(self, pair_key: Tuple[str, str]) -> Dict[str, Any]:
         stats = self._pair_stats.get(pair_key)
         if stats is None:
-            stats = {
-                "wins": 0,
-                "losses": 0,
-                "break_even": 0,
-                "trade_count": 0,
-                "pnl": Decimal("0"),
-                "volume": Decimal("0"),
-                "avg_edge_bps": Decimal("0"),
-                "last_fill_ts": None,
-                "loss_streak": 0,
-            }
+            stats = {}
             self._pair_stats[pair_key] = stats
+        stats.setdefault("wins", 0)
+        stats.setdefault("losses", 0)
+        stats.setdefault("break_even", 0)
+        stats.setdefault("trade_count", 0)
+        stats.setdefault("pnl", Decimal("0"))
+        stats.setdefault("volume", Decimal("0"))
+        stats.setdefault("avg_edge_bps", Decimal("0"))
+        stats.setdefault("last_fill_ts", None)
+        stats.setdefault("loss_streak", 0)
+        stats.setdefault("last_edge_bps", Decimal("0"))
+        stats.setdefault("last_result", None)
+        stats.setdefault("last_profit", Decimal("0"))
+        if "recent_fill_ts" not in stats or not isinstance(stats.get("recent_fill_ts"), deque):
+            stats["recent_fill_ts"] = deque(maxlen=120)
+        if "last_fill_latency_ms" not in stats:
+            stats["last_fill_latency_ms"] = None
         return stats
 
     def _inventory_snapshot(
@@ -2388,6 +2454,13 @@ class InstantFillMarketMaker:
             avg_edge = float(stats["avg_edge_bps"]) if stats else 0.0
             last_fill_ts = stats["last_fill_ts"] if stats else None
             last_fill_age = (now - last_fill_ts) if last_fill_ts else None
+            fills_last_min = 0
+            if stats:
+                recent = stats.get("recent_fill_ts")
+                if isinstance(recent, deque):
+                    while recent and now - recent[0] > 60.0:
+                        recent.popleft()
+                    fills_last_min = len(recent)
             pending = pending_by_pair.get(pair_key, 0)
 
             if trades > 0:
@@ -2399,6 +2472,7 @@ class InstantFillMarketMaker:
             score = base_score
             score += avg_edge * 0.6
             score += (win_rate - 0.5) * 200.0
+            score += fills_last_min * 8.0
             if last_fill_age is not None:
                 score -= min(last_fill_age / 180.0, 20.0)
             score -= loss_streak * 15.0
@@ -2421,6 +2495,7 @@ class InstantFillMarketMaker:
                     "trades": trades,
                     "pending": pending,
                     "last_fill_age_s": round(last_fill_age, 1) if last_fill_age is not None else None,
+                    "fills_last_min": fills_last_min,
                 }
             )
 
@@ -2742,9 +2817,24 @@ class InstantFillMarketMaker:
         pair_key = (order.exchange_id, order.symbol)
         stats = self._get_pair_stats(pair_key)
         stats["last_fill_ts"] = time.time()
+        stats.setdefault("recent_fill_ts", deque(maxlen=120)).append(stats["last_fill_ts"])
+        stats["last_fill_latency_ms"] = latency_ms
+        cfg = next(
+            (
+                pc
+                for pc in self._pair_configs
+                if pc.exchange_id == order.exchange_id and pc.symbol == order.symbol
+            ),
+            None,
+        )
         if order.tag == "probe":
             probe_state = self._quote_manager._probe_state.setdefault(
-                pair_key, {"cooldown_until": 0.0, "recent_success": 0}
+                pair_key,
+                {
+                    "cooldown_until": 0.0,
+                    "recent_success": 0,
+                    "size_usd": self._quote_manager._probe_order_usd,
+                },
             )
         else:
             probe_state = None
@@ -2767,6 +2857,25 @@ class InstantFillMarketMaker:
                 probe_state["recent_success"] = max(
                     0, probe_state.get("recent_success", 0) - 1
                 )
+                base_probe = Decimal(str(self._quote_manager._probe_order_usd))
+                current_size = Decimal(str(probe_state.get("size_usd", base_probe)))
+                if latency_ms <= 500.0:
+                    step = Decimal("1.00")
+                    max_size = Decimal("7.00")
+                    if cfg is not None:
+                        max_size = min(max_size, Decimal(str(cfg.order_size_usd)))
+                    else:
+                        max_size = min(max_size, base_probe * Decimal("1.6"))
+                    new_size = min(current_size + step, max_size)
+                    if new_size > current_size:
+                        probe_state["size_usd"] = new_size
+                        logger.info(
+                            "[PROBE] %s %s escalating probe size to %s after fast fill %.1fms",
+                            order.exchange_id.upper(),
+                            order.symbol,
+                            new_size,
+                            latency_ms,
+                        )
         elif order.side == OrderSide.SELL:
             remaining = fill.amount
             profit = Decimal("0")
@@ -2860,6 +2969,12 @@ class InstantFillMarketMaker:
                             probe_state["recent_success"],
                         )
                         probe_state["recent_success"] = 0
+                        if cfg is not None:
+                            probe_state["size_usd"] = Decimal(str(cfg.order_size_usd))
+                win_cooldown = time.time() + 2.0
+                current_cooldown = self._pair_cooldowns.get(pair_key, 0.0)
+                if win_cooldown > current_cooldown:
+                    self._pair_cooldowns[pair_key] = win_cooldown
             elif profit < Decimal("0"):
                 stats["losses"] += 1
                 stats["loss_streak"] += 1
@@ -2867,10 +2982,27 @@ class InstantFillMarketMaker:
                 if probe_state is not None:
                     probe_state["recent_success"] = 0
                     probe_state["cooldown_until"] = time.time() + self._quote_manager._probe_cooldown_s
+                    probe_state["size_usd"] = self._quote_manager._probe_order_usd
+                loss_cooldown = time.time() + 4.0
+                current_cooldown = self._pair_cooldowns.get(pair_key, 0.0)
+                if loss_cooldown > current_cooldown:
+                    self._pair_cooldowns[pair_key] = loss_cooldown
             else:
                 stats["break_even"] += 1
                 stats["loss_streak"] = 0
                 self._break_even += 1
+                flat_cooldown = time.time() + 1.5
+                current_cooldown = self._pair_cooldowns.get(pair_key, 0.0)
+                if flat_cooldown > current_cooldown:
+                    self._pair_cooldowns[pair_key] = flat_cooldown
+            stats["last_edge_bps"] = edge_bps
+            stats["last_profit"] = profit
+            if profit > Decimal("0"):
+                stats["last_result"] = "win"
+            elif profit < Decimal("0"):
+                stats["last_result"] = "loss"
+            else:
+                stats["last_result"] = "flat"
             self._recent_pnl.append(profit)
             rolling_sum = sum(self._recent_pnl, Decimal("0"))
             if (
@@ -3319,12 +3451,25 @@ class InstantFillMarketMaker:
             order_type = "limit"
             order_params: Optional[Dict[str, Any]] = None
 
+            cross_now = attempts >= 2 or age >= self._hedge_max_age + 5.0
             if hedge.side == OrderSide.SELL and bids:
                 candidate = Decimal(str(bids[0][0]))
-                price = max(candidate, hedge.price).quantize(Decimal("0.00001"))
+                if cross_now:
+                    cross_clip = Decimal("0.0003")
+                    price = (candidate * (Decimal("1") - cross_clip)).quantize(
+                        Decimal("0.00001")
+                    )
+                else:
+                    price = max(candidate, hedge.price).quantize(Decimal("0.00001"))
             elif hedge.side == OrderSide.BUY and asks:
                 candidate = Decimal(str(asks[0][0]))
-                price = min(candidate, hedge.price).quantize(Decimal("0.00001"))
+                if cross_now:
+                    cross_clip = Decimal("0.0003")
+                    price = (candidate * (Decimal("1") + cross_clip)).quantize(
+                        Decimal("0.00001")
+                    )
+                else:
+                    price = min(candidate, hedge.price).quantize(Decimal("0.00001"))
             else:
                 price = None
 
@@ -3345,14 +3490,24 @@ class InstantFillMarketMaker:
                     attempts,
                 )
             else:
-                logger.info(
-                    "[HEDGE] Refreshing hedge %s %s attempts=%s new_price=%s entry_price=%s",
-                    hedge.exchange_id.upper(),
-                    hedge.symbol,
-                    attempts,
-                    price,
-                    hedge.price,
-                )
+                if cross_now:
+                    logger.info(
+                        "[HEDGE] Forcing hedge exit %s %s attempts=%s new_price=%s entry_price=%s",
+                        hedge.exchange_id.upper(),
+                        hedge.symbol,
+                        attempts,
+                        price,
+                        hedge.price,
+                    )
+                else:
+                    logger.info(
+                        "[HEDGE] Refreshing hedge %s %s attempts=%s new_price=%s entry_price=%s",
+                        hedge.exchange_id.upper(),
+                        hedge.symbol,
+                        attempts,
+                        price,
+                        hedge.price,
+                    )
 
             try:
                 response = await self._adapter.create_order(

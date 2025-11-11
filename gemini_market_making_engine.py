@@ -28,7 +28,7 @@ MIN_VOLUME_USD = Decimal("50000")
 DEFAULT_ORDER_SIZE_USD = Decimal("5.00")
 DEFAULT_MIN_SPREAD_BPS = 130
 DEFAULT_PRICE_IMPROVEMENT_BPS = 1
-DEFAULT_MAX_QUOTE_INTERVAL_S = 4.0
+DEFAULT_MAX_QUOTE_INTERVAL_S = 3.0
 DEFAULT_FEE_FLOOR_BPS = 55
 DEFAULT_MIN_NOTIONAL_USD = Decimal("5.00")
 DEFAULT_MIN_DEPTH_USD = Decimal("600")
@@ -43,6 +43,7 @@ PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
         "min_notional_usd": Decimal("5.00"),
         "fee_floor_bps": 50,
         "target_edge_bps": 110,
+        "max_quote_interval_s": 2.5,
     },
     "BTC/USDC": {
         "order_size_usd": Decimal("5.00"),
@@ -52,6 +53,7 @@ PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
         "min_notional_usd": Decimal("5.00"),
         "fee_floor_bps": 50,
         "target_edge_bps": 110,
+        "max_quote_interval_s": 2.5,
     },
     "ETH/USD": {
         "order_size_usd": Decimal("5.00"),
@@ -61,6 +63,7 @@ PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
         "min_notional_usd": Decimal("5.00"),
         "fee_floor_bps": 55,
         "target_edge_bps": 120,
+        "max_quote_interval_s": 2.5,
     },
     "ETH/USDC": {
         "order_size_usd": Decimal("5.00"),
@@ -70,6 +73,7 @@ PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
         "min_notional_usd": Decimal("5.00"),
         "fee_floor_bps": 55,
         "target_edge_bps": 120,
+        "max_quote_interval_s": 2.5,
     },
     "SOL/USD": {
         "order_size_usd": Decimal("5.00"),
@@ -79,6 +83,7 @@ PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
         "min_notional_usd": Decimal("5.00"),
         "fee_floor_bps": 60,
         "target_edge_bps": 130,
+        "max_quote_interval_s": 2.5,
     },
     "LINK/USD": {
         "order_size_usd": Decimal("5.00"),
@@ -88,6 +93,7 @@ PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
         "min_notional_usd": Decimal("5.00"),
         "fee_floor_bps": 60,
         "target_edge_bps": 135,
+        "max_quote_interval_s": 2.5,
     },
     "DOGE/USD": {
         "order_size_usd": Decimal("5.00"),
@@ -97,6 +103,7 @@ PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
         "min_notional_usd": Decimal("5.00"),
         "fee_floor_bps": 65,
         "target_edge_bps": 150,
+        "max_quote_interval_s": 2.5,
     },
 }
 

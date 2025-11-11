@@ -27,7 +27,7 @@ MIN_VOLUME_USD = Decimal("250000")
 DEFAULT_ORDER_SIZE_USD = Decimal("3.75")
 DEFAULT_MIN_SPREAD_BPS = 140
 DEFAULT_PRICE_IMPROVEMENT_BPS = 1
-DEFAULT_MAX_QUOTE_INTERVAL_S = 4.0
+DEFAULT_MAX_QUOTE_INTERVAL_S = 3.0
 DEFAULT_FEE_FLOOR_BPS = 80
 DEFAULT_MIN_NOTIONAL_USD = Decimal("3.25")
 DEFAULT_MIN_DEPTH_USD = Decimal("1500")
@@ -40,6 +40,7 @@ PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
         "price_improve_bps": 1,
         "min_depth_usd": Decimal("2000"),
         "target_edge_bps": 170,
+        "max_quote_interval_s": 2.5,
     },
     "BTC/USDC": {
         "order_size_usd": Decimal("4.00"),
@@ -47,6 +48,7 @@ PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
         "price_improve_bps": 1,
         "min_depth_usd": Decimal("2000"),
         "target_edge_bps": 170,
+        "max_quote_interval_s": 2.5,
     },
     "ETH/USD": {
         "order_size_usd": Decimal("3.75"),
@@ -54,6 +56,7 @@ PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
         "price_improve_bps": 1,
         "min_depth_usd": Decimal("2000"),
         "target_edge_bps": 180,
+        "max_quote_interval_s": 2.5,
     },
     "ETH/USDC": {
         "order_size_usd": Decimal("3.75"),
@@ -61,6 +64,7 @@ PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
         "price_improve_bps": 1,
         "min_depth_usd": Decimal("2000"),
         "target_edge_bps": 180,
+        "max_quote_interval_s": 2.5,
     },
     "SOL/USD": {
         "order_size_usd": Decimal("3.50"),
@@ -68,6 +72,7 @@ PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
         "price_improve_bps": 2,
         "min_depth_usd": Decimal("1800"),
         "target_edge_bps": 190,
+        "max_quote_interval_s": 2.5,
     },
     "SOL/USDC": {
         "order_size_usd": Decimal("3.50"),
@@ -75,6 +80,7 @@ PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
         "price_improve_bps": 2,
         "min_depth_usd": Decimal("1800"),
         "target_edge_bps": 190,
+        "max_quote_interval_s": 2.5,
     },
 }
 
