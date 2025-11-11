@@ -23,58 +23,58 @@ from instant_fill_oms import ExchangeManagerAdapter, InstantFillMarketMaker, Pai
 
 logger = logging.getLogger(__name__)
 
-MIN_VOLUME_USD = Decimal("500000")
-DEFAULT_ORDER_SIZE_USD = Decimal("3.50")
-DEFAULT_MIN_SPREAD_BPS = 280
-DEFAULT_PRICE_IMPROVEMENT_BPS = 3
-DEFAULT_MAX_QUOTE_INTERVAL_S = 20.0
-DEFAULT_FEE_FLOOR_BPS = 200
+MIN_VOLUME_USD = Decimal("250000")
+DEFAULT_ORDER_SIZE_USD = Decimal("3.75")
+DEFAULT_MIN_SPREAD_BPS = 140
+DEFAULT_PRICE_IMPROVEMENT_BPS = 1
+DEFAULT_MAX_QUOTE_INTERVAL_S = 4.0
+DEFAULT_FEE_FLOOR_BPS = 80
 DEFAULT_MIN_NOTIONAL_USD = Decimal("3.25")
-DEFAULT_MIN_DEPTH_USD = Decimal("2500")
+DEFAULT_MIN_DEPTH_USD = Decimal("1500")
 ALLOWED_QUOTES = {"USD", "USDC"}
 
 PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
     "BTC/USD": {
-        "order_size_usd": Decimal("4.50"),
-        "min_spread_bps": 230,
-        "price_improve_bps": 2,
-        "min_depth_usd": Decimal("3500"),
-        "target_edge_bps": 300,
+        "order_size_usd": Decimal("4.00"),
+        "min_spread_bps": 150,
+        "price_improve_bps": 1,
+        "min_depth_usd": Decimal("2000"),
+        "target_edge_bps": 170,
     },
     "BTC/USDC": {
-        "order_size_usd": Decimal("4.50"),
-        "min_spread_bps": 230,
-        "price_improve_bps": 2,
-        "min_depth_usd": Decimal("3500"),
-        "target_edge_bps": 300,
+        "order_size_usd": Decimal("4.00"),
+        "min_spread_bps": 150,
+        "price_improve_bps": 1,
+        "min_depth_usd": Decimal("2000"),
+        "target_edge_bps": 170,
     },
     "ETH/USD": {
-        "order_size_usd": Decimal("4.00"),
-        "min_spread_bps": 240,
-        "price_improve_bps": 2,
-        "min_depth_usd": Decimal("3200"),
-        "target_edge_bps": 310,
+        "order_size_usd": Decimal("3.75"),
+        "min_spread_bps": 160,
+        "price_improve_bps": 1,
+        "min_depth_usd": Decimal("2000"),
+        "target_edge_bps": 180,
     },
     "ETH/USDC": {
-        "order_size_usd": Decimal("4.00"),
-        "min_spread_bps": 240,
-        "price_improve_bps": 2,
-        "min_depth_usd": Decimal("3200"),
-        "target_edge_bps": 310,
+        "order_size_usd": Decimal("3.75"),
+        "min_spread_bps": 160,
+        "price_improve_bps": 1,
+        "min_depth_usd": Decimal("2000"),
+        "target_edge_bps": 180,
     },
     "SOL/USD": {
         "order_size_usd": Decimal("3.50"),
-        "min_spread_bps": 270,
-        "price_improve_bps": 3,
-        "min_depth_usd": Decimal("2800"),
-        "target_edge_bps": 330,
+        "min_spread_bps": 170,
+        "price_improve_bps": 2,
+        "min_depth_usd": Decimal("1800"),
+        "target_edge_bps": 190,
     },
     "SOL/USDC": {
         "order_size_usd": Decimal("3.50"),
-        "min_spread_bps": 270,
-        "price_improve_bps": 3,
-        "min_depth_usd": Decimal("2800"),
-        "target_edge_bps": 330,
+        "min_spread_bps": 170,
+        "price_improve_bps": 2,
+        "min_depth_usd": Decimal("1800"),
+        "target_edge_bps": 190,
     },
 }
 

@@ -25,78 +25,78 @@ from instant_fill_oms import ExchangeManagerAdapter, InstantFillMarketMaker, Pai
 logger = logging.getLogger(__name__)
 
 MIN_VOLUME_USD = Decimal("50000")
-DEFAULT_ORDER_SIZE_USD = Decimal("5.25")
-DEFAULT_MIN_SPREAD_BPS = 180
-DEFAULT_PRICE_IMPROVEMENT_BPS = 2
-DEFAULT_MAX_QUOTE_INTERVAL_S = 6.0
-DEFAULT_FEE_FLOOR_BPS = 65
+DEFAULT_ORDER_SIZE_USD = Decimal("5.00")
+DEFAULT_MIN_SPREAD_BPS = 130
+DEFAULT_PRICE_IMPROVEMENT_BPS = 1
+DEFAULT_MAX_QUOTE_INTERVAL_S = 4.0
+DEFAULT_FEE_FLOOR_BPS = 55
 DEFAULT_MIN_NOTIONAL_USD = Decimal("5.00")
-DEFAULT_MIN_DEPTH_USD = Decimal("800")
+DEFAULT_MIN_DEPTH_USD = Decimal("600")
 ALLOWED_QUOTES = {"USD", "USDC"}
 
 PAIR_OVERRIDES: Dict[str, Dict[str, object]] = {
     "BTC/USD": {
-        "order_size_usd": Decimal("5.50"),
-        "min_spread_bps": 150,
-        "price_improve_bps": 2,
-        "min_depth_usd": Decimal("1200"),
+        "order_size_usd": Decimal("5.00"),
+        "min_spread_bps": 130,
+        "price_improve_bps": 1,
+        "min_depth_usd": Decimal("900"),
         "min_notional_usd": Decimal("5.00"),
-        "fee_floor_bps": 55,
-        "target_edge_bps": 120,
+        "fee_floor_bps": 50,
+        "target_edge_bps": 110,
     },
     "BTC/USDC": {
-        "order_size_usd": Decimal("5.50"),
-        "min_spread_bps": 150,
-        "price_improve_bps": 2,
-        "min_depth_usd": Decimal("1200"),
+        "order_size_usd": Decimal("5.00"),
+        "min_spread_bps": 130,
+        "price_improve_bps": 1,
+        "min_depth_usd": Decimal("900"),
+        "min_notional_usd": Decimal("5.00"),
+        "fee_floor_bps": 50,
+        "target_edge_bps": 110,
+    },
+    "ETH/USD": {
+        "order_size_usd": Decimal("5.00"),
+        "min_spread_bps": 140,
+        "price_improve_bps": 1,
+        "min_depth_usd": Decimal("800"),
         "min_notional_usd": Decimal("5.00"),
         "fee_floor_bps": 55,
         "target_edge_bps": 120,
     },
-    "ETH/USD": {
-        "order_size_usd": Decimal("5.25"),
-        "min_spread_bps": 165,
-        "price_improve_bps": 2,
-        "min_depth_usd": Decimal("1000"),
-        "min_notional_usd": Decimal("5.00"),
-        "fee_floor_bps": 60,
-        "target_edge_bps": 130,
-    },
     "ETH/USDC": {
-        "order_size_usd": Decimal("5.25"),
-        "min_spread_bps": 165,
-        "price_improve_bps": 2,
-        "min_depth_usd": Decimal("1000"),
+        "order_size_usd": Decimal("5.00"),
+        "min_spread_bps": 140,
+        "price_improve_bps": 1,
+        "min_depth_usd": Decimal("800"),
         "min_notional_usd": Decimal("5.00"),
-        "fee_floor_bps": 60,
-        "target_edge_bps": 130,
+        "fee_floor_bps": 55,
+        "target_edge_bps": 120,
     },
     "SOL/USD": {
         "order_size_usd": Decimal("5.00"),
-        "min_spread_bps": 180,
-        "price_improve_bps": 2,
-        "min_depth_usd": Decimal("900"),
+        "min_spread_bps": 150,
+        "price_improve_bps": 1,
+        "min_depth_usd": Decimal("700"),
         "min_notional_usd": Decimal("5.00"),
-        "fee_floor_bps": 65,
-        "target_edge_bps": 150,
+        "fee_floor_bps": 60,
+        "target_edge_bps": 130,
     },
     "LINK/USD": {
         "order_size_usd": Decimal("5.00"),
-        "min_spread_bps": 190,
-        "price_improve_bps": 2,
-        "min_depth_usd": Decimal("900"),
+        "min_spread_bps": 160,
+        "price_improve_bps": 1,
+        "min_depth_usd": Decimal("650"),
         "min_notional_usd": Decimal("5.00"),
-        "fee_floor_bps": 70,
-        "target_edge_bps": 160,
+        "fee_floor_bps": 60,
+        "target_edge_bps": 135,
     },
     "DOGE/USD": {
         "order_size_usd": Decimal("5.00"),
-        "min_spread_bps": 210,
-        "price_improve_bps": 3,
-        "min_depth_usd": Decimal("900"),
+        "min_spread_bps": 180,
+        "price_improve_bps": 2,
+        "min_depth_usd": Decimal("700"),
         "min_notional_usd": Decimal("5.00"),
-        "fee_floor_bps": 75,
-        "target_edge_bps": 180,
+        "fee_floor_bps": 65,
+        "target_edge_bps": 150,
     },
 }
 

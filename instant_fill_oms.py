@@ -772,18 +772,18 @@ class DualSideQuoteManager:
             "USDT": ("USD", "USDC"),
             "GUSD": ("USD",),
         }
-        self._stale_quote_multiplier = 2.0
+        self._stale_quote_multiplier = 1.0
         self._ioc_slippage = Decimal("0.0015")
-        self._min_conversion_chunk = Decimal("5")
+        self._min_conversion_chunk = Decimal("3")
         self._orphan_cancel_age_s = 90.0
         self._slippage_buffer_bps: Dict[str, Decimal] = {
-            "coinbase": Decimal("12"),
-            "gemini": Decimal("10"),
+            "coinbase": Decimal("8"),
+            "gemini": Decimal("6"),
         }
-        self._minimum_target_edge_bps = Decimal("100")
+        self._minimum_target_edge_bps = Decimal("45")
         self._probe_edge_floor_bps = Decimal("90")
         self._probe_order_usd = Decimal("5.00")
-        self._probe_cooldown_s = 180.0
+        self._probe_cooldown_s = 60.0
         self._inventory_cap_multiple = Decimal("0.9")
         self._max_inventory_hold_s = 120.0
         self._inventory_lookup = (
@@ -806,7 +806,10 @@ class DualSideQuoteManager:
         self._skip_last_alert: Dict[Tuple[str, str, str], float] = {}
         self._skip_alert_threshold = 5
         self._skip_alert_cooldown = 180.0
-        self._balance_skip_cooldown = 60.0
+        self._balance_skip_cooldown = 15.0
+        self._scalping_mode = True
+        self._scalping_passive_clip_bps = Decimal("5")
+        self._scalping_stale_floor = 12.0
         self._allow_sibling_stable_conversion = True
         self._volatility_cache: Dict[
             Tuple[str, str], Tuple[float, Optional[float]]
@@ -1125,6 +1128,12 @@ class DualSideQuoteManager:
                 sell_price += mid * (lean_bps / Decimal("10000"))
         buy_price = min(buy_price, best_bid)
         sell_price = max(sell_price, best_ask)
+        if self._scalping_mode:
+            clip = self._scalping_passive_clip_bps / Decimal("10000")
+            min_buy_price = best_bid * (Decimal("1") - clip)
+            max_sell_price = best_ask * (Decimal("1") + clip)
+            buy_price = max(buy_price, min_buy_price)
+            sell_price = min(max(sell_price, best_ask), max_sell_price)
         buy_price = buy_price.quantize(Decimal("0.00001"))
         sell_price = sell_price.quantize(Decimal("0.00001"))
 
@@ -1548,7 +1557,8 @@ class DualSideQuoteManager:
         sell_amount = min(sell_amount, usable_base.quantize(Decimal("0.00001")))
 
         now_ts = time.time()
-        stale_threshold = max(cfg.max_quote_interval_s * self._stale_quote_multiplier, 10.0)
+        stale_floor = self._scalping_stale_floor if self._scalping_mode else 10.0
+        stale_threshold = max(cfg.max_quote_interval_s * self._stale_quote_multiplier, stale_floor)
         escalate_buy = False
         escalate_sell = False
         buy_params: Optional[Dict[str, Any]] = None
