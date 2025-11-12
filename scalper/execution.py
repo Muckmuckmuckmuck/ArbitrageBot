@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from decimal import Decimal
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterable, Optional
 
 from .exchange import RestExchangeClient
 from .strategy import QuoteIntent
@@ -17,43 +18,88 @@ class ExecutionManager:
     def __init__(self, client: RestExchangeClient, symbol: str) -> None:
         self._client = client
         self._symbol = symbol
-        self._open_orders: Dict[str, Tuple[str, Decimal, Decimal]] = {}
+        self._quote_orders: Dict[str, Dict[str, Decimal]] = {}
+        self._hedge_orders: Dict[str, Dict[str, Decimal]] = {}
         self._lock = asyncio.Lock()
 
-    async def sync(self, intent: QuoteIntent) -> None:
+    async def sync_quotes(self, intent: QuoteIntent) -> None:
         async with self._lock:
-            await self._cancel_all()
+            await self._cancel_orders(list(self._quote_orders.keys()))
+            self._quote_orders.clear()
             tasks = []
             if intent.post_buy:
-                tasks.append(self._submit("buy", intent.buy_size, intent.buy_price))
+                tasks.append(self._submit("buy", intent.buy_size, intent.buy_price, tag="quote"))
             if intent.post_sell:
-                tasks.append(self._submit("sell", intent.sell_size, intent.sell_price))
+                tasks.append(self._submit("sell", intent.sell_size, intent.sell_price, tag="quote"))
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def cancel_all_quotes(self) -> None:
+        async with self._lock:
+            await self._cancel_orders(list(self._quote_orders.keys()))
+            self._quote_orders.clear()
+
     async def cancel_all(self) -> None:
         async with self._lock:
-            await self._cancel_all()
+            all_orders = list(self._quote_orders.keys()) + list(self._hedge_orders.keys())
+            await self._cancel_orders(all_orders)
+            self._quote_orders.clear()
+            self._hedge_orders.clear()
 
-    async def _submit(self, side: str, amount: Decimal, price: Decimal) -> None:
+    async def place_hedge(self, side: str, amount: Decimal, price: Decimal) -> Optional[str]:
         if amount <= 0:
+            return None
+        async with self._lock:
+            same_side = [oid for oid, meta in self._hedge_orders.items() if meta.get("side") == side]
+            if same_side:
+                await self._cancel_orders(same_side)
+                for oid in same_side:
+                    self._hedge_orders.pop(oid, None)
+            return await self._submit(side, amount, price, tag="hedge")
+
+    async def prune_stale_hedges(self, max_age: float) -> None:
+        if max_age <= 0:
             return
+        threshold = time.time() - max_age
+        async with self._lock:
+            stale = [oid for oid, meta in self._hedge_orders.items() if meta.get("created", 0.0) < threshold]
+            if stale:
+                await self._cancel_orders(stale)
+                for oid in stale:
+                    self._hedge_orders.pop(oid, None)
+
+    def mark_filled(self, order_id: Optional[str]) -> None:
+        if not order_id:
+            return
+        if order_id in self._quote_orders:
+            self._quote_orders.pop(order_id, None)
+        if order_id in self._hedge_orders:
+            self._hedge_orders.pop(order_id, None)
+
+    async def _submit(self, side: str, amount: Decimal, price: Decimal, *, tag: str) -> Optional[str]:
+        if amount <= 0:
+            return None
         try:
             order = await self._client.create_limit_order(self._symbol, side, amount, price, post_only=True)
             order_id = str(order.get("id") or order.get("order_id") or order.get("clientOrderId"))
             if order_id:
-                self._open_orders[order_id] = (side, amount, price)
-                logger.info("[EXECUTE] %s %s amount=%s price=%s", side.upper(), self._symbol, amount, price)
+                meta = {"side": side, "amount": amount, "price": price, "created": time.time()}
+                if tag == "quote":
+                    self._quote_orders[order_id] = meta
+                else:
+                    self._hedge_orders[order_id] = meta
+                logger.info("[EXECUTE] %s %s amount=%s price=%s tag=%s", side.upper(), self._symbol, amount, price, tag)
+            return order_id if order_id else None
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("Failed to submit %s order for %s: %s", side, self._symbol, exc)
+            return None
 
-    async def _cancel_all(self) -> None:
-        if not self._open_orders:
+    async def _cancel_orders(self, order_ids: Iterable[str]) -> None:
+        ids = list(order_ids)
+        if not ids:
             return
-        pending = [self._client.cancel_order(order_id, self._symbol) for order_id in list(self._open_orders)]
-        for task in asyncio.as_completed(pending):
+        for order_id in ids:
             try:
-                await task
+                await self._client.cancel_order(order_id, self._symbol)
             except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("Cancel failed for %s: %s", self._symbol, exc)
-        self._open_orders.clear()
+                logger.debug("Cancel failed for %s order=%s: %s", self._symbol, order_id, exc)

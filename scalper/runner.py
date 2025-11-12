@@ -10,9 +10,10 @@ from typing import Dict
 from .config import PairConfig, ScalperConfig
 from .exchange import ExchangeCredentials, RestExchangeClient
 from .execution import ExecutionManager
+from .hedging import compute_hedge_price
 from .market_data import MarketDataPoller
 from .pnl import PnLTracker
-from .risk import RiskAssessment, RiskManager
+from .risk import RiskManager
 from .state import PairRuntimeState
 from .strategy import QuotePlanner
 
@@ -67,7 +68,7 @@ class ScalperEngine:
         await poller.start()
         try:
             while self._running:
-                await self._consume_trades(client, pair, state)
+                await self._consume_trades(client, pair, state, execution)
                 snapshot = poller.latest()
                 if not snapshot:
                     await asyncio.sleep(self._config.settings.poll_interval_s)
@@ -81,7 +82,8 @@ class ScalperEngine:
                         pair.symbol,
                         assessment.reason,
                     )
-                    await execution.cancel_all()
+                    await execution.cancel_all_quotes()
+                    await execution.prune_stale_hedges(self._config.settings.hedge_stale_seconds)
                     await asyncio.sleep(self._config.settings.poll_interval_s)
                     continue
 
@@ -97,13 +99,15 @@ class ScalperEngine:
                         intent.sell_price,
                         intent.reason,
                     )
-                    await execution.sync(intent)
+                    await execution.sync_quotes(intent)
                 else:
-                    await execution.cancel_all()
+                    await execution.cancel_all_quotes()
 
+                await execution.prune_stale_hedges(self._config.settings.hedge_stale_seconds)
                 await asyncio.sleep(self._config.settings.poll_interval_s)
         finally:
             await poller.stop()
+            await execution.cancel_all()
 
     async def _fetch_stable_balance(self, client: RestExchangeClient, currency: str) -> Decimal:
         try:
@@ -115,7 +119,7 @@ class ScalperEngine:
             logger.warning("Failed to fetch balance for %s: %s", currency, exc)
             return Decimal("0")
 
-    async def _consume_trades(self, client: RestExchangeClient, pair: PairConfig, state: PairRuntimeState) -> None:
+    async def _consume_trades(self, client: RestExchangeClient, pair: PairConfig, state: PairRuntimeState, execution: ExecutionManager) -> None:
         since = state.last_trade_fetch_ts or None
         try:
             trades = await client.fetch_my_trades(pair.symbol, since=since, limit=100)
@@ -137,6 +141,8 @@ class ScalperEngine:
             price = Decimal(str(trade.get("price") or 0))
             fee_info = trade.get("fee") or {}
             fee_cost = Decimal(str(fee_info.get("cost", 0))) if fee_info else Decimal("0")
+            order_ref = str(trade.get("order") or trade.get("order_id") or trade.get("clientOrderId") or "")
+            execution.mark_filled(order_ref or trade_id)
             pair_key = f"{pair.exchange}:{pair.symbol}"
             realized, result = self._pnl.process_fill(pair_key, state, side, amount, price, fee_cost)
             if result in {"win", "loss", "flat"}:
@@ -151,3 +157,6 @@ class ScalperEngine:
                     price,
                     realized.quantize(Decimal("0.0001")),
                 )
+            if side == "buy" and amount > 0:
+                hedge_price = compute_hedge_price(price, side, self._config.settings.hedge_fee_guard_bps)
+                await execution.place_hedge("sell", amount, hedge_price)

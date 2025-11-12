@@ -44,6 +44,8 @@ class EngineSettings:
     min_equity_allocation_usd: Decimal = Decimal("10")
     max_pair_loss_usd: Decimal = Decimal("6")
     max_total_loss_usd: Decimal = Decimal("20")
+    hedge_fee_guard_bps: int = 30
+    hedge_stale_seconds: float = 10.0
 
 
 @dataclass
