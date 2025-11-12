@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from typing import Dict, Iterable, Optional
 
 from .exchange import RestExchangeClient
@@ -64,9 +64,15 @@ class ExecutionManager:
         async with self._lock:
             stale = [oid for oid, meta in self._hedge_orders.items() if meta.get("created", 0.0) < threshold]
             if stale:
-                await self._cancel_orders(stale)
                 for oid in stale:
-                    self._hedge_orders.pop(oid, None)
+                    meta = self._hedge_orders.pop(oid, None)
+                    if not meta:
+                        continue
+                    try:
+                        await self._client.cancel_order(oid, self._symbol)
+                    except Exception:
+                        pass
+                    await self._reprice_hedge(meta)
 
     def mark_filled(self, order_id: Optional[str]) -> None:
         if not order_id:
@@ -76,11 +82,11 @@ class ExecutionManager:
         if order_id in self._hedge_orders:
             self._hedge_orders.pop(order_id, None)
 
-    async def _submit(self, side: str, amount: Decimal, price: Decimal, *, tag: str) -> Optional[str]:
+    async def _submit(self, side: str, amount: Decimal, price: Decimal, *, tag: str, post_only: bool = True) -> Optional[str]:
         if amount <= 0:
             return None
         try:
-            order = await self._client.create_limit_order(self._symbol, side, amount, price, post_only=True)
+            order = await self._client.create_limit_order(self._symbol, side, amount, price, post_only=post_only)
             order_id = str(order.get("id") or order.get("order_id") or order.get("clientOrderId"))
             if order_id:
                 meta = {"side": side, "amount": amount, "price": price, "created": time.time()}
@@ -103,3 +109,29 @@ class ExecutionManager:
                 await self._client.cancel_order(order_id, self._symbol)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.debug("Cancel failed for %s order=%s: %s", self._symbol, order_id, exc)
+
+    async def _reprice_hedge(self, meta: Dict[str, Decimal]) -> None:
+        side = str(meta.get("side", ""))
+        amount = Decimal(str(meta.get("amount", 0)))
+        if amount <= 0 or side not in {"buy", "sell"}:
+            return
+        try:
+            book = await self._client.fetch_order_book(self._symbol, depth=1)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Failed to fetch order book for hedge repricing %s: %s", self._symbol, exc)
+            return
+
+        target_price = meta.get("price", Decimal("0"))
+        try:
+            if side == "sell":
+                best_bid = Decimal(str(book.get("bids", [[0]])[0][0])) if book.get("bids") else None
+                if best_bid and best_bid > 0:
+                    target_price = (best_bid * Decimal("0.999")).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
+            else:
+                best_ask = Decimal(str(book.get("asks", [[0]])[0][0])) if book.get("asks") else None
+                if best_ask and best_ask > 0:
+                    target_price = (best_ask * Decimal("1.001")).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
+        except Exception:
+            pass
+
+        await self._submit(side, amount, target_price, tag="hedge", post_only=False)
