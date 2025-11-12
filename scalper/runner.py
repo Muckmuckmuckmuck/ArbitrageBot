@@ -6,7 +6,7 @@ import logging
 import time
 from collections import defaultdict
 from decimal import Decimal, ROUND_DOWN
-from typing import Dict, Sequence, Set, Optional
+from typing import Dict, Sequence, Set, Optional, List
 
 from .config import PairConfig, ScalperConfig
 from .exchange import ExchangeCredentials, RestExchangeClient
@@ -18,6 +18,7 @@ from .risk import RiskManager
 from .state import PairRuntimeState
 from .strategy import QuotePlanner, QuoteIntent
 from .telemetry import PlanTelemetry, Telemetry
+from .discovery import OpportunityScanner, PairSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class ScalperEngine:
         self._pnl = PnLTracker()
         self._risk = RiskManager(config.settings, self._pnl)
         self._telemetry = Telemetry()
+        self._scanner = OpportunityScanner(config, self._client_for)
         self._tasks: Dict[str, asyncio.Task[None]] = {}
         self._rotation_task: Optional[asyncio.Task[None]] = None
         self._running = False
@@ -112,9 +114,7 @@ class ScalperEngine:
                     state,
                     snapshot,
                     stable_balance,
-                    self._config.settings.fast_fill_latency_ms,
-                    self._config.settings.fast_fill_clip_bps,
-                    self._config.settings.slow_fill_clip_bps,
+                    self._config.settings,
                 )
                 if intent:
                     self._telemetry.plan(
@@ -152,18 +152,11 @@ class ScalperEngine:
 
     async def _rotation_loop(self) -> None:
         while self._running:
-            await asyncio.sleep(max(5.0, self._config.settings.poll_interval_s * 5))
-            scores = []
-            for pair in self._enabled_pairs:
-                state = self._states[pair.symbol]
-                recent_edges = list(state.recent_net_edges)
-                edge_avg = sum(recent_edges) / Decimal(len(recent_edges)) if recent_edges else Decimal("-100")
-                stats = self._pnl.get_stats(f"{pair.exchange}:{pair.symbol}")
-                penalty = Decimal(stats.losses * 5 + state.skip_reasons.get("edge_target", 0) * 2 + state.skip_reasons.get("notional", 0))
-                score = float(edge_avg - penalty)
-                scores.append((score, pair.symbol))
-            scores.sort(reverse=True, key=lambda item: item[0])
-            allowed = {symbol for _, symbol in scores[: self._config.settings.max_active_pairs]}
+            await asyncio.sleep(max(10.0, self._config.settings.scanner_interval_s))
+            snapshots = await self._scanner.refresh()
+            self._telemetry.scan(snapshots)
+            ranked = self._score_pairs(snapshots)
+            allowed = {symbol for _, symbol in ranked[: self._config.settings.max_active_pairs]}
             if allowed != self._active_pairs:
                 logger.info("[ROTATION] Active pairs -> %s", ", ".join(sorted(allowed)))
             self._active_pairs = allowed
@@ -213,12 +206,33 @@ class ScalperEngine:
                     realized.quantize(Decimal("0.0001")),
                 )
             if amount > 0:
-                hedge_price = compute_hedge_price(price, side, self._config.settings.hedge_fee_guard_bps)
+                hedge_price = compute_hedge_price(
+                    price,
+                    side,
+                    self._config.settings.hedge_fee_guard_bps,
+                    self._config.settings.hedge_buffer_bps,
+                )
                 if side == "buy":
                     available_base = sum(lot.amount for lot in state.inventory)
                     hedge_amount = min(amount, available_base)
                     if hedge_amount > Decimal("0"):
-                        await execution.place_hedge("sell", hedge_amount, hedge_price)
+                        placed = await execution.place_hedge(
+                            "sell",
+                            hedge_amount,
+                            hedge_price,
+                            allow_taker=False,
+                            min_price=hedge_price,
+                        )
+                        if not placed:
+                            await self._handle_failed_hedge(
+                                client,
+                                execution,
+                                pair,
+                                state,
+                                "sell",
+                                hedge_amount,
+                                hedge_price,
+                            )
                 elif side == "sell":
                     stable_balance = await self._fetch_stable_balance(client, pair.quote)
                     max_buy_amount = Decimal("0")
@@ -226,7 +240,24 @@ class ScalperEngine:
                         max_buy_amount = (stable_balance / (hedge_price * Decimal("1.01"))).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
                     hedge_amount = min(amount, max_buy_amount)
                     if hedge_amount > Decimal("0"):
-                        await execution.place_hedge("buy", hedge_amount, hedge_price)
+                        allow_taker = realized > 0
+                        placed = await execution.place_hedge(
+                            "buy",
+                            hedge_amount,
+                            hedge_price,
+                            allow_taker=allow_taker,
+                            max_price=hedge_price,
+                        )
+                        if not placed:
+                            await self._handle_failed_hedge(
+                                client,
+                                execution,
+                                pair,
+                                state,
+                                "buy",
+                                hedge_amount,
+                                hedge_price,
+                            )
 
     def _filter_pairs(self, pairs: Sequence[PairConfig]) -> Sequence[PairConfig]:
         enabled = []
@@ -243,3 +274,81 @@ class ScalperEngine:
                 continue
             enabled.append(pair)
         return enabled
+
+    async def _handle_failed_hedge(
+        self,
+        client: RestExchangeClient,
+        execution: ExecutionManager,
+        pair: PairConfig,
+        state: PairRuntimeState,
+        side: str,
+        amount: Decimal,
+        entry_price: Decimal,
+    ) -> None:
+        now = time.time()
+        if state.hedge_failure_ts is None:
+            state.hedge_failure_ts = now
+            state.hedge_attempt_side = side
+            state.last_hedge_entry = entry_price
+            state.cooldown_until = max(state.cooldown_until, now + self._config.settings.insufficient_balance_cooldown_s)
+            self._telemetry.cooldown(pair.exchange, pair.symbol, state.cooldown_until, "hedge_insufficient")
+            return
+
+        elapsed = now - state.hedge_failure_ts
+        if elapsed < self._config.settings.hedge_force_flat_seconds:
+            return
+
+        best_price = await self._best_price(client, pair.symbol, side)
+        if best_price is None:
+            return
+
+        min_price = entry_price if side == "sell" else None
+        max_price = entry_price if side == "buy" else None
+        order_id = await execution.place_hedge(
+            side,
+            amount,
+            best_price,
+            allow_taker=True,
+            min_price=min_price,
+            max_price=max_price,
+        )
+        if order_id:
+            state.hedge_failure_ts = None
+            state.hedge_attempt_side = None
+            return
+
+        state.cooldown_until = max(state.cooldown_until, now + self._config.settings.insufficient_balance_cooldown_s)
+        self._telemetry.cooldown(pair.exchange, pair.symbol, state.cooldown_until, "force_flat_failed")
+
+    async def _best_price(self, client: RestExchangeClient, symbol: str, side: str) -> Optional[Decimal]:
+        try:
+            book = await client.fetch_order_book(symbol, depth=1)
+        except Exception:
+            return None
+        if side == "sell":
+            bids = book.get("bids") or []
+            if not bids:
+                return None
+            return Decimal(str(bids[0][0]))
+        asks = book.get("asks") or []
+        if not asks:
+            return None
+        return Decimal(str(asks[0][0]))
+
+    def _score_pairs(self, snapshots: List[PairSnapshot]) -> List[tuple]:
+        snapshot_map = {f"{snap.exchange}:{snap.symbol}": snap for snap in snapshots}
+        ranked: List[tuple] = []
+        for pair in self._enabled_pairs:
+            state = self._states[pair.symbol]
+            pair_key = f"{pair.exchange}:{pair.symbol}"
+            snap = snapshot_map.get(pair_key)
+            net_edge = snap.net_edge_bps if snap else Decimal("-999")
+            stats = self._pnl.get_stats(pair_key)
+            penalty = Decimal(stats.losses * 20 + state.skip_reasons.get("edge_target", 0) * 5)
+            if len(state.recent_realized) >= self._config.settings.negative_fill_lookback:
+                if all(val <= 0 for val in list(state.recent_realized)[-self._config.settings.negative_fill_lookback:]):
+                    penalty += Decimal("200")
+            score = float(net_edge - penalty)
+            ranked.append((score, pair.symbol))
+        ranked.sort(reverse=True, key=lambda item: item[0])
+        return ranked

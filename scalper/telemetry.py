@@ -4,9 +4,10 @@ import logging
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Sequence
 
 from .persistence import PersistentLogger
+from .discovery import PairSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -106,4 +107,30 @@ class Telemetry:
                 "remaining": remaining,
                 "reason": reason,
             },
+        )
+
+    def scan(self, snapshots: Sequence[PairSnapshot], *, limit: int = 5) -> None:
+        if not snapshots:
+            return
+        for snapshot in snapshots[:limit]:
+            logger.info(
+                "[SCAN] %s %s spread=%sbps net=%sbps depth_usd=%s",
+                snapshot.exchange.upper(),
+                snapshot.symbol,
+                snapshot.spread_bps,
+                snapshot.net_edge_bps,
+                snapshot.depth_usd,
+            )
+        self._persist.write(
+            "scan",
+            [
+                {
+                    "exchange": snap.exchange,
+                    "symbol": snap.symbol,
+                    "spread_bps": str(snap.spread_bps),
+                    "net_edge_bps": str(snap.net_edge_bps),
+                    "depth_usd": str(snap.depth_usd),
+                }
+                for snap in snapshots[:limit]
+            ],
         )

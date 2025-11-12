@@ -33,13 +33,16 @@ class PairRuntimeState:
     fees_paid: Decimal = Decimal("0")
     last_fill_ts: float = 0.0
     last_trade_fetch_ts: int = 0
-    probe_size_usd: Decimal = Decimal("5")
     probe_successes: int = 0
     probe_failures: int = 0
-    recent_net_edges: Deque[Decimal] = field(default_factory=lambda: deque(maxlen=30))
+    recent_net_edges: Deque[Decimal] = field(default_factory=lambda: deque(maxlen=60))
+    recent_realized: Deque[Decimal] = field(default_factory=lambda: deque(maxlen=20))
     skip_reasons: Dict[str, int] = field(default_factory=dict)
     fast_fill_bias: Decimal = Decimal("0")
     last_quote_reason: Optional[str] = None
+    hedge_failure_ts: Optional[float] = None
+    hedge_attempt_side: Optional[str] = None
+    last_hedge_entry: Optional[Decimal] = None
 
     def push_inventory(self, amount: Decimal, price: Decimal) -> None:
         self.inventory.append(InventoryLot(amount=amount, price=price, timestamp=time.time()))

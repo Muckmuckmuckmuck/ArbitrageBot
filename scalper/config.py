@@ -13,24 +13,24 @@ class PairConfig:
     symbol: str
     base: str
     quote: str
-    order_size_usd: Decimal = Decimal("5")
+    order_size_usd: Decimal = Decimal("6")
     min_notional_usd: Decimal = Decimal("3")
-    target_edge_bps: int = 12
-    min_edge_bps: int = 8
-    probe_edge_bps: int = 4
-    max_edge_bps: int = 40
-    slippage_buffer_bps: int = 2
+    target_edge_bps: int = 80
+    min_edge_bps: int = 60
+    probe_edge_bps: int = 40
+    max_edge_bps: int = 140
+    slippage_buffer_bps: int = 8
     maker_fee_bps: int = 12
-    taker_fee_bps: int = 25
+    taker_fee_bps: int = 35
     depth_clip_fraction: Decimal = Decimal("0.2")
-    max_spread_bps: int = 150
-    min_spread_bps: int = 6
-    volatility_floor_bps: int = 25
-    volatility_ceiling_bps: int = 250
-    inventory_pressure_bps: int = 8
-    base_probe_size_usd: Decimal = Decimal("5")
-    max_probe_size_usd: Decimal = Decimal("12")
-    probe_step_usd: Decimal = Decimal("1.5")
+    max_spread_bps: int = 400
+    min_spread_bps: int = 10
+    volatility_floor_bps: int = 30
+    volatility_ceiling_bps: int = 400
+    inventory_pressure_bps: int = 10
+    base_probe_size_usd: Decimal = Decimal("3")
+    max_probe_size_usd: Decimal = Decimal("9")
+    probe_step_usd: Decimal = Decimal("1")
     probe_cooldown_s: float = 30.0
 
 
@@ -38,24 +38,33 @@ class PairConfig:
 class EngineSettings:
     """Global controls for the scalper engine."""
 
-    poll_interval_s: float = 0.6
-    hedge_check_interval_s: float = 0.7
-    stale_order_seconds: float = 12.0
-    inventory_cap_multiple: Decimal = Decimal("1.0")
-    max_inventory_age_s: float = 120.0
-    loss_cooldown_s: float = 4.0
-    win_cooldown_s: float = 1.5
-    neutral_cooldown_s: float = 2.0
+    poll_interval_s: float = 0.5
+    hedge_check_interval_s: float = 0.6
+    stale_order_seconds: float = 10.0
+    inventory_cap_multiple: Decimal = Decimal("0.9")
+    max_inventory_age_s: float = 90.0
+    loss_cooldown_s: float = 6.0
+    win_cooldown_s: float = 1.8
+    neutral_cooldown_s: float = 2.5
     max_active_pairs: int = 2
     equity_fraction_per_pair: Decimal = Decimal("0.4")
     min_equity_allocation_usd: Decimal = Decimal("10")
     max_pair_loss_usd: Decimal = Decimal("6")
     max_total_loss_usd: Decimal = Decimal("20")
-    hedge_fee_guard_bps: int = 30
+    hedge_fee_guard_bps: int = 35
+    hedge_buffer_bps: int = 15
     hedge_stale_seconds: float = 10.0
-    fast_fill_latency_ms: float = 600.0
-    fast_fill_clip_bps: int = 4
+    hedge_force_flat_seconds: float = 18.0
+    fast_fill_latency_ms: float = 450.0
+    fast_fill_clip_bps: int = 3
     slow_fill_clip_bps: int = 1
+    minimum_target_edge_bps: int = 80
+    scanner_interval_s: float = 45.0
+    scanner_quote_currencies: Sequence[str] = field(default_factory=lambda: ["USD", "USDC"])
+    scanner_max_markets: int = 40
+    scanner_depth_clip_fraction: Decimal = Decimal("0.2")
+    negative_fill_lookback: int = 5
+    insufficient_balance_cooldown_s: float = 6.0
 
 
 @dataclass
@@ -71,9 +80,9 @@ def build_default_config(venue_keys: Dict[str, Dict[str, str]]) -> ScalperConfig
     """Helper to produce a conservative default configuration."""
 
     default_pairs: List[PairConfig] = [
-        PairConfig(exchange="coinbase", symbol="BTC/USD", base="BTC", quote="USD", target_edge_bps=18),
-        PairConfig(exchange="coinbase", symbol="ETH/USD", base="ETH", quote="USD", target_edge_bps=20),
-        PairConfig(exchange="gemini", symbol="BTC/USD", base="BTC", quote="USD", target_edge_bps=20, maker_fee_bps=15),
-        PairConfig(exchange="gemini", symbol="ETH/USD", base="ETH", quote="USD", target_edge_bps=22, maker_fee_bps=18),
+        PairConfig(exchange="coinbase", symbol="BTC/USD", base="BTC", quote="USD", target_edge_bps=90, maker_fee_bps=6, taker_fee_bps=20),
+        PairConfig(exchange="coinbase", symbol="ETH/USD", base="ETH", quote="USD", target_edge_bps=90, maker_fee_bps=6, taker_fee_bps=20),
+        PairConfig(exchange="gemini", symbol="BTC/USD", base="BTC", quote="USD", target_edge_bps=95, maker_fee_bps=8, taker_fee_bps=35),
+        PairConfig(exchange="gemini", symbol="ETH/USD", base="ETH", quote="USD", target_edge_bps=95, maker_fee_bps=10, taker_fee_bps=40),
     ]
     return ScalperConfig(venue_keys=venue_keys, pairs=default_pairs)

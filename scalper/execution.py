@@ -47,7 +47,16 @@ class ExecutionManager:
             self._quote_orders.clear()
             self._hedge_orders.clear()
 
-    async def place_hedge(self, side: str, amount: Decimal, price: Decimal) -> Optional[str]:
+    async def place_hedge(
+        self,
+        side: str,
+        amount: Decimal,
+        price: Decimal,
+        *,
+        allow_taker: bool = False,
+        min_price: Optional[Decimal] = None,
+        max_price: Optional[Decimal] = None,
+    ) -> Optional[str]:
         if amount <= 0:
             return None
         async with self._lock:
@@ -56,7 +65,15 @@ class ExecutionManager:
                 await self._cancel_orders(same_side)
                 for oid in same_side:
                     self._hedge_orders.pop(oid, None)
-            return await self._submit(side, amount, price, tag="hedge")
+            order_id = await self._submit(side, amount, price, tag="hedge")
+            if order_id and order_id in self._hedge_orders:
+                meta = self._hedge_orders[order_id]
+                meta["allow_taker"] = allow_taker
+                if min_price is not None:
+                    meta["min_price"] = min_price
+                if max_price is not None:
+                    meta["max_price"] = max_price
+            return order_id
 
     async def prune_stale_hedges(self, max_age: float) -> None:
         if max_age <= 0:
@@ -133,17 +150,26 @@ class ExecutionManager:
             logger.debug("Failed to fetch order book for hedge repricing %s: %s", self._symbol, exc)
             return
 
-        target_price = meta.get("price", Decimal("0"))
+        target_price = Decimal(str(meta.get("price", 0)))
         try:
             if side == "sell":
                 best_bid = Decimal(str(book.get("bids", [[0]])[0][0])) if book.get("bids") else None
                 if best_bid and best_bid > 0:
-                    target_price = (best_bid * Decimal("0.999")).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
+                    target_price = best_bid
+                    min_price = meta.get("min_price")
+                    if min_price is not None:
+                        target_price = max(target_price, Decimal(str(min_price)))
             else:
                 best_ask = Decimal(str(book.get("asks", [[0]])[0][0])) if book.get("asks") else None
                 if best_ask and best_ask > 0:
-                    target_price = (best_ask * Decimal("1.001")).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
+                    target_price = best_ask
+                    max_price = meta.get("max_price")
+                    if max_price is not None:
+                        target_price = min(target_price, Decimal(str(max_price)))
         except Exception:
             pass
 
-        await self._submit(side, amount, target_price, tag="hedge", post_only=False)
+        allow_taker = bool(meta.get("allow_taker"))
+        order_id = await self._submit(side, amount, target_price, tag="hedge", post_only=True)
+        if order_id is None and allow_taker:
+            await self._submit(side, amount, target_price, tag="hedge", post_only=False)

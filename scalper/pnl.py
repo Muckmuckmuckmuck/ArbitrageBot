@@ -65,6 +65,7 @@ class PnLTracker:
             realized = revenue - cost_basis - fee
             state.realized_pnl += realized
             stats.realized += realized
+            state.recent_realized.append(realized)
             if realized > 0:
                 stats.wins += 1
                 state.win_streak += 1

@@ -40,6 +40,16 @@ class RiskManager:
         if self._pnl.total_realized <= -self._settings.max_total_loss_usd:
             return RiskAssessment(False, "global_drawdown")
 
+        if len(state.recent_realized) >= self._settings.negative_fill_lookback:
+            window = list(state.recent_realized)[-self._settings.negative_fill_lookback:]
+            if window and all(value <= 0 for value in window):
+                return RiskAssessment(False, "pnl_negative")
+
+        if state.hedge_failure_ts:
+            elapsed = time.time() - state.hedge_failure_ts
+            if elapsed < self._settings.hedge_force_flat_seconds:
+                return RiskAssessment(False, "hedge_recovering")
+
         if state.inventory:
             oldest = state.inventory[0]
             age = now - oldest.timestamp

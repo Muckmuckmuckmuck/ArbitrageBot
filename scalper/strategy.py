@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN
 from typing import Optional
 
-from .config import PairConfig
+from .config import PairConfig, EngineSettings
 from .market_data import OrderBookSnapshot
 from .state import PairRuntimeState
 
@@ -37,9 +37,7 @@ class QuotePlanner:
         state: PairRuntimeState,
         snapshot: OrderBookSnapshot,
         stable_balance: Decimal,
-        fast_fill_latency_ms: float,
-        fast_fill_clip_bps: int,
-        slow_fill_clip_bps: int,
+        settings: EngineSettings,
     ) -> Optional[QuoteIntent]:
         spread_bps = snapshot.spread_bps
         if spread_bps <= 0:
@@ -51,24 +49,35 @@ class QuotePlanner:
         slip = Decimal(cfg.slippage_buffer_bps)
         net_edge = gross_edge - fees - slip
         state.recent_net_edges.append(net_edge)
+        state.last_edge_bps = net_edge
 
-        if net_edge < Decimal(cfg.min_edge_bps):
+        global_floor = Decimal(settings.minimum_target_edge_bps)
+        if net_edge < max(Decimal(cfg.min_edge_bps), global_floor):
             state.record_skip("edge_floor")
             return None
 
-        target_edge = Decimal(cfg.target_edge_bps)
-        if state.last_result == "win" and state.last_edge_bps > 0:
-            target_edge = max(Decimal(cfg.min_edge_bps), state.last_edge_bps * Decimal("0.7"))
-        elif state.last_result == "loss":
-            target_edge = min(Decimal(cfg.max_edge_bps), target_edge + Decimal("6"))
-        elif state.last_result == "flat":
-            target_edge = max(Decimal(cfg.min_edge_bps), target_edge)
+        target_edge = max(Decimal(cfg.target_edge_bps), global_floor)
+        if state.last_result == "loss":
+            target_edge = min(Decimal(cfg.max_edge_bps), target_edge + Decimal("8"))
+        elif state.last_result == "win" and state.win_streak > 1:
+            target_edge = max(target_edge, Decimal(cfg.target_edge_bps) + Decimal("5"))
 
         if net_edge < target_edge:
             state.record_skip("edge_target")
             return None
 
-        clip_reduction_bps = fast_fill_clip_bps if state.last_latency_ms and state.last_latency_ms < fast_fill_latency_ms else slow_fill_clip_bps
+        depth_bid_usd = snapshot.bid_depth * snapshot.best_bid
+        depth_ask_usd = snapshot.ask_depth * snapshot.best_ask
+        if depth_bid_usd <= 0 or depth_ask_usd <= 0:
+            state.record_skip("no_depth")
+            return None
+        depth_usd = min(depth_bid_usd, depth_ask_usd)
+
+        clip_reduction_bps = (
+            settings.fast_fill_clip_bps
+            if state.last_latency_ms and state.last_latency_ms < settings.fast_fill_latency_ms
+            else settings.slow_fill_clip_bps
+        )
         clip_fraction = Decimal("1") - Decimal(cfg.min_spread_bps + clip_reduction_bps) / Decimal("10000")
         clip_fraction = max(Decimal("0.98"), min(Decimal("1.0"), clip_fraction))
 
@@ -77,6 +86,11 @@ class QuotePlanner:
         sell_price = (snapshot.best_ask * max_sell_clip).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
 
         order_value = min(cfg.order_size_usd, stable_balance)
+        depth_cap = depth_usd * cfg.depth_clip_fraction
+        order_value = min(order_value, depth_cap)
+        if stable_balance < cfg.min_notional_usd * Decimal("2"):
+            order_value = min(order_value, Decimal("3"))
+
         if order_value < cfg.min_notional_usd:
             state.record_skip("notional")
             return None
