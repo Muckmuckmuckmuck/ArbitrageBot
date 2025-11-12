@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections import defaultdict
 from decimal import Decimal
-from typing import Dict
+from typing import Dict, Set, Optional
 
 from .config import PairConfig, ScalperConfig
 from .exchange import ExchangeCredentials, RestExchangeClient
@@ -33,7 +34,9 @@ class ScalperEngine:
         self._risk = RiskManager(config.settings, self._pnl)
         self._telemetry = Telemetry()
         self._tasks: Dict[str, asyncio.Task[None]] = {}
+        self._rotation_task: Optional[asyncio.Task[None]] = None
         self._running = False
+        self._active_pairs: Set[str] = {pair.symbol for pair in config.pairs}
 
     async def _client_for(self, exchange: str) -> RestExchangeClient:
         if exchange not in self._clients:
@@ -55,11 +58,17 @@ class ScalperEngine:
         for pair in self._config.pairs:
             task = asyncio.create_task(self._run_pair(pair))
             self._tasks[pair.symbol] = task
+        self._rotation_task = asyncio.create_task(self._rotation_loop())
 
     async def stop(self) -> None:
         self._running = False
         await asyncio.gather(*self._tasks.values(), return_exceptions=True)
         self._tasks.clear()
+        if self._rotation_task:
+            self._rotation_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._rotation_task
+            self._rotation_task = None
         await asyncio.gather(*(client.close() for client in self._clients.values()), return_exceptions=True)
 
     async def _run_pair(self, pair: PairConfig) -> None:
@@ -71,6 +80,11 @@ class ScalperEngine:
         try:
             while self._running:
                 await self._consume_trades(client, pair, state, execution)
+                if pair.symbol not in self._active_pairs:
+                    await execution.cancel_all_quotes()
+                    await execution.prune_stale_hedges(self._config.settings.hedge_stale_seconds)
+                    await asyncio.sleep(self._config.settings.poll_interval_s)
+                    continue
                 snapshot = poller.latest()
                 if not snapshot:
                     await asyncio.sleep(self._config.settings.poll_interval_s)
@@ -131,6 +145,24 @@ class ScalperEngine:
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("Failed to fetch balance for %s: %s", currency, exc)
             return Decimal("0")
+
+    async def _rotation_loop(self) -> None:
+        while self._running:
+            await asyncio.sleep(max(5.0, self._config.settings.poll_interval_s * 5))
+            scores = []
+            for pair in self._config.pairs:
+                state = self._states[pair.symbol]
+                recent_edges = list(state.recent_net_edges)
+                edge_avg = sum(recent_edges) / Decimal(len(recent_edges)) if recent_edges else Decimal("-100")
+                stats = self._pnl.get_stats(f"{pair.exchange}:{pair.symbol}")
+                penalty = Decimal(stats.losses * 5 + state.skip_reasons.get("edge_target", 0) * 2 + state.skip_reasons.get("notional", 0))
+                score = float(edge_avg - penalty)
+                scores.append((score, pair.symbol))
+            scores.sort(reverse=True, key=lambda item: item[0])
+            allowed = {symbol for _, symbol in scores[: self._config.settings.max_active_pairs]}
+            if allowed != self._active_pairs:
+                logger.info("[ROTATION] Active pairs -> %s", ", ".join(sorted(allowed)))
+            self._active_pairs = allowed
 
     async def _consume_trades(self, client: RestExchangeClient, pair: PairConfig, state: PairRuntimeState, execution: ExecutionManager) -> None:
         since = state.last_trade_fetch_ts or None
