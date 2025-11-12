@@ -60,6 +60,9 @@ class RestExchangeClient:
     async def fetch_balance(self) -> Dict[str, Any]:
         return await asyncio.to_thread(self._client.fetch_balance)
 
+    async def fetch_ticker(self, symbol: str) -> Any:
+        return await asyncio.to_thread(self._client.fetch_ticker, symbol)
+
     async def create_limit_order(self, symbol: str, side: str, amount: Decimal, price: Decimal, *, post_only: bool = True) -> Dict[str, Any]:
         params: Dict[str, Any] = {}
         if post_only:

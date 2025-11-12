@@ -5,7 +5,7 @@ import logging
 import time
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Awaitable, Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Sequence
 
 from .config import PairConfig, ScalperConfig
 from .exchange import RestExchangeClient
@@ -121,8 +121,17 @@ class OpportunityScanner:
         if depth_usd <= 0:
             return None
 
+        settings = self._config.settings
+        if depth_usd < settings.scanner_min_depth_usd:
+            return None
+
         cfg = self._pair_config(exchange, symbol)
-        order_value = cfg.order_size_usd if cfg else Decimal("5")
+        base_order = cfg.order_size_usd if cfg else settings.dynamic_order_usd_min
+        depth_clip = depth_usd * settings.scanner_depth_clip_fraction
+        order_value = min(base_order, depth_clip, depth_usd)
+        order_value = max(order_value, settings.dynamic_order_usd_min)
+        order_value = min(order_value, settings.dynamic_order_usd_max)
+
         maker_fee_bps = Decimal(cfg.maker_fee_bps if cfg else 12)
         taker_fee_bps = Decimal(cfg.taker_fee_bps if cfg else 35)
 
@@ -139,12 +148,16 @@ class OpportunityScanner:
             slippage_bps = (order_value / depth_usd) * Decimal("10000") * Decimal("0.5")
 
         total_fee_bps = maker_fee_bps * Decimal("2")
-        buffer_bps = Decimal(cfg.slippage_buffer_bps if cfg else 10)
+        buffer_bps = Decimal(cfg.slippage_buffer_bps if cfg else settings.scanner_min_spread_bps)
         net_edge = spread - total_fee_bps - buffer_bps - slippage_bps
         timestamp = time.time()
         base = market_meta.get("base") or (symbol.split("/")[0] if "/" in symbol else symbol)
         quote = market_meta.get("quote") or (symbol.split("/")[1] if "/" in symbol else "")
-        volume_usd = self._estimate_volume_usd(market_meta, bid, ask)
+        ticker = await self._safe_fetch_ticker(client, symbol)
+        volume_usd = self._estimate_volume_usd(market_meta, ticker, bid, ask)
+        if volume_usd < settings.scanner_min_volume_usd:
+            return None
+
         return PairSnapshot(
             exchange=exchange,
             symbol=symbol,
@@ -165,8 +178,36 @@ class OpportunityScanner:
                 return cfg
         return None
 
-    def _estimate_volume_usd(self, market: Dict[str, any], bid: Decimal, ask: Decimal) -> Decimal:
+    async def _safe_fetch_ticker(self, client: RestExchangeClient, symbol: str) -> Optional[Dict[str, Any]]:
+        try:
+            ticker = await client.fetch_ticker(symbol)
+            return ticker if isinstance(ticker, dict) else None
+        except Exception as exc:
+            logger.debug("[SCAN] ticker fetch failed for %s: %s", symbol, exc)
+            return None
+
+    def _estimate_volume_usd(self, market: Dict[str, any], ticker: Optional[Dict[str, Any]], bid: Decimal, ask: Decimal) -> Decimal:
         info = market.get("info", {}) if isinstance(market, dict) else {}
+        if ticker:
+            ticker_base = ticker.get("baseVolume") or ticker.get("volume")
+            ticker_quote = ticker.get("quoteVolume")
+            ticker_usd = ticker.get("info", {}).get("volumeUsd24h") if isinstance(ticker.get("info"), dict) else None
+            try:
+                if ticker_usd is not None:
+                    return Decimal(str(ticker_usd))
+            except Exception:
+                pass
+            try:
+                if ticker_quote is not None:
+                    return Decimal(str(ticker_quote))
+            except Exception:
+                pass
+            try:
+                if ticker_base is not None:
+                    mid = (bid + ask) / Decimal("2")
+                    return Decimal(str(ticker_base)) * mid
+            except Exception:
+                pass
         for key in ("volumeUsd24h", "volumeUsd24Hr", "volumeUsd", "usdVolume"):
             value = info.get(key)
             if value is not None:
