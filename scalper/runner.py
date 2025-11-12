@@ -159,6 +159,17 @@ class ScalperEngine:
             logger.warning("Failed to fetch balance for %s: %s", currency, exc)
             return Decimal("0")
 
+    async def _fetch_base_balance(self, client: RestExchangeClient, currency: str) -> Decimal:
+        try:
+            balance = await client.fetch_balance()
+            free = balance.get("free") or {}
+            total = balance.get("total") or {}
+            raw = free.get(currency, total.get(currency, 0))
+            return Decimal(str(raw))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to fetch base balance for %s: %s", currency, exc)
+            return Decimal("0")
+
     async def _rotation_loop(self) -> None:
         while self._running:
             await asyncio.sleep(max(10.0, self._config.settings.scanner_interval_s))
@@ -239,6 +250,7 @@ class ScalperEngine:
                     realized.quantize(Decimal("0.0001")),
                 )
             if amount > 0:
+                await execution.cancel_all_quotes()
                 hedge_price = compute_hedge_price(
                     price,
                     side,
@@ -246,8 +258,29 @@ class ScalperEngine:
                     self._config.settings.hedge_buffer_bps,
                 )
                 if side == "buy":
-                    available_base = sum(lot.amount for lot in state.inventory)
+                    wallet_base = await self._fetch_base_balance(client, pair.base)
+                    tracked_base = sum(lot.amount for lot in state.inventory)
+                    available_base = min(wallet_base, tracked_base)
                     hedge_amount = min(amount, available_base)
+                    hedge_amount = execution.amount_precision(hedge_amount)
+                    min_amount = execution.min_order_amount()
+                    if min_amount and hedge_amount < min_amount:
+                        logger.info(
+                            "[HEDGE] skip %s %s amount=%s reason=min_amount",
+                            pair.exchange.upper(),
+                            pair.symbol,
+                            hedge_amount,
+                        )
+                        continue
+                    hedge_notional = hedge_amount * hedge_price
+                    if hedge_notional < pair.min_notional_usd:
+                        logger.info(
+                            "[HEDGE] skip %s %s notional=%s reason=dust",
+                            pair.exchange.upper(),
+                            pair.symbol,
+                            hedge_notional.quantize(Decimal("0.0001")),
+                        )
+                        continue
                     if hedge_amount > Decimal("0"):
                         placed = await execution.place_hedge(
                             "sell",
@@ -272,6 +305,25 @@ class ScalperEngine:
                     if hedge_price > 0 and stable_balance > 0:
                         max_buy_amount = (stable_balance / (hedge_price * Decimal("1.01"))).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
                     hedge_amount = min(amount, max_buy_amount)
+                    hedge_amount = execution.amount_precision(hedge_amount)
+                    min_amount = execution.min_order_amount()
+                    if min_amount and hedge_amount < min_amount:
+                        logger.info(
+                            "[HEDGE] skip %s %s amount=%s reason=min_amount",
+                            pair.exchange.upper(),
+                            pair.symbol,
+                            hedge_amount,
+                        )
+                        continue
+                    hedge_notional = hedge_amount * hedge_price
+                    if hedge_notional < pair.min_notional_usd:
+                        logger.info(
+                            "[HEDGE] skip %s %s notional=%s reason=dust",
+                            pair.exchange.upper(),
+                            pair.symbol,
+                            hedge_notional.quantize(Decimal("0.0001")),
+                        )
+                        continue
                     if hedge_amount > Decimal("0"):
                         allow_taker = realized > 0
                         placed = await execution.place_hedge(

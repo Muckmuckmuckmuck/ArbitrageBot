@@ -129,6 +129,12 @@ class ExecutionManager:
             logger.exception("Failed to submit %s order for %s: %s", side, self._symbol, exc)
             return None
 
+    def amount_precision(self, amount: Decimal) -> Decimal:
+        return self._client.amount_to_precision(self._symbol, amount)
+
+    def min_order_amount(self) -> Optional[Decimal]:
+        return self._client.min_amount(self._symbol)
+
     async def _cancel_orders(self, order_ids: Iterable[str]) -> None:
         ids = list(order_ids)
         if not ids:

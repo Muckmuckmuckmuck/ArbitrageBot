@@ -51,10 +51,13 @@ class RiskManager:
                 return RiskAssessment(False, "hedge_recovering")
 
         if state.inventory:
-            oldest = state.inventory[0]
-            age = now - oldest.timestamp
-            if age > self._settings.max_inventory_age_s:
-                return RiskAssessment(False, f"inventory_age {age:.1f}s")
+            while state.inventory and (state.inventory[0].amount * state.inventory[0].price) < cfg.min_notional_usd:
+                state.inventory.popleft()
+            if state.inventory:
+                oldest = state.inventory[0]
+                age = now - oldest.timestamp
+                if age > self._settings.max_inventory_age_s:
+                    return RiskAssessment(False, f"inventory_age {age:.1f}s")
 
         return RiskAssessment(True, "ok")
 
