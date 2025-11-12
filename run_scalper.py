@@ -22,7 +22,13 @@ def _load_credentials() -> Dict[str, Dict[str, str]]:
     def read(prefix: str) -> Dict[str, str]:
         return {
             "api_key": pick(f"{prefix}_API_KEY", f"{prefix}_KEY", f"{prefix}KEY"),
-            "api_secret": pick(f"{prefix}_API_SECRET", f"{prefix}_SECRET", f"{prefix}SECRET"),
+            "api_secret": pick(
+                f"{prefix}_API_SECRET",
+                f"{prefix}_SECRET",
+                f"{prefix}SECRET",
+                f"{prefix}_SECRET_KEY",
+                f"{prefix}SECRET_KEY",
+            ),
             "passphrase": pick(
                 f"{prefix}_API_PASSPHRASE",
                 f"{prefix}_PASSPHRASE",
