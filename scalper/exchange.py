@@ -22,18 +22,17 @@ class RestExchangeClient:
     """Thin REST-only wrapper around ccxt clients for Coinbase and Gemini."""
 
     def __init__(self, venue: str, creds: ExchangeCredentials, *, sandbox: bool = False) -> None:
-        if venue not in {"coinbase", "coinbaseadvanced", "gemini"}:
-            raise ValueError(f"Unsupported venue {venue}")
-
-        if venue == "coinbase":
-            client_cls = ccxt.coinbaseprime
-            options = {"hostname": "prime.coinbase.com"}
-        elif venue == "coinbaseadvanced":
-            client_cls = ccxt.coinbaseadvanced
+        normalized = venue.lower()
+        if normalized in {"coinbase", "coinbaseadvanced", "coinbaseprime"}:
+            client_cls = getattr(ccxt, "coinbase", None)
+            if client_cls is None:
+                raise AttributeError("ccxt does not provide a coinbase client in this build")
             options = {}
-        else:
+        elif normalized == "gemini":
             client_cls = ccxt.gemini
             options = {}
+        else:
+            raise ValueError(f"Unsupported venue {venue}")
 
         self._client = client_cls({
             "apiKey": creds.api_key,
@@ -45,6 +44,9 @@ class RestExchangeClient:
         })
         if sandbox:
             self._client.set_sandbox_mode(True)
+        if normalized == "gemini":
+            self._client.options = self._client.options or {}
+            self._client.options.setdefault("nonce", "milliseconds")
 
     async def fetch_order_book(self, symbol: str, *, depth: int = 5) -> Dict[str, Any]:
         return await asyncio.to_thread(self._client.fetch_order_book, symbol, depth)
@@ -83,3 +85,28 @@ class RestExchangeClient:
             await asyncio.to_thread(self._client.close)
         except AttributeError:
             pass
+
+    async def load_markets(self) -> None:
+        await asyncio.to_thread(self._client.load_markets)
+
+    def amount_to_precision(self, symbol: str, amount: Decimal) -> Decimal:
+        try:
+            value = self._client.amount_to_precision(symbol, float(amount))
+            return Decimal(str(value))
+        except Exception:
+            return amount
+
+    def price_to_precision(self, symbol: str, price: Decimal) -> Decimal:
+        try:
+            value = self._client.price_to_precision(symbol, float(price))
+            return Decimal(str(value))
+        except Exception:
+            return price
+
+    def min_amount(self, symbol: str) -> Optional[Decimal]:
+        try:
+            market = self._client.market(symbol)
+            min_value = market.get("limits", {}).get("amount", {}).get("min")
+            return Decimal(str(min_value)) if min_value else None
+        except Exception:
+            return None

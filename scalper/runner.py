@@ -50,6 +50,7 @@ class ScalperEngine:
                 passphrase=creds_data.get("passphrase"),
             )
             self._clients[exchange] = RestExchangeClient(exchange, creds)
+            await self._clients[exchange].load_markets()
         return self._clients[exchange]
 
     async def start(self) -> None:

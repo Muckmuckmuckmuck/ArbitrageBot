@@ -87,6 +87,14 @@ class ExecutionManager:
         if amount <= 0:
             return None
         try:
+            amount = self._client.amount_to_precision(self._symbol, amount)
+            price = self._client.price_to_precision(self._symbol, price)
+            min_amount = self._client.min_amount(self._symbol)
+            if min_amount and amount < min_amount:
+                logger.debug("[EXECUTE] %s %s amount %s below min %s", side.upper(), self._symbol, amount, min_amount)
+                return None
+            if amount <= 0:
+                return None
             order = await self._client.create_limit_order(self._symbol, side, amount, price, post_only=post_only)
             order_id = str(order.get("id") or order.get("order_id") or order.get("clientOrderId"))
             if order_id:
