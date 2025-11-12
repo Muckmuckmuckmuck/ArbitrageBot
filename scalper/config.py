@@ -65,6 +65,13 @@ class EngineSettings:
     scanner_depth_clip_fraction: Decimal = Decimal("0.2")
     negative_fill_lookback: int = 5
     insufficient_balance_cooldown_s: float = 6.0
+    scanner_min_spread_bps: int = 40
+    scanner_min_net_edge_bps: int = 80
+    scanner_min_depth_usd: Decimal = Decimal("25")
+    scanner_min_volume_usd: Decimal = Decimal("2500")
+    dynamic_order_usd_min: Decimal = Decimal("3")
+    dynamic_order_usd_max: Decimal = Decimal("9")
+    max_dynamic_pairs: int = 10
 
 
 @dataclass

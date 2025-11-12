@@ -6,7 +6,7 @@ import logging
 import time
 from collections import defaultdict
 from decimal import Decimal, ROUND_DOWN
-from typing import Dict, Sequence, Set, Optional, List
+from typing import Dict, Sequence, Set, Optional, List, Tuple
 
 from .config import PairConfig, ScalperConfig
 from .exchange import ExchangeCredentials, RestExchangeClient
@@ -18,7 +18,7 @@ from .risk import RiskManager
 from .state import PairRuntimeState
 from .strategy import QuotePlanner, QuoteIntent
 from .telemetry import PlanTelemetry, Telemetry
-from .discovery import OpportunityScanner, PairSnapshot
+from .discovery import OpportunityScanner, PairSnapshot, PairCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +34,17 @@ class ScalperEngine:
         self._pnl = PnLTracker()
         self._risk = RiskManager(config.settings, self._pnl)
         self._telemetry = Telemetry()
+        self._catalog = PairCatalog(config, config.pairs)
         self._scanner = OpportunityScanner(config, self._client_for)
+        self._pair_configs: Dict[str, PairConfig] = {
+            self._pair_key(pair.exchange, pair.symbol): pair for pair in config.pairs
+        }
         self._tasks: Dict[str, asyncio.Task[None]] = {}
         self._rotation_task: Optional[asyncio.Task[None]] = None
         self._running = False
         self._enabled_pairs = self._filter_pairs(config.pairs)
-        self._active_pairs: Set[str] = {pair.symbol for pair in self._enabled_pairs}
+        initial_keys = [self._pair_key(pair.exchange, pair.symbol) for pair in self._enabled_pairs]
+        self._active_pairs: Set[str] = set(initial_keys[: self._config.settings.max_active_pairs])
 
     async def _client_for(self, exchange: str) -> RestExchangeClient:
         if exchange not in self._clients:
@@ -62,8 +67,8 @@ class ScalperEngine:
         if not self._enabled_pairs:
             logger.error("[STARTUP] No trading pairs enabled—check API credentials")
         for pair in self._enabled_pairs:
-            task = asyncio.create_task(self._run_pair(pair))
-            self._tasks[pair.symbol] = task
+            key = self._pair_key(pair.exchange, pair.symbol)
+            await self._ensure_pair_task(key, pair)
         self._rotation_task = asyncio.create_task(self._rotation_loop())
 
     async def stop(self) -> None:
@@ -77,16 +82,18 @@ class ScalperEngine:
             self._rotation_task = None
         await asyncio.gather(*(client.close() for client in self._clients.values()), return_exceptions=True)
 
-    async def _run_pair(self, pair: PairConfig) -> None:
-        client = await self._client_for(pair.exchange)
-        poller = MarketDataPoller(client, pair.symbol, interval_s=self._config.settings.poll_interval_s)
-        execution = ExecutionManager(client, pair.symbol)
-        state = self._states[pair.symbol]
+    async def _run_pair(self, pair_key: str) -> None:
+        cfg = self._pair_configs[pair_key]
+        client = await self._client_for(cfg.exchange)
+        poller = MarketDataPoller(client, cfg.symbol, interval_s=self._config.settings.poll_interval_s)
+        execution = ExecutionManager(client, cfg.symbol)
+        state = self._states[pair_key]
         await poller.start()
         try:
             while self._running:
-                await self._consume_trades(client, pair, state, execution)
-                if pair.symbol not in self._active_pairs:
+                pair = self._pair_configs[pair_key]
+                await self._consume_trades(client, pair, pair_key, state, execution)
+                if pair_key not in self._active_pairs:
                     await execution.cancel_all_quotes()
                     await execution.prune_stale_hedges(self._config.settings.hedge_stale_seconds)
                     await asyncio.sleep(self._config.settings.poll_interval_s)
@@ -155,13 +162,38 @@ class ScalperEngine:
             await asyncio.sleep(max(10.0, self._config.settings.scanner_interval_s))
             snapshots = await self._scanner.refresh()
             self._telemetry.scan(snapshots)
-            ranked = self._score_pairs(snapshots)
-            allowed = {symbol for _, symbol in ranked[: self._config.settings.max_active_pairs]}
+            snapshot_map = {
+                self._pair_key(snap.exchange, snap.symbol): snap for snap in snapshots
+            }
+            for snapshot in snapshots:
+                cfg = self._catalog.register_dynamic(snapshot)
+                if cfg:
+                    key = self._pair_key(cfg.exchange, cfg.symbol)
+                    if key not in self._pair_configs:
+                        self._pair_configs[key] = cfg
+            ranked = self._score_pairs(snapshot_map)
+            allowed: Set[str] = set()
+            for _, pair_key in ranked:
+                if pair_key not in self._pair_configs:
+                    continue
+                allowed.add(pair_key)
+                if len(allowed) >= self._config.settings.max_active_pairs:
+                    break
+            for pair_key in allowed:
+                cfg = self._pair_configs[pair_key]
+                await self._ensure_pair_task(pair_key, cfg)
             if allowed != self._active_pairs:
                 logger.info("[ROTATION] Active pairs -> %s", ", ".join(sorted(allowed)))
             self._active_pairs = allowed
 
-    async def _consume_trades(self, client: RestExchangeClient, pair: PairConfig, state: PairRuntimeState, execution: ExecutionManager) -> None:
+    async def _consume_trades(
+        self,
+        client: RestExchangeClient,
+        pair: PairConfig,
+        pair_key: str,
+        state: PairRuntimeState,
+        execution: ExecutionManager,
+    ) -> None:
         since = state.last_trade_fetch_ts or None
         try:
             trades = await client.fetch_my_trades(pair.symbol, since=since, limit=100)
@@ -185,7 +217,6 @@ class ScalperEngine:
             fee_cost = Decimal(str(fee_info.get("cost", 0))) if fee_info else Decimal("0")
             order_ref = str(trade.get("order") or trade.get("order_id") or trade.get("clientOrderId") or "")
             execution.mark_filled(order_ref or trade_id)
-            pair_key = f"{pair.exchange}:{pair.symbol}"
             realized, result = self._pnl.process_fill(pair_key, state, side, amount, price, fee_cost)
             if result in {"win", "loss", "flat"}:
                 self._risk.register_fill_result(state, result)
@@ -275,6 +306,13 @@ class ScalperEngine:
             enabled.append(pair)
         return enabled
 
+    async def _ensure_pair_task(self, pair_key: str, pair: PairConfig) -> None:
+        self._pair_configs[pair_key] = pair
+        if pair_key in self._tasks:
+            return
+        task = asyncio.create_task(self._run_pair(pair_key))
+        self._tasks[pair_key] = task
+
     async def _handle_failed_hedge(
         self,
         client: RestExchangeClient,
@@ -335,20 +373,27 @@ class ScalperEngine:
             return None
         return Decimal(str(asks[0][0]))
 
-    def _score_pairs(self, snapshots: List[PairSnapshot]) -> List[tuple]:
-        snapshot_map = {f"{snap.exchange}:{snap.symbol}": snap for snap in snapshots}
-        ranked: List[tuple] = []
-        for pair in self._enabled_pairs:
-            state = self._states[pair.symbol]
-            pair_key = f"{pair.exchange}:{pair.symbol}"
+    def _score_pairs(self, snapshot_map: Dict[str, PairSnapshot]) -> List[Tuple[float, str]]:
+        ranked: List[Tuple[float, str]] = []
+        for pair_key, cfg in self._pair_configs.items():
+            state = self._states[pair_key]
             snap = snapshot_map.get(pair_key)
-            net_edge = snap.net_edge_bps if snap else Decimal("-999")
+            if snap:
+                net_edge = snap.net_edge_bps
+            elif state.recent_net_edges:
+                net_edge = state.recent_net_edges[-1]
+            else:
+                net_edge = Decimal("-500")
             stats = self._pnl.get_stats(pair_key)
             penalty = Decimal(stats.losses * 20 + state.skip_reasons.get("edge_target", 0) * 5)
             if len(state.recent_realized) >= self._config.settings.negative_fill_lookback:
-                if all(val <= 0 for val in list(state.recent_realized)[-self._config.settings.negative_fill_lookback:]):
-                    penalty += Decimal("200")
+                window = list(state.recent_realized)[-self._config.settings.negative_fill_lookback:]
+                if window and all(value <= 0 for value in window):
+                    penalty += Decimal("300")
             score = float(net_edge - penalty)
-            ranked.append((score, pair.symbol))
+            ranked.append((score, pair_key))
         ranked.sort(reverse=True, key=lambda item: item[0])
         return ranked
+
+    def _pair_key(self, exchange: str, symbol: str) -> str:
+        return f"{exchange}:{symbol}"

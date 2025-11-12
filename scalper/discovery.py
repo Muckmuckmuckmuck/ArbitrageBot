@@ -4,8 +4,8 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from decimal import Decimal
-from typing import Awaitable, Callable, Dict, List, Optional, Sequence
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Awaitable, Callable, Dict, Iterable, List, Optional, Sequence
 
 from .config import PairConfig, ScalperConfig
 from .exchange import RestExchangeClient
@@ -17,11 +17,14 @@ logger = logging.getLogger(__name__)
 class PairSnapshot:
     exchange: str
     symbol: str
+    base: str
+    quote: str
     spread_bps: Decimal
     net_edge_bps: Decimal
     depth_usd: Decimal
     maker_fee_bps: Decimal
     taker_fee_bps: Decimal
+    volume_usd: Decimal
     timestamp: float
 
 
@@ -56,6 +59,14 @@ class OpportunityScanner:
                 for symbol in candidates:
                     snapshot = await self._evaluate_market(venue, symbol, client)
                     if snapshot:
+                        if snapshot.net_edge_bps < Decimal(self._config.settings.scanner_min_net_edge_bps):
+                            continue
+                        if snapshot.spread_bps < Decimal(self._config.settings.scanner_min_spread_bps):
+                            continue
+                        if snapshot.depth_usd < self._config.settings.scanner_min_depth_usd:
+                            continue
+                        if snapshot.volume_usd < self._config.settings.scanner_min_volume_usd:
+                            continue
                         key = f"{venue}:{symbol}"
                         self._snapshots[key] = snapshot
                         results.append(snapshot)
@@ -128,14 +139,20 @@ class OpportunityScanner:
         buffer_bps = Decimal(cfg.slippage_buffer_bps if cfg else 10)
         net_edge = spread - total_fee_bps - buffer_bps - slippage_bps
         timestamp = time.time()
+        base = market_meta.get("base") or (symbol.split("/")[0] if "/" in symbol else symbol)
+        quote = market_meta.get("quote") or (symbol.split("/")[1] if "/" in symbol else "")
+        volume_usd = self._estimate_volume_usd(market_meta, bid, ask)
         return PairSnapshot(
             exchange=exchange,
             symbol=symbol,
+            base=base,
+            quote=quote,
             spread_bps=spread.quantize(Decimal("0.01")),
             net_edge_bps=net_edge.quantize(Decimal("0.01")),
             depth_usd=depth_usd.quantize(Decimal("0.01")),
             maker_fee_bps=maker_fee_bps.quantize(Decimal("0.01")),
             taker_fee_bps=taker_fee_bps.quantize(Decimal("0.01")),
+            volume_usd=volume_usd.quantize(Decimal("0.01")),
             timestamp=timestamp,
         )
 
@@ -144,3 +161,109 @@ class OpportunityScanner:
             if cfg.exchange == exchange and cfg.symbol == symbol:
                 return cfg
         return None
+
+    def _estimate_volume_usd(self, market: Dict[str, any], bid: Decimal, ask: Decimal) -> Decimal:
+        info = market.get("info", {}) if isinstance(market, dict) else {}
+        for key in ("volumeUsd24h", "volumeUsd24Hr", "volumeUsd", "usdVolume"):
+            value = info.get(key)
+            if value is not None:
+                try:
+                    return Decimal(str(value))
+                except Exception:
+                    continue
+        base_volume = info.get("volume") or info.get("baseVolume") or market.get("baseVolume")
+        if base_volume is not None:
+            try:
+                base_volume_dec = Decimal(str(base_volume))
+                mid = (bid + ask) / Decimal("2")
+                return base_volume_dec * mid
+            except Exception:
+                pass
+        quote_volume = info.get("quoteVolume") or market.get("quoteVolume")
+        if quote_volume is not None:
+            try:
+                return Decimal(str(quote_volume))
+            except Exception:
+                pass
+        return Decimal("0")
+
+
+class PairCatalog:
+    """Maintains static and dynamically discovered pair configs."""
+
+    def __init__(self, config: ScalperConfig, initial_pairs: Sequence[PairConfig]) -> None:
+        self._config = config
+        self._static: Dict[str, PairConfig] = {
+            self._key(pair.exchange, pair.symbol): pair for pair in initial_pairs
+        }
+        self._dynamic: Dict[str, PairConfig] = {}
+
+    def _key(self, exchange: str, symbol: str) -> str:
+        return f"{exchange}:{symbol}"
+
+    def get(self, exchange: str, symbol: str) -> Optional[PairConfig]:
+        key = self._key(exchange, symbol)
+        return self._static.get(key) or self._dynamic.get(key)
+
+    def get_by_key(self, key: str) -> Optional[PairConfig]:
+        return self._static.get(key) or self._dynamic.get(key)
+
+    def register_dynamic(self, snapshot: PairSnapshot) -> Optional[PairConfig]:
+        key = self._key(snapshot.exchange, snapshot.symbol)
+        if key in self._static:
+            return self._static[key]
+        if key in self._dynamic:
+            return self._dynamic[key]
+        if len(self._dynamic) >= self._config.settings.max_dynamic_pairs:
+            return None
+        if snapshot.net_edge_bps < Decimal(self._config.settings.scanner_min_net_edge_bps):
+            return None
+        cfg = self._build_config(snapshot)
+        if cfg is None:
+            return None
+        self._dynamic[key] = cfg
+        return cfg
+
+    def configs(self) -> Iterable[PairConfig]:
+        yield from self._static.values()
+        yield from self._dynamic.values()
+
+    def _build_config(self, snapshot: PairSnapshot) -> Optional[PairConfig]:
+        settings = self._config.settings
+        order_usd = snapshot.depth_usd * settings.scanner_depth_clip_fraction
+        order_usd = max(order_usd, settings.dynamic_order_usd_min)
+        order_usd = min(order_usd, settings.dynamic_order_usd_max)
+        if order_usd < settings.dynamic_order_usd_min:
+            return None
+
+        target_edge = max(snapshot.net_edge_bps, Decimal(settings.minimum_target_edge_bps))
+        maker_fee = int(snapshot.maker_fee_bps.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        taker_fee = int(snapshot.taker_fee_bps.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        min_edge = int(max(Decimal(settings.minimum_target_edge_bps), target_edge * Decimal("0.75")))
+        probe_edge = int(max(min_edge // 2, settings.minimum_target_edge_bps // 2))
+        max_edge = int(target_edge + Decimal("80"))
+
+        return PairConfig(
+            exchange=snapshot.exchange,
+            symbol=snapshot.symbol,
+            base=snapshot.base,
+            quote=snapshot.quote,
+            order_size_usd=order_usd,
+            min_notional_usd=settings.dynamic_order_usd_min,
+            target_edge_bps=int(target_edge),
+            min_edge_bps=min_edge,
+            probe_edge_bps=probe_edge,
+            max_edge_bps=max_edge,
+            slippage_buffer_bps=8,
+            maker_fee_bps=maker_fee,
+            taker_fee_bps=taker_fee,
+            depth_clip_fraction=settings.scanner_depth_clip_fraction,
+            max_spread_bps=400,
+            min_spread_bps=settings.scanner_min_spread_bps,
+            volatility_floor_bps=30,
+            volatility_ceiling_bps=400,
+            inventory_pressure_bps=10,
+            base_probe_size_usd=settings.dynamic_order_usd_min,
+            max_probe_size_usd=settings.dynamic_order_usd_max,
+            probe_step_usd=Decimal("1"),
+        )
