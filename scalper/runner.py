@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import defaultdict
 from decimal import Decimal
 from typing import Dict
@@ -10,6 +11,8 @@ from .config import PairConfig, ScalperConfig
 from .exchange import ExchangeCredentials, RestExchangeClient
 from .execution import ExecutionManager
 from .market_data import MarketDataPoller
+from .pnl import PnLTracker
+from .risk import RiskAssessment, RiskManager
 from .state import PairRuntimeState
 from .strategy import QuotePlanner
 
@@ -24,6 +27,8 @@ class ScalperEngine:
         self._clients: Dict[str, RestExchangeClient] = {}
         self._states: Dict[str, PairRuntimeState] = defaultdict(PairRuntimeState)
         self._planner = QuotePlanner()
+        self._pnl = PnLTracker()
+        self._risk = RiskManager(config.settings, self._pnl)
         self._tasks: Dict[str, asyncio.Task[None]] = {}
         self._running = False
 
@@ -62,11 +67,24 @@ class ScalperEngine:
         await poller.start()
         try:
             while self._running:
+                await self._consume_trades(client, pair, state)
                 snapshot = poller.latest()
                 if not snapshot:
                     await asyncio.sleep(self._config.settings.poll_interval_s)
                     continue
                 stable_balance = await self._fetch_stable_balance(client, pair.quote)
+                assessment = self._risk.evaluate(pair, state, stable_balance)
+                if not assessment.allowed:
+                    logger.info(
+                        "[RISK] Skip %s %s reason=%s",
+                        pair.exchange.upper(),
+                        pair.symbol,
+                        assessment.reason,
+                    )
+                    await execution.cancel_all()
+                    await asyncio.sleep(self._config.settings.poll_interval_s)
+                    continue
+
                 intent = self._planner.plan(pair, state, snapshot, stable_balance)
                 if intent:
                     logger.info(
@@ -80,6 +98,9 @@ class ScalperEngine:
                         intent.reason,
                     )
                     await execution.sync(intent)
+                else:
+                    await execution.cancel_all()
+
                 await asyncio.sleep(self._config.settings.poll_interval_s)
         finally:
             await poller.stop()
@@ -93,3 +114,40 @@ class ScalperEngine:
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("Failed to fetch balance for %s: %s", currency, exc)
             return Decimal("0")
+
+    async def _consume_trades(self, client: RestExchangeClient, pair: PairConfig, state: PairRuntimeState) -> None:
+        since = state.last_trade_fetch_ts or None
+        try:
+            trades = await client.fetch_my_trades(pair.symbol, since=since, limit=100)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("fetch_my_trades failed for %s %s: %s", pair.exchange, pair.symbol, exc)
+            return
+
+        if not trades:
+            return
+
+        for trade in trades:
+            trade_id = str(trade.get("id") or trade.get("orderId") or "")
+            if state.seen_trade(trade_id):
+                continue
+            timestamp = int(trade.get("timestamp") or int(time.time() * 1000))
+            state.last_trade_fetch_ts = max(state.last_trade_fetch_ts, timestamp + 1)
+            side = str(trade.get("side") or "").lower()
+            amount = Decimal(str(trade.get("amount") or trade.get("filled") or 0))
+            price = Decimal(str(trade.get("price") or 0))
+            fee_info = trade.get("fee") or {}
+            fee_cost = Decimal(str(fee_info.get("cost", 0))) if fee_info else Decimal("0")
+            pair_key = f"{pair.exchange}:{pair.symbol}"
+            realized, result = self._pnl.process_fill(pair_key, state, side, amount, price, fee_cost)
+            if result in {"win", "loss", "flat"}:
+                self._risk.register_fill_result(state, result)
+            if realized != 0:
+                logger.info(
+                    "[FILL] %s %s side=%s amount=%s price=%s realized=%s",
+                    pair.exchange.upper(),
+                    pair.symbol,
+                    side,
+                    amount,
+                    price,
+                    realized.quantize(Decimal("0.0001")),
+                )

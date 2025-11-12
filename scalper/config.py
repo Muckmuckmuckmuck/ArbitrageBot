@@ -42,6 +42,8 @@ class EngineSettings:
     max_active_pairs: int = 2
     equity_fraction_per_pair: Decimal = Decimal("0.4")
     min_equity_allocation_usd: Decimal = Decimal("10")
+    max_pair_loss_usd: Decimal = Decimal("6")
+    max_total_loss_usd: Decimal = Decimal("20")
 
 
 @dataclass

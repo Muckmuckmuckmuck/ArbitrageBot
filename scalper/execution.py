@@ -31,6 +31,10 @@ class ExecutionManager:
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def cancel_all(self) -> None:
+        async with self._lock:
+            await self._cancel_all()
+
     async def _submit(self, side: str, amount: Decimal, price: Decimal) -> None:
         if amount <= 0:
             return

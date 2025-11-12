@@ -75,6 +75,9 @@ class RestExchangeClient:
     async def fetch_open_orders(self, symbol: Optional[str] = None) -> Any:
         return await asyncio.to_thread(self._client.fetch_open_orders, symbol)
 
+    async def fetch_my_trades(self, symbol: str, *, since: Optional[int] = None, limit: int = 100) -> Any:
+        return await asyncio.to_thread(self._client.fetch_my_trades, symbol, since, limit)
+
     async def close(self) -> None:
         try:
             await asyncio.to_thread(self._client.close)

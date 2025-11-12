@@ -28,36 +28,40 @@ class PairRuntimeState:
     probe_size_usd: Decimal = Decimal("5")
     cooldown_until: float = 0.0
     inventory: Deque[InventoryLot] = field(default_factory=deque)
+    processed_trade_ids: Deque[str] = field(default_factory=lambda: deque(maxlen=500))
+    realized_pnl: Decimal = Decimal("0")
+    fees_paid: Decimal = Decimal("0")
+    last_fill_ts: float = 0.0
+    last_trade_fetch_ts: int = 0
 
-    def record_fill(self, side: str, amount: Decimal, price: Decimal, latency_ms: float, pnl: Decimal) -> None:
-        now = time.time()
-        self.recent_fills.append(now)
-        self.last_latency_ms = latency_ms
-        self.last_edge_bps = (pnl / price * Decimal("10000")) if price > 0 else Decimal("0")
-        if pnl > 0:
-            self.win_streak += 1
-            self.loss_streak = 0
-            self.last_result = "win"
-        elif pnl < 0:
-            self.loss_streak += 1
-            self.win_streak = 0
-            self.last_result = "loss"
-        else:
-            self.last_result = "flat"
+    def push_inventory(self, amount: Decimal, price: Decimal) -> None:
+        self.inventory.append(InventoryLot(amount=amount, price=price, timestamp=time.time()))
 
-        lot = InventoryLot(amount=amount, price=price, timestamp=now)
-        if side.lower() == "buy":
-            self.inventory.append(lot)
-        else:
-            # remove from inventory FIFO
-            remaining = amount
-            while remaining > 0 and self.inventory:
-                head = self.inventory[0]
-                take = min(head.amount, remaining)
-                head.amount -= take
-                remaining -= take
-                if head.amount <= 0:
-                    self.inventory.popleft()
+    def pop_inventory(self, amount: Decimal) -> Decimal:
+        """Return total cost basis for the amount removed (FIFO)."""
+
+        remaining = amount
+        cost = Decimal("0")
+        while remaining > 0 and self.inventory:
+            lot = self.inventory[0]
+            take = min(lot.amount, remaining)
+            cost += take * lot.price
+            lot.amount -= take
+            remaining -= take
+            if lot.amount <= 0:
+                self.inventory.popleft()
+        if remaining > 0:
+            # sell without inventory—treat as zero cost
+            return cost
+        return cost
+
+    def seen_trade(self, trade_id: Optional[str]) -> bool:
+        if not trade_id:
+            return False
+        if trade_id in self.processed_trade_ids:
+            return True
+        self.processed_trade_ids.append(trade_id)
+        return False
 
 
 @dataclass
