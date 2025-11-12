@@ -777,11 +777,11 @@ class DualSideQuoteManager:
         self._min_conversion_chunk = Decimal("3")
         self._orphan_cancel_age_s = 90.0
         self._slippage_buffer_bps: Dict[str, Decimal] = {
-            "coinbase": Decimal("3"),
-            "gemini": Decimal("3"),
+            "coinbase": Decimal("2"),
+            "gemini": Decimal("2"),
         }
-        self._minimum_target_edge_bps = Decimal("8")
-        self._probe_edge_floor_bps = Decimal("4")
+        self._minimum_target_edge_bps = Decimal("4")
+        self._probe_edge_floor_bps = Decimal("1")
         self._probe_order_usd = Decimal("5.00")
         self._probe_cooldown_s = 60.0
         self._inventory_cap_multiple = Decimal("0.9")
@@ -808,7 +808,7 @@ class DualSideQuoteManager:
         self._skip_alert_cooldown = 180.0
         self._balance_skip_cooldown = 15.0
         self._scalping_mode = True
-        self._scalping_passive_clip_bps = Decimal("5")
+        self._scalping_passive_clip_bps = Decimal("3")
         self._scalping_stale_floor = 12.0
         self._allow_sibling_stable_conversion = True
         self._scalp_candidates: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -1219,26 +1219,27 @@ class DualSideQuoteManager:
         dynamic_min_edge = self._minimum_target_edge_bps
         if volatility_bps is not None:
             if volatility_bps < Decimal("25"):
-                dynamic_min_edge = max(Decimal("4"), self._minimum_target_edge_bps - Decimal("2"))
-            elif volatility_bps > Decimal("80"):
-                dynamic_min_edge = self._minimum_target_edge_bps + Decimal("6")
-            elif volatility_bps > Decimal("150"):
-                dynamic_min_edge = self._minimum_target_edge_bps + Decimal("10")
-        target_edge_bps = max(base_target, dynamic_min_edge)
+                dynamic_min_edge = max(Decimal("3"), self._minimum_target_edge_bps - Decimal("1"))
+            elif volatility_bps > Decimal("120"):
+                dynamic_min_edge = self._minimum_target_edge_bps + Decimal("4")
+            elif volatility_bps > Decimal("200"):
+                dynamic_min_edge = self._minimum_target_edge_bps + Decimal("8")
+        capped_base = min(base_target, Decimal("12"))
+        target_edge_bps = max(capped_base, dynamic_min_edge)
         if trades <= 0:
             target_edge_bps = dynamic_min_edge
         else:
             if avg_edge_stats > Decimal("40"):
-                target_edge_bps = max(dynamic_min_edge, avg_edge_stats * Decimal("0.6"))
+                target_edge_bps = max(dynamic_min_edge, min(avg_edge_stats * Decimal("0.5"), Decimal("12")))
             else:
                 target_edge_bps = dynamic_min_edge
             if loss_streak > 0:
-                target_edge_bps += Decimal(loss_streak) * Decimal("8")
+                target_edge_bps += Decimal(loss_streak) * Decimal("5")
         neg_streak = stats.get("negative_edge_streak", 0)
         if neg_streak >= 3:
-            target_edge_bps += Decimal(min(neg_streak * 3, 18))
-        elif stats["smoothed_net_edge_bps"] > Decimal("20"):
-            target_edge_bps = max(dynamic_min_edge, target_edge_bps - Decimal("4"))
+            target_edge_bps += Decimal(min(neg_streak * 2, 10))
+        elif stats["smoothed_net_edge_bps"] > Decimal("15"):
+            target_edge_bps = max(dynamic_min_edge, target_edge_bps - Decimal("3"))
         if inventory_pressure_bps > 0:
             target_edge_bps += inventory_pressure_bps
         last_edge_bps = Decimal(str(stats.get("last_edge_bps", Decimal("0"))))
