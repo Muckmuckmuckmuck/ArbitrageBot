@@ -47,6 +47,9 @@ class RestExchangeClient:
         if normalized == "gemini":
             self._client.options = self._client.options or {}
             self._client.options.setdefault("nonce", "milliseconds")
+            self._client.options.setdefault("defaultType", "spot")
+            self._client.options.setdefault("defaultMarket", "spot")
+        self._id = getattr(self._client, "id", normalized)
 
     async def fetch_order_book(self, symbol: str, *, depth: int = 5) -> Dict[str, Any]:
         return await asyncio.to_thread(self._client.fetch_order_book, symbol, depth)
@@ -61,6 +64,8 @@ class RestExchangeClient:
         params: Dict[str, Any] = {}
         if post_only:
             params["postOnly"] = True
+        if self._id == "gemini":
+            params.setdefault("type", "exchange limit")
         return await asyncio.to_thread(
             self._client.create_order,
             symbol,
