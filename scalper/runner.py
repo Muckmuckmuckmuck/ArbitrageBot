@@ -15,7 +15,8 @@ from .market_data import MarketDataPoller
 from .pnl import PnLTracker
 from .risk import RiskManager
 from .state import PairRuntimeState
-from .strategy import QuotePlanner
+from .strategy import QuotePlanner, QuoteIntent
+from .telemetry import PlanTelemetry, Telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class ScalperEngine:
         self._planner = QuotePlanner()
         self._pnl = PnLTracker()
         self._risk = RiskManager(config.settings, self._pnl)
+        self._telemetry = Telemetry()
         self._tasks: Dict[str, asyncio.Task[None]] = {}
         self._running = False
 
@@ -87,21 +89,32 @@ class ScalperEngine:
                     await asyncio.sleep(self._config.settings.poll_interval_s)
                     continue
 
-                intent = self._planner.plan(pair, state, snapshot, stable_balance)
+                intent = self._planner.plan(
+                    pair,
+                    state,
+                    snapshot,
+                    stable_balance,
+                    self._config.settings.fast_fill_latency_ms,
+                    self._config.settings.fast_fill_clip_bps,
+                    self._config.settings.slow_fill_clip_bps,
+                )
                 if intent:
-                    logger.info(
-                        "[PLAN] %s %s buy=%s@%s sell=%s@%s %s",
-                        pair.exchange.upper(),
-                        pair.symbol,
-                        intent.buy_size,
-                        intent.buy_price,
-                        intent.sell_size,
-                        intent.sell_price,
-                        intent.reason,
+                    self._telemetry.plan(
+                        PlanTelemetry(
+                            exchange=pair.exchange,
+                            symbol=pair.symbol,
+                            buy_size=intent.buy_size,
+                            buy_price=intent.buy_price,
+                            sell_size=intent.sell_size,
+                            sell_price=intent.sell_price,
+                            net_edge_bps=state.recent_net_edges[-1] if state.recent_net_edges else Decimal("0"),
+                            reason=intent.reason,
+                        )
                     )
                     await execution.sync_quotes(intent)
                 else:
                     await execution.cancel_all_quotes()
+                    self._telemetry.skip(pair.exchange, pair.symbol, "planner_rejected")
 
                 await execution.prune_stale_hedges(self._config.settings.hedge_stale_seconds)
                 await asyncio.sleep(self._config.settings.poll_interval_s)
@@ -147,6 +160,12 @@ class ScalperEngine:
             realized, result = self._pnl.process_fill(pair_key, state, side, amount, price, fee_cost)
             if result in {"win", "loss", "flat"}:
                 self._risk.register_fill_result(state, result)
+                state.update_probe(
+                    success=result == "win",
+                    cfg_base=pair.base_probe_size_usd,
+                    cfg_step=pair.probe_step_usd,
+                    cfg_max=pair.max_probe_size_usd,
+                )
             if realized != 0:
                 logger.info(
                     "[FILL] %s %s side=%s amount=%s price=%s realized=%s",
@@ -160,3 +179,6 @@ class ScalperEngine:
             if side == "buy" and amount > 0:
                 hedge_price = compute_hedge_price(price, side, self._config.settings.hedge_fee_guard_bps)
                 await execution.place_hedge("sell", amount, hedge_price)
+            elif side == "sell" and amount > 0:
+                hedge_price = compute_hedge_price(price, side, self._config.settings.hedge_fee_guard_bps)
+                await execution.place_hedge("buy", amount, hedge_price)

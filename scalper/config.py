@@ -16,7 +16,9 @@ class PairConfig:
     order_size_usd: Decimal = Decimal("5")
     min_notional_usd: Decimal = Decimal("3")
     target_edge_bps: int = 12
+    min_edge_bps: int = 8
     probe_edge_bps: int = 4
+    max_edge_bps: int = 40
     slippage_buffer_bps: int = 2
     maker_fee_bps: int = 12
     taker_fee_bps: int = 25
@@ -25,6 +27,11 @@ class PairConfig:
     min_spread_bps: int = 6
     volatility_floor_bps: int = 25
     volatility_ceiling_bps: int = 250
+    inventory_pressure_bps: int = 8
+    base_probe_size_usd: Decimal = Decimal("5")
+    max_probe_size_usd: Decimal = Decimal("12")
+    probe_step_usd: Decimal = Decimal("1.5")
+    probe_cooldown_s: float = 30.0
 
 
 @dataclass
@@ -46,6 +53,9 @@ class EngineSettings:
     max_total_loss_usd: Decimal = Decimal("20")
     hedge_fee_guard_bps: int = 30
     hedge_stale_seconds: float = 10.0
+    fast_fill_latency_ms: float = 600.0
+    fast_fill_clip_bps: int = 4
+    slow_fill_clip_bps: int = 1
 
 
 @dataclass

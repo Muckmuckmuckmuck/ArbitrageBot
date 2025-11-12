@@ -33,6 +33,13 @@ class PairRuntimeState:
     fees_paid: Decimal = Decimal("0")
     last_fill_ts: float = 0.0
     last_trade_fetch_ts: int = 0
+    probe_size_usd: Decimal = Decimal("5")
+    probe_successes: int = 0
+    probe_failures: int = 0
+    recent_net_edges: Deque[Decimal] = field(default_factory=lambda: deque(maxlen=30))
+    skip_reasons: Dict[str, int] = field(default_factory=dict)
+    fast_fill_bias: Decimal = Decimal("0")
+    last_quote_reason: Optional[str] = None
 
     def push_inventory(self, amount: Decimal, price: Decimal) -> None:
         self.inventory.append(InventoryLot(amount=amount, price=price, timestamp=time.time()))
@@ -62,6 +69,21 @@ class PairRuntimeState:
             return True
         self.processed_trade_ids.append(trade_id)
         return False
+
+    def record_skip(self, reason: str) -> None:
+        self.skip_reasons[reason] = self.skip_reasons.get(reason, 0) + 1
+
+    def update_probe(self, success: bool, cfg_base: Decimal, cfg_step: Decimal, cfg_max: Decimal) -> None:
+        if success:
+            self.probe_successes += 1
+            self.probe_failures = max(0, self.probe_failures - 1)
+            next_size = min(self.probe_size_usd + cfg_step, cfg_max)
+            self.probe_size_usd = next_size
+        else:
+            self.probe_failures += 1
+            self.probe_successes = 0
+            next_size = max(cfg_base, self.probe_size_usd - cfg_step)
+            self.probe_size_usd = next_size
 
 
 @dataclass
