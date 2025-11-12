@@ -1312,6 +1312,16 @@ class DualSideQuoteManager:
                 self._record_skip(cfg, "edge")
                 await self._cancel_both_sides(cfg)
                 return
+        else:
+            logger.info(
+                "[SCALP] ✅ %s %s net_edge=%s target=%s gross=%s depth_ratio=%.2f",
+                cfg.exchange_id.upper(),
+                cfg.symbol,
+                net_edge_bps.quantize(Decimal("0.01")),
+                target_edge_bps,
+                gross_edge_bps.quantize(Decimal("0.01")),
+                float(depth_ratio),
+            )
 
         base, quote = cfg.symbol.split("/")
         quote_balance = await self._balance_cache.get_balance(cfg.exchange_id, quote)
