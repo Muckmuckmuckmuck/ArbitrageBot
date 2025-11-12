@@ -174,7 +174,10 @@ class ScalperEngine:
         while self._running:
             await asyncio.sleep(max(10.0, self._config.settings.scanner_interval_s))
             snapshots = await self._scanner.refresh()
-            self._telemetry.scan(snapshots)
+            self._telemetry.scan(
+                snapshots,
+                floor_bps=Decimal(self._config.settings.minimum_target_edge_bps),
+            )
             snapshot_map = {
                 self._pair_key(snap.exchange, snap.symbol): snap for snap in snapshots
             }

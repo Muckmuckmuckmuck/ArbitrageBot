@@ -115,15 +115,23 @@ class Telemetry:
             },
         )
 
-    def scan(self, snapshots: Sequence[PairSnapshot], *, limit: int = 5) -> None:
+    def scan(
+        self,
+        snapshots: Sequence[PairSnapshot],
+        *,
+        limit: int = 5,
+        floor_bps: Decimal = Decimal("0"),
+    ) -> None:
         if not snapshots:
             logger.info("[SCAN] No markets met base criteria this interval")
             self._persist.write("scan", [])
             return
         payload = []
         for snapshot in snapshots[:limit]:
+            marker = "GREEN_CHECK" if snapshot.net_edge_bps >= floor_bps else "RED_X"
             logger.info(
-                "[SCAN] %s %s spread=%sbps net=%sbps maker_fee=%sbps taker_fee=%sbps depth_usd=%s volume_usd=%s",
+                "[SCAN:%s] %s %s spread=%sbps net=%sbps maker_fee=%sbps taker_fee=%sbps depth_usd=%s volume_usd=%s",
+                marker,
                 snapshot.exchange.upper(),
                 snapshot.symbol,
                 snapshot.spread_bps,
@@ -139,6 +147,7 @@ class Telemetry:
                     "symbol": snapshot.symbol,
                     "spread_bps": str(snapshot.spread_bps),
                     "net_edge_bps": str(snapshot.net_edge_bps),
+                    "marker": marker,
                     "maker_fee_bps": str(snapshot.maker_fee_bps),
                     "taker_fee_bps": str(snapshot.taker_fee_bps),
                     "depth_usd": str(snapshot.depth_usd),

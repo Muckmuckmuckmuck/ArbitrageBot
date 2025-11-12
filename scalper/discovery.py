@@ -59,17 +59,6 @@ class OpportunityScanner:
                 for symbol in candidates:
                     snapshot = await self._evaluate_market(venue, symbol, client)
                     if snapshot:
-                        logger.info(
-                            "[SCAN:CANDIDATE] %s %s spread=%sbps net=%sbps maker_fee=%sbps taker_fee=%sbps depth_usd=%s volume_usd=%s",
-                            venue.upper(),
-                            symbol,
-                            snapshot.spread_bps,
-                            snapshot.net_edge_bps,
-                            snapshot.maker_fee_bps,
-                            snapshot.taker_fee_bps,
-                            snapshot.depth_usd,
-                            snapshot.volume_usd,
-                        )
                         key = f"{venue}:{symbol}"
                         self._snapshots[key] = snapshot
                         results.append(snapshot)
@@ -101,7 +90,7 @@ class OpportunityScanner:
         try:
             book = await client.fetch_order_book(symbol, depth=3)
         except Exception as exc:
-            logger.debug("[SCAN] order book fetch failed for %s %s: %s", exchange, symbol, exc)
+            self._log_candidate(exchange, symbol, "FETCH_ERROR", Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), "order_book", details=str(exc))
             return None
 
         bids = book.get("bids") or []
@@ -119,11 +108,10 @@ class OpportunityScanner:
         spread = (ask - bid) / bid * Decimal("10000")
         depth_usd = min(Decimal(str(best_bid_qty)) * bid, Decimal(str(best_ask_qty)) * ask)
         if depth_usd <= 0:
+            self._log_candidate(exchange, symbol, "RED_X", spread, Decimal("0"), Decimal("0"), Decimal("0"), "no_depth")
             return None
 
         settings = self._config.settings
-        if depth_usd < settings.scanner_min_depth_usd:
-            return None
 
         cfg = self._pair_config(exchange, symbol)
         base_order = cfg.order_size_usd if cfg else settings.dynamic_order_usd_min
@@ -155,7 +143,28 @@ class OpportunityScanner:
         quote = market_meta.get("quote") or (symbol.split("/")[1] if "/" in symbol else "")
         ticker = await self._safe_fetch_ticker(client, symbol)
         volume_usd = self._estimate_volume_usd(market_meta, ticker, bid, ask)
-        if volume_usd < settings.scanner_min_volume_usd:
+
+        marker = "GREEN_CHECK" if net_edge >= Decimal(settings.minimum_target_edge_bps) else "RED_X"
+        reason = "ok"
+        if depth_usd < settings.scanner_min_depth_usd:
+            reason = f"depth<{settings.scanner_min_depth_usd}"
+        elif volume_usd < settings.scanner_min_volume_usd:
+            reason = f"volume<{settings.scanner_min_volume_usd}"
+        elif net_edge < Decimal(settings.scanner_min_net_edge_bps):
+            reason = f"edge<{settings.scanner_min_net_edge_bps}"
+
+        self._log_candidate(
+            exchange,
+            symbol,
+            marker,
+            spread.quantize(Decimal("0.01")),
+            net_edge.quantize(Decimal("0.01")),
+            depth_usd.quantize(Decimal("0.01")),
+            volume_usd.quantize(Decimal("0.01")),
+            reason,
+        )
+
+        if reason != "ok":
             return None
 
         return PairSnapshot(
@@ -230,6 +239,36 @@ class OpportunityScanner:
             except Exception:
                 pass
         return Decimal("0")
+
+    def _log_candidate(
+        self,
+        exchange: str,
+        symbol: str,
+        marker: str,
+        spread_bps: Decimal,
+        net_edge_bps: Decimal,
+        depth_usd: Decimal,
+        volume_usd: Decimal,
+        reason: str,
+        *,
+        details: Optional[str] = None,
+    ) -> None:
+        message = (
+            "[SCAN:%s] %s %s spread=%sbps net=%sbps depth_usd=%s volume_usd=%s reason=%s"
+            % (
+                marker,
+                exchange.upper(),
+                symbol,
+                spread_bps,
+                net_edge_bps,
+                depth_usd,
+                volume_usd,
+                reason,
+            )
+        )
+        if details:
+            message = f"{message} detail={details}"
+        logger.info(message)
 
 
 class PairCatalog:
