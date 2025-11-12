@@ -6,7 +6,7 @@ import logging
 import time
 from collections import defaultdict
 from decimal import Decimal
-from typing import Dict, Set, Optional
+from typing import Dict, Sequence, Set, Optional
 
 from .config import PairConfig, ScalperConfig
 from .exchange import ExchangeCredentials, RestExchangeClient
@@ -36,7 +36,8 @@ class ScalperEngine:
         self._tasks: Dict[str, asyncio.Task[None]] = {}
         self._rotation_task: Optional[asyncio.Task[None]] = None
         self._running = False
-        self._active_pairs: Set[str] = {pair.symbol for pair in config.pairs}
+        self._enabled_pairs = self._filter_pairs(config.pairs)
+        self._active_pairs: Set[str] = {pair.symbol for pair in self._enabled_pairs}
 
     async def _client_for(self, exchange: str) -> RestExchangeClient:
         if exchange not in self._clients:
@@ -55,7 +56,9 @@ class ScalperEngine:
         if self._running:
             return
         self._running = True
-        for pair in self._config.pairs:
+        if not self._enabled_pairs:
+            logger.error("[STARTUP] No trading pairs enabled—check API credentials")
+        for pair in self._enabled_pairs:
             task = asyncio.create_task(self._run_pair(pair))
             self._tasks[pair.symbol] = task
         self._rotation_task = asyncio.create_task(self._rotation_loop())
@@ -150,7 +153,7 @@ class ScalperEngine:
         while self._running:
             await asyncio.sleep(max(5.0, self._config.settings.poll_interval_s * 5))
             scores = []
-            for pair in self._config.pairs:
+            for pair in self._enabled_pairs:
                 state = self._states[pair.symbol]
                 recent_edges = list(state.recent_net_edges)
                 edge_avg = sum(recent_edges) / Decimal(len(recent_edges)) if recent_edges else Decimal("-100")
@@ -214,3 +217,19 @@ class ScalperEngine:
             elif side == "sell" and amount > 0:
                 hedge_price = compute_hedge_price(price, side, self._config.settings.hedge_fee_guard_bps)
                 await execution.place_hedge("buy", amount, hedge_price)
+
+    def _filter_pairs(self, pairs: Sequence[PairConfig]) -> Sequence[PairConfig]:
+        enabled = []
+        for pair in pairs:
+            creds = self._config.venue_keys.get(pair.exchange, {})
+            api_key = (creds or {}).get("api_key", "").strip()
+            api_secret = (creds or {}).get("api_secret", "").strip()
+            if not api_key or not api_secret:
+                logger.warning(
+                    "[STARTUP] Skipping %s %s due to missing credentials",
+                    pair.exchange.upper(),
+                    pair.symbol,
+                )
+                continue
+            enabled.append(pair)
+        return enabled
