@@ -5,7 +5,7 @@ import contextlib
 import logging
 import time
 from collections import defaultdict
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from typing import Dict, Sequence, Set, Optional
 
 from .config import PairConfig, ScalperConfig
@@ -211,12 +211,21 @@ class ScalperEngine:
                     price,
                     realized.quantize(Decimal("0.0001")),
                 )
-            if side == "buy" and amount > 0:
+            if amount > 0:
                 hedge_price = compute_hedge_price(price, side, self._config.settings.hedge_fee_guard_bps)
-                await execution.place_hedge("sell", amount, hedge_price)
-            elif side == "sell" and amount > 0:
-                hedge_price = compute_hedge_price(price, side, self._config.settings.hedge_fee_guard_bps)
-                await execution.place_hedge("buy", amount, hedge_price)
+                if side == "buy":
+                    available_base = sum(lot.amount for lot in state.inventory)
+                    hedge_amount = min(amount, available_base)
+                    if hedge_amount > Decimal("0"):
+                        await execution.place_hedge("sell", hedge_amount, hedge_price)
+                elif side == "sell":
+                    stable_balance = await self._fetch_stable_balance(client, pair.quote)
+                    max_buy_amount = Decimal("0")
+                    if hedge_price > 0 and stable_balance > 0:
+                        max_buy_amount = (stable_balance / (hedge_price * Decimal("1.01"))).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
+                    hedge_amount = min(amount, max_buy_amount)
+                    if hedge_amount > Decimal("0"):
+                        await execution.place_hedge("buy", hedge_amount, hedge_price)
 
     def _filter_pairs(self, pairs: Sequence[PairConfig]) -> Sequence[PairConfig]:
         enabled = []

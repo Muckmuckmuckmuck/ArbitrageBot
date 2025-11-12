@@ -6,6 +6,7 @@ import time
 from decimal import Decimal, ROUND_DOWN
 from typing import Dict, Iterable, Optional
 
+from ccxt.base.errors import InsufficientFunds  # type: ignore
 from .exchange import RestExchangeClient
 from .strategy import QuoteIntent
 
@@ -96,6 +97,9 @@ class ExecutionManager:
                     self._hedge_orders[order_id] = meta
                 logger.info("[EXECUTE] %s %s amount=%s price=%s tag=%s", side.upper(), self._symbol, amount, price, tag)
             return order_id if order_id else None
+        except InsufficientFunds as exc:
+            logger.warning("[EXECUTE] %s %s insufficient funds amount=%s price=%s tag=%s", side.upper(), self._symbol, amount, price, tag)
+            return None
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("Failed to submit %s order for %s: %s", side, self._symbol, exc)
             return None
