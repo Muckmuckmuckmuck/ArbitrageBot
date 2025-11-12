@@ -59,14 +59,6 @@ class OpportunityScanner:
                 for symbol in candidates:
                     snapshot = await self._evaluate_market(venue, symbol, client)
                     if snapshot:
-                        if snapshot.net_edge_bps < Decimal(self._config.settings.scanner_min_net_edge_bps):
-                            continue
-                        if snapshot.spread_bps < Decimal(self._config.settings.scanner_min_spread_bps):
-                            continue
-                        if snapshot.depth_usd < self._config.settings.scanner_min_depth_usd:
-                            continue
-                        if snapshot.volume_usd < self._config.settings.scanner_min_volume_usd:
-                            continue
                         key = f"{venue}:{symbol}"
                         self._snapshots[key] = snapshot
                         results.append(snapshot)
@@ -217,6 +209,10 @@ class PairCatalog:
         if len(self._dynamic) >= self._config.settings.max_dynamic_pairs:
             return None
         if snapshot.net_edge_bps < Decimal(self._config.settings.scanner_min_net_edge_bps):
+            return None
+        if snapshot.depth_usd < self._config.settings.scanner_min_depth_usd:
+            return None
+        if snapshot.volume_usd < self._config.settings.scanner_min_volume_usd:
             return None
         cfg = self._build_config(snapshot)
         if cfg is None:
