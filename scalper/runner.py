@@ -133,6 +133,8 @@ class ScalperEngine:
                             sell_size=intent.sell_size,
                             sell_price=intent.sell_price,
                             net_edge_bps=state.recent_net_edges[-1] if state.recent_net_edges else Decimal("0"),
+                            order_value=intent.order_value,
+                            expected_profit_usd=(intent.order_value * (state.recent_net_edges[-1] / Decimal("10000"))) if state.recent_net_edges else Decimal("0"),
                             reason=intent.reason,
                         )
                     )
@@ -310,6 +312,9 @@ class ScalperEngine:
         self._pair_configs[pair_key] = pair
         if pair_key in self._tasks:
             return
+        logger.info(
+            "[DISCOVER] starting worker for %s %s", pair.exchange.upper(), pair.symbol
+        )
         task = asyncio.create_task(self._run_pair(pair_key))
         self._tasks[pair_key] = task
 

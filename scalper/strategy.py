@@ -22,6 +22,7 @@ class QuoteIntent:
     sell_size: Decimal
     post_buy: bool
     post_sell: bool
+    order_value: Decimal
     reason: str
 
 
@@ -122,5 +123,6 @@ class QuotePlanner:
             sell_size=sell_size,
             post_buy=True,
             post_sell=True,
+            order_value=order_value,
             reason=state.last_quote_reason,
         )

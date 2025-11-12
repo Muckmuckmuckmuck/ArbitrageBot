@@ -59,6 +59,17 @@ class OpportunityScanner:
                 for symbol in candidates:
                     snapshot = await self._evaluate_market(venue, symbol, client)
                     if snapshot:
+                        logger.info(
+                            "[SCAN:CANDIDATE] %s %s spread=%sbps net=%sbps maker_fee=%sbps taker_fee=%sbps depth_usd=%s volume_usd=%s",
+                            venue.upper(),
+                            symbol,
+                            snapshot.spread_bps,
+                            snapshot.net_edge_bps,
+                            snapshot.maker_fee_bps,
+                            snapshot.taker_fee_bps,
+                            snapshot.depth_usd,
+                            snapshot.volume_usd,
+                        )
                         key = f"{venue}:{symbol}"
                         self._snapshots[key] = snapshot
                         results.append(snapshot)
@@ -218,6 +229,14 @@ class PairCatalog:
         if cfg is None:
             return None
         self._dynamic[key] = cfg
+        logger.info(
+            "[DISCOVER] enabling %s %s net_edge=%sbps depth_usd=%s volume_usd=%s",
+            snapshot.exchange.upper(),
+            snapshot.symbol,
+            snapshot.net_edge_bps,
+            snapshot.depth_usd,
+            snapshot.volume_usd,
+        )
         return cfg
 
     def configs(self) -> Iterable[PairConfig]:

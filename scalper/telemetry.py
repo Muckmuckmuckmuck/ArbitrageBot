@@ -21,6 +21,8 @@ class PlanTelemetry:
     sell_size: Decimal
     sell_price: Decimal
     net_edge_bps: Decimal
+    order_value: Decimal
+    expected_profit_usd: Decimal
     reason: str
 
 
@@ -30,14 +32,16 @@ class Telemetry:
 
     def plan(self, payload: PlanTelemetry) -> None:
         logger.info(
-            "[PLAN] %s %s buy=%s@%s sell=%s@%s net_edge=%sbps %s",
+            "[PLAN] %s %s buy=%s@%s sell=%s@%s size_usd=%s net_edge=%sbps expected_profit=%s %s",
             payload.exchange.upper(),
             payload.symbol,
             payload.buy_size,
             payload.buy_price,
             payload.sell_size,
             payload.sell_price,
+            payload.order_value,
             payload.net_edge_bps,
+            payload.expected_profit_usd,
             payload.reason,
         )
         self._persist.write(
@@ -50,6 +54,8 @@ class Telemetry:
                 "sell_size": str(payload.sell_size),
                 "sell_price": str(payload.sell_price),
                 "net_edge_bps": str(payload.net_edge_bps),
+                "order_value": str(payload.order_value),
+                "expected_profit_usd": str(payload.expected_profit_usd),
                 "reason": payload.reason,
             },
         )
@@ -111,26 +117,32 @@ class Telemetry:
 
     def scan(self, snapshots: Sequence[PairSnapshot], *, limit: int = 5) -> None:
         if not snapshots:
+            logger.info("[SCAN] No markets met base criteria this interval")
+            self._persist.write("scan", [])
             return
+        payload = []
         for snapshot in snapshots[:limit]:
             logger.info(
-                "[SCAN] %s %s spread=%sbps net=%sbps depth_usd=%s",
+                "[SCAN] %s %s spread=%sbps net=%sbps maker_fee=%sbps taker_fee=%sbps depth_usd=%s volume_usd=%s",
                 snapshot.exchange.upper(),
                 snapshot.symbol,
                 snapshot.spread_bps,
                 snapshot.net_edge_bps,
+                snapshot.maker_fee_bps,
+                snapshot.taker_fee_bps,
                 snapshot.depth_usd,
+                snapshot.volume_usd,
             )
-        self._persist.write(
-            "scan",
-            [
+            payload.append(
                 {
-                    "exchange": snap.exchange,
-                    "symbol": snap.symbol,
-                    "spread_bps": str(snap.spread_bps),
-                    "net_edge_bps": str(snap.net_edge_bps),
-                    "depth_usd": str(snap.depth_usd),
+                    "exchange": snapshot.exchange,
+                    "symbol": snapshot.symbol,
+                    "spread_bps": str(snapshot.spread_bps),
+                    "net_edge_bps": str(snapshot.net_edge_bps),
+                    "maker_fee_bps": str(snapshot.maker_fee_bps),
+                    "taker_fee_bps": str(snapshot.taker_fee_bps),
+                    "depth_usd": str(snapshot.depth_usd),
+                    "volume_usd": str(snapshot.volume_usd),
                 }
-                for snap in snapshots[:limit]
-            ],
-        )
+            )
+        self._persist.write("scan", payload)
