@@ -1031,7 +1031,13 @@ class DualSideQuoteManager:
         if depth_sum > Decimal("0"):
             imbalance = (bid_depth - ask_depth) / depth_sum
 
-        if bid_depth < cfg.min_depth_usd or ask_depth < cfg.min_depth_usd:
+        depth_capacity = min(bid_depth, ask_depth)
+        depth_ratio = (
+            depth_capacity / cfg.min_depth_usd
+            if cfg.min_depth_usd > 0
+            else Decimal("1")
+        )
+        if depth_ratio < Decimal("0.15"):
             logger.info(
                 "[QUOTE] Skip %s %s reason=depth bid_depth=%s ask_depth=%s min=%s",
                 cfg.exchange_id.upper(),
@@ -1197,19 +1203,42 @@ class DualSideQuoteManager:
         )
         slippage_buffer = self._slippage_buffer_bps.get(cfg.exchange_id, Decimal("20"))
         net_edge_bps = gross_edge_bps - taker_fee_bps - slippage_buffer
+        stats["smoothed_net_edge_bps"] = (
+            stats["smoothed_net_edge_bps"] * Decimal("0.6") + net_edge_bps * Decimal("0.4")
+        )
+        if net_edge_bps < Decimal("0"):
+            stats["negative_edge_streak"] = stats.get("negative_edge_streak", 0) + 1
+        else:
+            stats["negative_edge_streak"] = max(
+                0, stats.get("negative_edge_streak", 0) - 1
+            )
         base_target = Decimal(
             cfg.target_edge_bps if cfg.target_edge_bps > 0 else cfg.min_spread_bps
         )
-        target_edge_bps = base_target
+        # volatility-aware floor
+        dynamic_min_edge = self._minimum_target_edge_bps
+        if volatility_bps is not None:
+            if volatility_bps < Decimal("25"):
+                dynamic_min_edge = max(Decimal("4"), self._minimum_target_edge_bps - Decimal("2"))
+            elif volatility_bps > Decimal("80"):
+                dynamic_min_edge = self._minimum_target_edge_bps + Decimal("6")
+            elif volatility_bps > Decimal("150"):
+                dynamic_min_edge = self._minimum_target_edge_bps + Decimal("10")
+        target_edge_bps = max(base_target, dynamic_min_edge)
         if trades <= 0:
-            target_edge_bps = self._minimum_target_edge_bps
+            target_edge_bps = dynamic_min_edge
         else:
             if avg_edge_stats > Decimal("40"):
-                target_edge_bps = max(self._minimum_target_edge_bps, avg_edge_stats * Decimal("0.6"))
+                target_edge_bps = max(dynamic_min_edge, avg_edge_stats * Decimal("0.6"))
             else:
-                target_edge_bps = self._minimum_target_edge_bps
+                target_edge_bps = dynamic_min_edge
             if loss_streak > 0:
                 target_edge_bps += Decimal(loss_streak) * Decimal("8")
+        neg_streak = stats.get("negative_edge_streak", 0)
+        if neg_streak >= 3:
+            target_edge_bps += Decimal(min(neg_streak * 3, 18))
+        elif stats["smoothed_net_edge_bps"] > Decimal("20"):
+            target_edge_bps = max(dynamic_min_edge, target_edge_bps - Decimal("4"))
         if inventory_pressure_bps > 0:
             target_edge_bps += inventory_pressure_bps
         last_edge_bps = Decimal(str(stats.get("last_edge_bps", Decimal("0"))))
@@ -1521,6 +1550,12 @@ class DualSideQuoteManager:
             usable_quote,
         )
         order_value = target_order_value * dynamic_multiplier
+        if depth_capacity > Decimal("0"):
+            depth_allocation = (depth_capacity * Decimal("0.2")).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            if depth_allocation > Decimal("0"):
+                order_value = min(order_value, depth_allocation)
         if live_spread_bps > Decimal("0") and live_spread_bps < Decimal("8"):
             order_value = (order_value * Decimal("0.5")).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP
@@ -2382,6 +2417,8 @@ class InstantFillMarketMaker:
         stats.setdefault("last_edge_bps", Decimal("0"))
         stats.setdefault("last_result", None)
         stats.setdefault("last_profit", Decimal("0"))
+        stats.setdefault("smoothed_net_edge_bps", Decimal("0"))
+        stats.setdefault("negative_edge_streak", 0)
         if "recent_fill_ts" not in stats or not isinstance(stats.get("recent_fill_ts"), deque):
             stats["recent_fill_ts"] = deque(maxlen=120)
         if "last_fill_latency_ms" not in stats:
