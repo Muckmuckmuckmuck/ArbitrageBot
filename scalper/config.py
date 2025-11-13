@@ -46,6 +46,7 @@ class EngineSettings:
     loss_cooldown_s: float = 6.0
     win_cooldown_s: float = 1.8
     neutral_cooldown_s: float = 2.5
+    loss_cooldown_threshold_usd: Decimal = Decimal("0.20")
     max_active_pairs: int = 2
     equity_fraction_per_pair: Decimal = Decimal("0.4")
     min_equity_allocation_usd: Decimal = Decimal("10")
@@ -53,6 +54,7 @@ class EngineSettings:
     max_total_loss_usd: Decimal = Decimal("20")
     hedge_fee_guard_bps: int = 35
     hedge_buffer_bps: int = 15
+    hedge_balance_buffer_bps: int = 25
     hedge_stale_seconds: float = 10.0
     hedge_force_flat_seconds: float = 18.0
     fast_fill_latency_ms: float = 450.0

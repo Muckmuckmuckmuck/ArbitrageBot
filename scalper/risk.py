@@ -61,14 +61,28 @@ class RiskManager:
 
         return RiskAssessment(True, "ok")
 
-    def register_fill_result(self, state: PairRuntimeState, result: str) -> None:
+    def register_fill_result(self, state: PairRuntimeState, result: str, realized: Decimal) -> None:
         now = time.time()
         if result == "win":
-            state.cooldown_until = max(state.cooldown_until, now + self._settings.win_cooldown_s)
+            cooldown = self._settings.win_cooldown_s
         elif result == "loss":
-            state.cooldown_until = max(state.cooldown_until, now + self._settings.loss_cooldown_s)
+            loss_amount = abs(realized)
+            threshold = self._settings.loss_cooldown_threshold_usd
+            if loss_amount < threshold:
+                cooldown = self._settings.neutral_cooldown_s
+                logger.debug(
+                    "Applying short cooldown (%.2fs) after small loss %.4f",
+                    cooldown,
+                    float(loss_amount),
+                )
+            else:
+                cooldown = self._settings.loss_cooldown_s
         elif result == "flat":
-            state.cooldown_until = max(state.cooldown_until, now + self._settings.neutral_cooldown_s)
+            cooldown = self._settings.neutral_cooldown_s
+        else:
+            cooldown = 0.0
+        if cooldown > 0:
+            state.cooldown_until = max(state.cooldown_until, now + cooldown)
 
     @staticmethod
     def _pair_key(cfg: PairConfig) -> str:

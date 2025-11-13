@@ -96,7 +96,7 @@ class ExecutionManager:
                 await self._cancel_orders(same_side)
                 for oid in same_side:
                     self._hedge_orders.pop(oid, None)
-            order_id = await self._submit(side, amount, price, tag="hedge")
+            order_id = await self._submit(side, amount, price, tag="hedge", post_only=not allow_taker)
             if order_id and order_id in self._hedge_orders:
                 meta = self._hedge_orders[order_id]
                 meta["allow_taker"] = allow_taker
@@ -148,6 +148,11 @@ class ExecutionManager:
             return None
         try:
             amount = self._client.amount_to_precision(self._symbol, amount)
+            if amount > 0:
+                try:
+                    amount = amount.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+                except Exception:
+                    pass
             price = self._client.price_to_precision(self._symbol, price)
             min_amount = self._client.min_amount(self._symbol)
             if min_amount and amount < min_amount:

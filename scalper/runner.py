@@ -235,7 +235,7 @@ class ScalperEngine:
             execution.mark_filled(order_ref or trade_id)
             realized, result = self._pnl.process_fill(pair_key, state, side, amount, price, fee_cost)
             if result in {"win", "loss", "flat"}:
-                self._risk.register_fill_result(state, result)
+                self._risk.register_fill_result(state, result, realized)
                 state.update_probe(
                     success=result == "win",
                     cfg_base=pair.base_probe_size_usd,
@@ -264,6 +264,10 @@ class ScalperEngine:
                     wallet_base = await self._fetch_base_balance(client, pair.base)
                     tracked_base = sum(lot.amount for lot in state.inventory)
                     available_base = min(wallet_base, tracked_base)
+                    buffer_multiplier = Decimal("1") - Decimal(self._config.settings.hedge_balance_buffer_bps) / Decimal("10000")
+                    if buffer_multiplier < 0:
+                        buffer_multiplier = Decimal("0")
+                    available_base = (available_base * buffer_multiplier).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
                     hedge_amount = min(amount, available_base)
                     hedge_amount = execution.amount_precision(hedge_amount)
                     min_amount = execution.min_order_amount()
@@ -306,7 +310,12 @@ class ScalperEngine:
                     stable_balance = await self._fetch_stable_balance(client, pair.quote)
                     max_buy_amount = Decimal("0")
                     if hedge_price > 0 and stable_balance > 0:
-                        max_buy_amount = (stable_balance / (hedge_price * Decimal("1.01"))).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
+                        buffer_multiplier = Decimal("1") - Decimal(self._config.settings.hedge_balance_buffer_bps) / Decimal("10000")
+                        if buffer_multiplier < 0:
+                            buffer_multiplier = Decimal("0")
+                        usable_quote = (stable_balance * buffer_multiplier).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+                        if usable_quote > 0:
+                            max_buy_amount = (usable_quote / (hedge_price * Decimal("1.01"))).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
                     hedge_amount = min(amount, max_buy_amount)
                     hedge_amount = execution.amount_precision(hedge_amount)
                     min_amount = execution.min_order_amount()

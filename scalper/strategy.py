@@ -46,9 +46,19 @@ class QuotePlanner:
             return None
 
         gross_edge = spread_bps
-        fees = Decimal(cfg.maker_fee_bps)
+        maker_fee = Decimal(cfg.maker_fee_bps)
+        maker_total = maker_fee if maker_fee >= Decimal("40") else maker_fee * Decimal("2")
         slip = Decimal(cfg.slippage_buffer_bps)
-        net_edge = gross_edge - fees - slip
+        net_edge = gross_edge - maker_total - slip
+        logger.debug(
+            "[PLAN_TRACE] %s %s spread=%sbps maker_total=%sbps slip=%sbps net=%sbps",
+            cfg.exchange.upper(),
+            cfg.symbol,
+            gross_edge.quantize(Decimal("0.01")),
+            maker_total.quantize(Decimal("0.01")),
+            slip.quantize(Decimal("0.01")),
+            net_edge.quantize(Decimal("0.01")),
+        )
         state.recent_net_edges.append(net_edge)
         state.last_edge_bps = net_edge
 
