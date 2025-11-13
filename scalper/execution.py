@@ -143,6 +143,40 @@ class ExecutionManager:
         if order_id in self._hedge_orders:
             self._hedge_orders.pop(order_id, None)
 
+    async def flatten_inventory(
+        self,
+        side: str,
+        amount: Decimal,
+        price: Decimal,
+    ) -> Optional[str]:
+        """Submit a taker order to clear small residual inventory."""
+        if amount <= 0:
+            return None
+        async with self._lock:
+            try:
+                amount = self._client.amount_to_precision(self._symbol, amount)
+                price = self._client.price_to_precision(self._symbol, price)
+                order = await self._client.create_limit_order(
+                    self._symbol,
+                    side,
+                    amount,
+                    price,
+                    post_only=False,
+                )
+                order_id = str(order.get("id") or order.get("order_id") or order.get("clientOrderId"))
+                if order_id:
+                    logger.info(
+                        "[FLATTEN] %s %s amount=%s price=%s",
+                        side.upper(),
+                        self._symbol,
+                        amount,
+                        price,
+                    )
+                return order_id if order_id else None
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("[FLATTEN] failed %s %s amount=%s price=%s exc=%s", side.upper(), self._symbol, amount, price, exc)
+                return None
+
     async def _submit(self, side: str, amount: Decimal, price: Decimal, *, tag: str, post_only: bool = True) -> Optional[str]:
         if amount <= 0:
             return None

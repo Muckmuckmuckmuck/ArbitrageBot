@@ -25,6 +25,10 @@ class PairSnapshot:
     maker_fee_bps: Decimal
     taker_fee_bps: Decimal
     volume_usd: Decimal
+    order_value_usd: Decimal
+    avg_bid: Decimal
+    avg_ask: Decimal
+    score: Decimal
     timestamp: float
 
 
@@ -64,7 +68,7 @@ class OpportunityScanner:
                         results.append(snapshot)
             # Keep most recent snapshot for any market not refreshed this pass
             results.extend(value for key, value in self._snapshots.items() if value not in results)
-            results.sort(key=lambda snap: snap.net_edge_bps, reverse=True)
+            results.sort(key=lambda snap: (snap.score, snap.net_edge_bps), reverse=True)
             return results
 
     def _select_markets(self, markets: Dict[str, Dict]) -> Sequence[str]:
@@ -88,9 +92,21 @@ class OpportunityScanner:
         client: RestExchangeClient,
     ) -> Optional[PairSnapshot]:
         try:
-            book = await client.fetch_order_book(symbol, depth=3)
+            book = await client.fetch_order_book(symbol, depth=5)
         except Exception as exc:
-            self._log_candidate(exchange, symbol, "FETCH_ERROR", Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), "order_book", details=str(exc))
+            self._log_candidate(
+                exchange,
+                symbol,
+                "FETCH_ERROR",
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                "order_book",
+                details=str(exc),
+            )
             return None
 
         bids = book.get("bids") or []
@@ -98,27 +114,93 @@ class OpportunityScanner:
         if not bids or not asks:
             return None
 
-        best_bid_price, best_bid_qty = bids[0]
-        best_ask_price, best_ask_qty = asks[0]
-        bid = Decimal(str(best_bid_price))
-        ask = Decimal(str(best_ask_price))
-        if bid <= 0 or ask <= 0 or ask <= bid:
-            return None
-
-        spread = (ask - bid) / bid * Decimal("10000")
-        depth_usd = min(Decimal(str(best_bid_qty)) * bid, Decimal(str(best_ask_qty)) * ask)
-        if depth_usd <= 0:
-            self._log_candidate(exchange, symbol, "RED_X", spread, Decimal("0"), Decimal("0"), Decimal("0"), "no_depth")
+        best_bid_price = Decimal(str(bids[0][0]))
+        best_ask_price = Decimal(str(asks[0][0]))
+        if best_bid_price <= 0 or best_ask_price <= 0 or best_ask_price <= best_bid_price:
             return None
 
         settings = self._config.settings
 
+        total_bid_value = self._total_value(bids)
+        total_ask_value = self._total_value(asks)
+        book_value = min(total_bid_value, total_ask_value)
+        if book_value <= 0:
+            self._log_candidate(
+                exchange,
+                symbol,
+                "RED_X",
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                "no_depth",
+            )
+            return None
+
         cfg = self._pair_config(exchange, symbol)
+
         base_order = cfg.order_size_usd if cfg else settings.dynamic_order_usd_min
-        depth_clip = depth_usd * settings.scanner_depth_clip_fraction
-        order_value = min(base_order, depth_clip, depth_usd)
+        order_value = min(
+            settings.dynamic_order_usd_max,
+            max(base_order, settings.dynamic_order_usd_min),
+        )
+        clipped_value = book_value * settings.scanner_depth_clip_fraction
+        order_value = min(order_value, clipped_value, book_value)
         order_value = max(order_value, settings.dynamic_order_usd_min)
-        order_value = min(order_value, settings.dynamic_order_usd_max)
+        if order_value <= 0:
+            self._log_candidate(
+                exchange,
+                symbol,
+                "RED_X",
+                Decimal("0"),
+                Decimal("0"),
+                book_value,
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                "order_value",
+            )
+            return None
+
+        bid_agg = self._aggregate_side(bids, order_value)
+        ask_agg = self._aggregate_side(asks, order_value)
+        if not bid_agg or not ask_agg:
+            self._log_candidate(
+                exchange,
+                symbol,
+                "RED_X",
+                Decimal("0"),
+                Decimal("0"),
+                book_value,
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                "insufficient_depth",
+            )
+            return None
+
+        avg_bid, bid_value = bid_agg
+        avg_ask, ask_value = ask_agg
+
+        depth_usd = min(bid_value, ask_value)
+        if depth_usd < settings.scanner_min_depth_usd:
+            self._log_candidate(
+                exchange,
+                symbol,
+                "RED_X",
+                Decimal("0"),
+                Decimal("0"),
+                depth_usd,
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                f"depth<{settings.scanner_min_depth_usd}",
+            )
+            return None
+
+        gross_edge = (avg_ask - avg_bid) / avg_bid * Decimal("10000")
 
         maker_fee_bps = Decimal(cfg.maker_fee_bps if cfg else 12)
         taker_fee_bps = Decimal(cfg.taker_fee_bps if cfg else 35)
@@ -131,36 +213,36 @@ class OpportunityScanner:
         if taker_fee is not None:
             taker_fee_bps = Decimal(str(taker_fee)) * Decimal("10000")
 
-        slippage_bps = Decimal("0")
-        if depth_usd > 0:
-            slippage_bps = (order_value / depth_usd) * Decimal("10000") * Decimal("0.5")
-
         total_fee_bps = maker_fee_bps * Decimal("2")
         buffer_bps = Decimal(cfg.slippage_buffer_bps if cfg else settings.scanner_min_spread_bps)
-        net_edge = spread - total_fee_bps - buffer_bps - slippage_bps
+        net_edge = gross_edge - total_fee_bps - buffer_bps
         timestamp = time.time()
         base = market_meta.get("base") or (symbol.split("/")[0] if "/" in symbol else symbol)
         quote = market_meta.get("quote") or (symbol.split("/")[1] if "/" in symbol else "")
         ticker = await self._safe_fetch_ticker(client, symbol)
-        volume_usd = self._estimate_volume_usd(market_meta, ticker, bid, ask)
+        volume_usd = self._estimate_volume_usd(market_meta, ticker, avg_bid, avg_ask)
 
-        marker = "GREEN_CHECK" if net_edge >= Decimal(settings.minimum_target_edge_bps) else "RED_X"
+        floor_bps = self._net_edge_floor(exchange)
+        marker = "GREEN_CHECK" if net_edge >= floor_bps else "RED_X"
         reason = "ok"
         if depth_usd < settings.scanner_min_depth_usd:
             reason = f"depth<{settings.scanner_min_depth_usd}"
         elif volume_usd < settings.scanner_min_volume_usd:
             reason = f"volume<{settings.scanner_min_volume_usd}"
-        elif net_edge < Decimal(settings.scanner_min_net_edge_bps):
-            reason = f"edge<{settings.scanner_min_net_edge_bps}"
+        elif net_edge < floor_bps:
+            reason = f"edge<{floor_bps}"
+
+        score = net_edge * depth_usd
 
         self._log_candidate(
             exchange,
             symbol,
             marker,
-            spread.quantize(Decimal("0.01")),
+            gross_edge.quantize(Decimal("0.01")),
             net_edge.quantize(Decimal("0.01")),
             depth_usd.quantize(Decimal("0.01")),
             volume_usd.quantize(Decimal("0.01")),
+            score.quantize(Decimal("0.01")),
             reason,
         )
 
@@ -172,12 +254,16 @@ class OpportunityScanner:
             symbol=symbol,
             base=base,
             quote=quote,
-            spread_bps=spread.quantize(Decimal("0.01")),
+            spread_bps=gross_edge.quantize(Decimal("0.01")),
             net_edge_bps=net_edge.quantize(Decimal("0.01")),
             depth_usd=depth_usd.quantize(Decimal("0.01")),
             maker_fee_bps=maker_fee_bps.quantize(Decimal("0.01")),
             taker_fee_bps=taker_fee_bps.quantize(Decimal("0.01")),
             volume_usd=volume_usd.quantize(Decimal("0.01")),
+            order_value_usd=order_value.quantize(Decimal("0.01")),
+            avg_bid=avg_bid.quantize(Decimal("0.00001")),
+            avg_ask=avg_ask.quantize(Decimal("0.00001")),
+            score=score.quantize(Decimal("0.01")),
             timestamp=timestamp,
         )
 
@@ -240,6 +326,55 @@ class OpportunityScanner:
                 pass
         return Decimal("0")
 
+    def _total_value(self, levels: Sequence[Sequence[float]]) -> Decimal:
+        total = Decimal("0")
+        for raw_price, raw_qty in levels:
+            price = Decimal(str(raw_price))
+            qty = Decimal(str(raw_qty))
+            if price <= 0 or qty <= 0:
+                continue
+            total += price * qty
+        return total
+
+    def _aggregate_side(
+        self,
+        levels: Sequence[Sequence[float]],
+        desired_value: Decimal,
+    ) -> Optional[tuple[Decimal, Decimal]]:
+        remaining = desired_value
+        if remaining <= 0:
+            return None
+        value_accum = Decimal("0")
+        price_times_qty = Decimal("0")
+        qty_accum = Decimal("0")
+        for raw_price, raw_qty in levels:
+            price = Decimal(str(raw_price))
+            qty = Decimal(str(raw_qty))
+            if price <= 0 or qty <= 0:
+                continue
+            level_value = price * qty
+            take_value = min(level_value, remaining)
+            if take_value <= 0:
+                continue
+            portion = take_value / level_value
+            take_qty = qty * portion
+            qty_accum += take_qty
+            price_times_qty += take_qty * price
+            value_accum += take_value
+            remaining -= take_value
+            if remaining <= 0:
+                break
+        if value_accum <= 0 or qty_accum <= 0:
+            return None
+        avg_price = price_times_qty / qty_accum
+        return avg_price, value_accum
+
+    def _net_edge_floor(self, exchange: str) -> Decimal:
+        settings = self._config.settings
+        if exchange.lower().startswith("coinbase"):
+            return Decimal(settings.coinbase_min_net_edge_bps)
+        return Decimal(settings.scanner_min_net_edge_bps)
+
     def _log_candidate(
         self,
         exchange: str,
@@ -249,12 +384,13 @@ class OpportunityScanner:
         net_edge_bps: Decimal,
         depth_usd: Decimal,
         volume_usd: Decimal,
+        score: Decimal,
         reason: str,
         *,
         details: Optional[str] = None,
     ) -> None:
         message = (
-            "[SCAN:%s] %s %s spread=%sbps net=%sbps depth_usd=%s volume_usd=%s reason=%s"
+            "[SCAN:%s] %s %s spread=%sbps net=%sbps depth_usd=%s volume_usd=%s score=%s reason=%s"
             % (
                 marker,
                 exchange.upper(),
@@ -263,6 +399,7 @@ class OpportunityScanner:
                 net_edge_bps,
                 depth_usd,
                 volume_usd,
+                score,
                 reason,
             )
         )
@@ -299,7 +436,8 @@ class PairCatalog:
             return self._dynamic[key]
         if len(self._dynamic) >= self._config.settings.max_dynamic_pairs:
             return None
-        if snapshot.net_edge_bps < Decimal(self._config.settings.scanner_min_net_edge_bps):
+        floor = self._net_edge_floor(snapshot.exchange)
+        if snapshot.net_edge_bps < floor:
             return None
         if snapshot.depth_usd < self._config.settings.scanner_min_depth_usd:
             return None
@@ -325,13 +463,13 @@ class PairCatalog:
 
     def _build_config(self, snapshot: PairSnapshot) -> Optional[PairConfig]:
         settings = self._config.settings
-        order_usd = snapshot.depth_usd * settings.scanner_depth_clip_fraction
-        order_usd = max(order_usd, settings.dynamic_order_usd_min)
+        order_usd = max(snapshot.order_value_usd, settings.dynamic_order_usd_min)
         order_usd = min(order_usd, settings.dynamic_order_usd_max)
         if order_usd < settings.dynamic_order_usd_min:
             return None
 
-        target_edge = max(snapshot.net_edge_bps, Decimal(settings.minimum_target_edge_bps))
+        floor = self._net_edge_floor(snapshot.exchange)
+        target_edge = max(snapshot.net_edge_bps, floor)
         maker_fee = int(snapshot.maker_fee_bps.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
         taker_fee = int(snapshot.taker_fee_bps.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
         min_edge = int(max(Decimal(settings.minimum_target_edge_bps), target_edge * Decimal("0.75")))
@@ -362,3 +500,8 @@ class PairCatalog:
             max_probe_size_usd=settings.dynamic_order_usd_max,
             probe_step_usd=Decimal("1"),
         )
+
+    def _net_edge_floor(self, exchange: str) -> Decimal:
+        if exchange.lower().startswith("coinbase"):
+            return Decimal(self._config.settings.coinbase_min_net_edge_bps)
+        return Decimal(self._config.settings.scanner_min_net_edge_bps)

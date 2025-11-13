@@ -69,6 +69,7 @@ class EngineSettings:
     insufficient_balance_cooldown_s: float = 6.0
     scanner_min_spread_bps: int = 40
     scanner_min_net_edge_bps: int = 80
+    coinbase_min_net_edge_bps: int = 120
     scanner_min_depth_usd: Decimal = Decimal("25")
     scanner_min_volume_usd: Decimal = Decimal("2500")
     dynamic_order_usd_min: Decimal = Decimal("3")

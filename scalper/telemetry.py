@@ -130,7 +130,7 @@ class Telemetry:
         for snapshot in snapshots[:limit]:
             marker = "GREEN_CHECK" if snapshot.net_edge_bps >= floor_bps else "RED_X"
             logger.info(
-                "[SCAN:%s] %s %s spread=%sbps net=%sbps maker_fee=%sbps taker_fee=%sbps depth_usd=%s volume_usd=%s",
+                "[SCAN:%s] %s %s spread=%sbps net=%sbps maker_fee=%sbps taker_fee=%sbps depth_usd=%s order_value=%s volume_usd=%s score=%s",
                 marker,
                 snapshot.exchange.upper(),
                 snapshot.symbol,
@@ -139,7 +139,9 @@ class Telemetry:
                 snapshot.maker_fee_bps,
                 snapshot.taker_fee_bps,
                 snapshot.depth_usd,
+                snapshot.order_value_usd,
                 snapshot.volume_usd,
+                snapshot.score,
             )
             payload.append(
                 {
@@ -151,7 +153,9 @@ class Telemetry:
                     "maker_fee_bps": str(snapshot.maker_fee_bps),
                     "taker_fee_bps": str(snapshot.taker_fee_bps),
                     "depth_usd": str(snapshot.depth_usd),
+                    "order_value_usd": str(snapshot.order_value_usd),
                     "volume_usd": str(snapshot.volume_usd),
+                    "score": str(snapshot.score),
                 }
             )
         self._persist.write("scan", payload)

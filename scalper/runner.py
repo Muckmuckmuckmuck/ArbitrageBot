@@ -178,26 +178,33 @@ class ScalperEngine:
                 snapshots,
                 floor_bps=Decimal(self._config.settings.minimum_target_edge_bps),
             )
-            snapshot_map = {
-                self._pair_key(snap.exchange, snap.symbol): snap for snap in snapshots
-            }
+            snapshot_map = {}
             for snapshot in snapshots:
+                key = self._pair_key(snapshot.exchange, snapshot.symbol)
+                snapshot_map[key] = snapshot
                 cfg = self._catalog.register_dynamic(snapshot)
                 if cfg:
-                    key = self._pair_key(cfg.exchange, cfg.symbol)
                     if key not in self._pair_configs:
                         self._pair_configs[key] = cfg
-            ranked = self._score_pairs(snapshot_map)
+            ranked = self._score_pairs(snapshots)
             allowed: Set[str] = set()
             for _, pair_key in ranked:
+                if pair_key not in snapshot_map:
+                    continue
+                snapshot = snapshot_map[pair_key]
+                if snapshot.score <= 0:
+                    continue
                 if pair_key not in self._pair_configs:
+                    cfg = self._catalog.get_by_key(pair_key)
+                    if cfg:
+                        self._pair_configs[pair_key] = cfg
+                cfg = self._pair_configs.get(pair_key)
+                if not cfg:
                     continue
                 allowed.add(pair_key)
+                await self._ensure_pair_task(pair_key, cfg)
                 if len(allowed) >= self._config.settings.max_active_pairs:
                     break
-            for pair_key in allowed:
-                cfg = self._pair_configs[pair_key]
-                await self._ensure_pair_task(pair_key, cfg)
             if allowed != self._active_pairs:
                 logger.info("[ROTATION] Active pairs -> %s", ", ".join(sorted(allowed)))
             self._active_pairs = allowed
@@ -272,20 +279,28 @@ class ScalperEngine:
                     hedge_amount = execution.amount_precision(hedge_amount)
                     min_amount = execution.min_order_amount()
                     if min_amount and hedge_amount < min_amount:
-                        logger.info(
-                            "[HEDGE] skip %s %s amount=%s reason=min_amount",
-                            pair.exchange.upper(),
-                            pair.symbol,
-                            hedge_amount,
+                        await self._flatten_dust(
+                            execution,
+                            client,
+                            pair,
+                            state,
+                            side="sell",
+                            remaining=available_base,
+                            price=hedge_price,
+                            reason="min_amount",
                         )
                         continue
                     hedge_notional = hedge_amount * hedge_price
                     if hedge_notional < pair.min_notional_usd:
-                        logger.info(
-                            "[HEDGE] skip %s %s notional=%s reason=dust",
-                            pair.exchange.upper(),
-                            pair.symbol,
-                            hedge_notional.quantize(Decimal("0.0001")),
+                        await self._flatten_dust(
+                            execution,
+                            client,
+                            pair,
+                            state,
+                            side="sell",
+                            remaining=available_base,
+                            price=hedge_price,
+                            reason="dust",
                         )
                         continue
                     if hedge_amount > Decimal("0"):
@@ -320,20 +335,28 @@ class ScalperEngine:
                     hedge_amount = execution.amount_precision(hedge_amount)
                     min_amount = execution.min_order_amount()
                     if min_amount and hedge_amount < min_amount:
-                        logger.info(
-                            "[HEDGE] skip %s %s amount=%s reason=min_amount",
-                            pair.exchange.upper(),
-                            pair.symbol,
-                            hedge_amount,
+                        await self._flatten_dust(
+                            execution,
+                            client,
+                            pair,
+                            state,
+                            side="buy",
+                            remaining=max_buy_amount,
+                            price=hedge_price,
+                            reason="min_amount",
                         )
                         continue
                     hedge_notional = hedge_amount * hedge_price
                     if hedge_notional < pair.min_notional_usd:
-                        logger.info(
-                            "[HEDGE] skip %s %s notional=%s reason=dust",
-                            pair.exchange.upper(),
-                            pair.symbol,
-                            hedge_notional.quantize(Decimal("0.0001")),
+                        await self._flatten_dust(
+                            execution,
+                            client,
+                            pair,
+                            state,
+                            side="buy",
+                            remaining=max_buy_amount,
+                            price=hedge_price,
+                            reason="dust",
                         )
                         continue
                     if hedge_amount > Decimal("0"):
@@ -442,27 +465,85 @@ class ScalperEngine:
             return None
         return Decimal(str(asks[0][0]))
 
-    def _score_pairs(self, snapshot_map: Dict[str, PairSnapshot]) -> List[Tuple[float, str]]:
+    def _score_pairs(self, snapshots: Sequence[PairSnapshot]) -> List[Tuple[float, str]]:
         ranked: List[Tuple[float, str]] = []
-        for pair_key, cfg in self._pair_configs.items():
+        for snapshot in snapshots:
+            pair_key = self._pair_key(snapshot.exchange, snapshot.symbol)
             state = self._states[pair_key]
-            snap = snapshot_map.get(pair_key)
-            if snap:
-                net_edge = snap.net_edge_bps
-            elif state.recent_net_edges:
-                net_edge = state.recent_net_edges[-1]
-            else:
-                net_edge = Decimal("-500")
+            net_edge = snapshot.net_edge_bps
             stats = self._pnl.get_stats(pair_key)
             penalty = Decimal(stats.losses * 20 + state.skip_reasons.get("edge_target", 0) * 5)
             if len(state.recent_realized) >= self._config.settings.negative_fill_lookback:
                 window = list(state.recent_realized)[-self._config.settings.negative_fill_lookback:]
                 if window and all(value <= 0 for value in window):
                     penalty += Decimal("300")
-            score = float(net_edge - penalty)
-            ranked.append((score, pair_key))
+            score_value = snapshot.score - penalty * max(snapshot.order_value_usd, Decimal("1"))
+            # If cumulative PnL is strongly negative, nudge score down further
+            pnl_penalty = stats.realized
+            if pnl_penalty < 0:
+                score_value += pnl_penalty
+            ranked.append((float(score_value), pair_key))
         ranked.sort(reverse=True, key=lambda item: item[0])
         return ranked
+
+    async def _flatten_dust(
+        self,
+        execution: ExecutionManager,
+        client: RestExchangeClient,
+        pair: PairConfig,
+        state: PairRuntimeState,
+        *,
+        side: str,
+        remaining: Decimal,
+        price: Decimal,
+        reason: str,
+    ) -> None:
+        """Force-flatten small residual inventory so risk guards clear."""
+        if remaining <= 0:
+            return
+        min_amount = execution.min_order_amount()
+        if min_amount and remaining < min_amount:
+            cleared = self._clear_small_inventory(state, pair.min_notional_usd)
+            if cleared:
+                logger.info(
+                    "[HEDGE] drop_dust %s %s remaining=%s reason=%s",
+                    pair.exchange.upper(),
+                    pair.symbol,
+                    remaining,
+                    reason,
+                )
+            return
+        best_price = await self._best_price(client, pair.symbol, side)
+        if best_price is None:
+            best_price = price
+        order_id = await execution.flatten_inventory(side, remaining, best_price)
+        if order_id:
+            logger.info(
+                "[HEDGE] force_flat %s %s remaining=%s reason=%s",
+                pair.exchange.upper(),
+                pair.symbol,
+                remaining,
+                reason,
+            )
+            state.hedge_failure_ts = time.time()
+        else:
+            cleared = self._clear_small_inventory(state, pair.min_notional_usd)
+            if cleared:
+                logger.info(
+                    "[HEDGE] drop_dust %s %s remaining=%s reason=%s",
+                    pair.exchange.upper(),
+                    pair.symbol,
+                    remaining,
+                    reason,
+                )
+
+    @staticmethod
+    def _clear_small_inventory(state: PairRuntimeState, min_notional: Decimal) -> bool:
+        changed = False
+        while state.inventory and (state.inventory[0].amount * state.inventory[0].price) < min_notional:
+            state.inventory.popleft()
+            changed = True
+        return changed
 
     def _pair_key(self, exchange: str, symbol: str) -> str:
         return f"{exchange}:{symbol}"
