@@ -25,13 +25,44 @@ class ExecutionManager:
 
     async def sync_quotes(self, intent: QuoteIntent) -> None:
         async with self._lock:
-            await self._cancel_orders(list(self._quote_orders.keys()))
-            self._quote_orders.clear()
-            tasks = []
+            desired = {}
             if intent.post_buy:
-                tasks.append(self._submit("buy", intent.buy_size, intent.buy_price, tag="quote"))
+                desired_amount = self._client.amount_to_precision(self._symbol, intent.buy_size)
+                desired_price = self._client.price_to_precision(self._symbol, intent.buy_price)
+                desired["buy"] = {"amount": desired_amount, "price": desired_price}
             if intent.post_sell:
-                tasks.append(self._submit("sell", intent.sell_size, intent.sell_price, tag="quote"))
+                desired_amount = self._client.amount_to_precision(self._symbol, intent.sell_size)
+                desired_price = self._client.price_to_precision(self._symbol, intent.sell_price)
+                desired["sell"] = {"amount": desired_amount, "price": desired_price}
+
+            to_cancel = []
+            for order_id, meta in list(self._quote_orders.items()):
+                side = str(meta.get("side", "")).lower()
+                if side not in desired:
+                    to_cancel.append(order_id)
+                    continue
+                wanted = desired[side]
+                if self._orders_equivalent(meta, wanted):
+                    meta["created"] = time.time()
+                    desired.pop(side, None)
+                else:
+                    to_cancel.append(order_id)
+
+            if to_cancel:
+                await self._cancel_orders(to_cancel)
+                for order_id in to_cancel:
+                    self._quote_orders.pop(order_id, None)
+
+            tasks = []
+            for side, wanted in desired.items():
+                tasks.append(
+                    self._submit(
+                        side,
+                        Decimal(wanted["amount"]),
+                        Decimal(wanted["price"]),
+                        tag="quote",
+                    )
+                )
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -92,6 +123,18 @@ class ExecutionManager:
                         pass
                     await self._reprice_hedge(meta)
 
+    async def prune_stale_quotes(self, max_age: float) -> None:
+        if max_age <= 0:
+            return
+        threshold = time.time() - max_age
+        async with self._lock:
+            stale = [oid for oid, meta in self._quote_orders.items() if meta.get("created", 0.0) < threshold]
+            if not stale:
+                return
+            await self._cancel_orders(stale)
+            for oid in stale:
+                self._quote_orders.pop(oid, None)
+
     def mark_filled(self, order_id: Optional[str]) -> None:
         if not order_id:
             return
@@ -128,6 +171,17 @@ class ExecutionManager:
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("Failed to submit %s order for %s: %s", side, self._symbol, exc)
             return None
+
+    @staticmethod
+    def _orders_equivalent(existing: Dict[str, Decimal], wanted: Dict[str, Decimal]) -> bool:
+        try:
+            price_diff = abs(Decimal(existing.get("price", 0)) - Decimal(wanted.get("price", 0)))
+            amount_diff = abs(Decimal(existing.get("amount", 0)) - Decimal(wanted.get("amount", 0)))
+        except Exception:
+            return False
+        price_match = price_diff <= Decimal("0.00000001")
+        amount_match = amount_diff <= Decimal("0.00000001")
+        return price_match and amount_match
 
     def amount_precision(self, amount: Decimal) -> Decimal:
         return self._client.amount_to_precision(self._symbol, amount)

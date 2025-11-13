@@ -4,6 +4,8 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
+import threading
+import time
 from typing import Any, Dict, Optional
 
 import ccxt  # type: ignore
@@ -42,6 +44,10 @@ class RestExchangeClient:
             "timeout": 15_000,
             **options,
         })
+        self._order_lock = asyncio.Lock()
+        self._nonce_lock: Optional[threading.Lock] = None
+        self._nonce_value: Optional[int] = None
+
         if sandbox:
             self._client.set_sandbox_mode(True)
         if normalized == "gemini":
@@ -49,6 +55,9 @@ class RestExchangeClient:
             self._client.options.setdefault("nonce", "milliseconds")
             self._client.options.setdefault("defaultType", "spot")
             self._client.options.setdefault("defaultMarket", "spot")
+            self._nonce_lock = threading.Lock()
+            self._nonce_value = int(time.time() * 1000)
+            self._client.nonce = self._next_nonce  # type: ignore[attr-defined]
         self._id = getattr(self._client, "id", normalized)
 
     async def fetch_order_book(self, symbol: str, *, depth: int = 5) -> Dict[str, Any]:
@@ -69,18 +78,20 @@ class RestExchangeClient:
             params["postOnly"] = True
         if self._id == "gemini":
             params.setdefault("type", "exchange limit")
-        return await asyncio.to_thread(
-            self._client.create_order,
-            symbol,
-            "limit",
-            side,
-            float(amount),
-            float(price),
-            params,
-        )
+        async with self._order_lock:
+            return await asyncio.to_thread(
+                self._client.create_order,
+                symbol,
+                "limit",
+                side,
+                float(amount),
+                float(price),
+                params,
+            )
 
     async def cancel_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
-        return await asyncio.to_thread(self._client.cancel_order, order_id, symbol)
+        async with self._order_lock:
+            return await asyncio.to_thread(self._client.cancel_order, order_id, symbol)
 
     async def fetch_open_orders(self, symbol: Optional[str] = None) -> Any:
         return await asyncio.to_thread(self._client.fetch_open_orders, symbol)
@@ -118,3 +129,14 @@ class RestExchangeClient:
             return Decimal(str(min_value)) if min_value else None
         except Exception:
             return None
+
+    def _next_nonce(self) -> int:
+        if self._nonce_lock is None or self._nonce_value is None:
+            return int(time.time() * 1000)
+        with self._nonce_lock:
+            now = int(time.time() * 1000)
+            if now <= self._nonce_value:
+                self._nonce_value += 1
+            else:
+                self._nonce_value = now
+            return self._nonce_value

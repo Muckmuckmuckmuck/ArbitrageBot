@@ -140,9 +140,9 @@ class ScalperEngine:
                     )
                     await execution.sync_quotes(intent)
                 else:
-                    await execution.cancel_all_quotes()
                     self._telemetry.skip(pair.exchange, pair.symbol, "planner_rejected")
 
+                await execution.prune_stale_quotes(self._config.settings.stale_order_seconds)
                 await execution.prune_stale_hedges(self._config.settings.hedge_stale_seconds)
                 await asyncio.sleep(self._config.settings.poll_interval_s)
         finally:
