@@ -72,16 +72,42 @@ class RestExchangeClient:
     async def fetch_ticker(self, symbol: str) -> Any:
         return await asyncio.to_thread(self._client.fetch_ticker, symbol)
 
-    async def create_limit_order(self, symbol: str, side: str, amount: Decimal, price: Decimal, *, post_only: bool = True) -> Dict[str, Any]:
+    async def create_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: Decimal,
+        price: Decimal,
+        *,
+        post_only: bool = True,
+    ) -> Dict[str, Any]:
         params: Dict[str, Any] = {}
         if post_only:
             params["postOnly"] = True
+
+        market_symbol = symbol
+        market_id: Optional[str] = None
+        try:
+            market_meta = self._client.market(symbol)
+        except Exception:
+            market_meta = None
+        if market_meta:
+            market_symbol = market_meta.get("symbol", symbol)
+            raw_id = market_meta.get("id")
+            if isinstance(raw_id, str):
+                market_id = raw_id
+
         if self._id == "gemini":
             params.setdefault("type", "exchange limit")
+            if market_id:
+                params.setdefault("symbol", market_id)
+            else:
+                params.setdefault("symbol", symbol.replace("/", ""))
+
         async with self._order_lock:
             return await asyncio.to_thread(
                 self._client.create_order,
-                symbol,
+                market_symbol,
                 "limit",
                 side,
                 float(amount),

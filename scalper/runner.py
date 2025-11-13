@@ -43,8 +43,7 @@ class ScalperEngine:
         self._rotation_task: Optional[asyncio.Task[None]] = None
         self._running = False
         self._enabled_pairs = self._filter_pairs(config.pairs)
-        initial_keys = [self._pair_key(pair.exchange, pair.symbol) for pair in self._enabled_pairs]
-        self._active_pairs: Set[str] = set(initial_keys[: self._config.settings.max_active_pairs])
+        self._active_pairs: Set[str] = set()
 
     async def _client_for(self, exchange: str) -> RestExchangeClient:
         if exchange not in self._clients:
@@ -66,9 +65,11 @@ class ScalperEngine:
         self._running = True
         if not self._enabled_pairs:
             logger.error("[STARTUP] No trading pairs enabled—check API credentials")
+        # Seed configs for enabled pairs; tasks will spin up when rotation activates them.
         for pair in self._enabled_pairs:
             key = self._pair_key(pair.exchange, pair.symbol)
-            await self._ensure_pair_task(key, pair)
+            self._pair_configs[key] = pair
+        await self._run_rotation_step(initial=True)
         self._rotation_task = asyncio.create_task(self._rotation_loop())
 
     async def stop(self) -> None:
@@ -171,43 +172,52 @@ class ScalperEngine:
             return Decimal("0")
 
     async def _rotation_loop(self) -> None:
+        interval = max(10.0, self._config.settings.scanner_interval_s)
         while self._running:
-            await asyncio.sleep(max(10.0, self._config.settings.scanner_interval_s))
-            snapshots = await self._scanner.refresh()
-            self._telemetry.scan(
-                snapshots,
-                floor_bps=Decimal(self._config.settings.minimum_target_edge_bps),
-            )
-            snapshot_map = {}
-            for snapshot in snapshots:
-                key = self._pair_key(snapshot.exchange, snapshot.symbol)
-                snapshot_map[key] = snapshot
-                cfg = self._catalog.register_dynamic(snapshot)
+            await asyncio.sleep(interval)
+            await self._run_rotation_step()
+
+    async def _run_rotation_step(self, *, initial: bool = False) -> None:
+        snapshots = await self._scanner.refresh()
+        self._telemetry.scan(
+            snapshots,
+            floor_bps=Decimal(self._config.settings.minimum_target_edge_bps),
+        )
+        snapshot_map: Dict[str, PairSnapshot] = {}
+        for snapshot in snapshots:
+            key = self._pair_key(snapshot.exchange, snapshot.symbol)
+            snapshot_map[key] = snapshot
+            cfg = self._catalog.register_dynamic(snapshot)
+            if cfg and key not in self._pair_configs:
+                self._pair_configs[key] = cfg
+
+        ranked = self._score_pairs(snapshots)
+        allowed: Set[str] = set()
+        for _, pair_key in ranked:
+            snapshot = snapshot_map.get(pair_key)
+            if not snapshot:
+                continue
+            if snapshot.score <= 0:
+                continue
+            cfg = self._pair_configs.get(pair_key)
+            if cfg is None:
+                cfg = self._catalog.get_by_key(pair_key)
                 if cfg:
-                    if key not in self._pair_configs:
-                        self._pair_configs[key] = cfg
-            ranked = self._score_pairs(snapshots)
-            allowed: Set[str] = set()
-            for _, pair_key in ranked:
-                if pair_key not in snapshot_map:
-                    continue
-                snapshot = snapshot_map[pair_key]
-                if snapshot.score <= 0:
-                    continue
-                if pair_key not in self._pair_configs:
-                    cfg = self._catalog.get_by_key(pair_key)
-                    if cfg:
-                        self._pair_configs[pair_key] = cfg
-                cfg = self._pair_configs.get(pair_key)
-                if not cfg:
-                    continue
-                allowed.add(pair_key)
-                await self._ensure_pair_task(pair_key, cfg)
-                if len(allowed) >= self._config.settings.max_active_pairs:
-                    break
-            if allowed != self._active_pairs:
-                logger.info("[ROTATION] Active pairs -> %s", ", ".join(sorted(allowed)))
-            self._active_pairs = allowed
+                    self._pair_configs[pair_key] = cfg
+            if cfg is None:
+                continue
+            await self._ensure_pair_task(pair_key, cfg)
+            allowed.add(pair_key)
+            if len(allowed) >= self._config.settings.max_active_pairs:
+                break
+
+        if not allowed:
+            if initial or self._active_pairs:
+                logger.info("[ROTATION] No markets cleared thresholds; parking all pairs")
+        elif allowed != self._active_pairs:
+            logger.info("[ROTATION] Active pairs -> %s", ", ".join(sorted(allowed)))
+
+        self._active_pairs = allowed
 
     async def _consume_trades(
         self,

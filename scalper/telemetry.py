@@ -119,7 +119,7 @@ class Telemetry:
         self,
         snapshots: Sequence[PairSnapshot],
         *,
-        limit: int = 5,
+        limit: Optional[int] = None,
         floor_bps: Decimal = Decimal("0"),
     ) -> None:
         if not snapshots:
@@ -127,7 +127,8 @@ class Telemetry:
             self._persist.write("scan", [])
             return
         payload = []
-        for snapshot in snapshots[:limit]:
+        iterable = snapshots if limit is None else snapshots[:limit]
+        for snapshot in iterable:
             marker = "GREEN_CHECK" if snapshot.net_edge_bps >= floor_bps else "RED_X"
             logger.info(
                 "[SCAN:%s] %s %s spread=%sbps net=%sbps maker_fee=%sbps taker_fee=%sbps depth_usd=%s order_value=%s volume_usd=%s score=%s",
