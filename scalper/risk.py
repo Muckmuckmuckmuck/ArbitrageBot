@@ -31,6 +31,13 @@ class RiskManager:
             return RiskAssessment(False, f"cooldown {state.cooldown_until - now:.1f}s")
 
         if stable_balance < cfg.min_notional_usd:
+            logger.debug(
+                "[RISK] %s %s insufficient_balance: have=%s need=%s",
+                cfg.exchange.upper(),
+                cfg.symbol,
+                stable_balance.quantize(Decimal("0.01")),
+                cfg.min_notional_usd,
+            )
             return RiskAssessment(False, "insufficient_balance")
 
         stats = self._pnl.get_stats(self._pair_key(cfg))
