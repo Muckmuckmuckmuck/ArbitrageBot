@@ -98,11 +98,14 @@ class OpportunityScanner:
         filtered = []
         skipped_inactive = 0
         skipped_quote = 0
+        seen_quotes: Dict[str, int] = {}
         for symbol, meta in markets.items():
             if not meta.get("active", True):
                 skipped_inactive += 1
                 continue
             quote = meta.get("quote")
+            if quote:
+                seen_quotes[quote] = seen_quotes.get(quote, 0) + 1
             if quote not in allowed_quotes:
                 skipped_quote += 1
                 continue
@@ -110,14 +113,17 @@ class OpportunityScanner:
         filtered.sort(reverse=True, key=lambda item: float(item[0]) if item[0] is not None else 0.0)
         limit = self._config.settings.scanner_max_markets
         result = [symbol for _, symbol in filtered[:limit]]
-        logger.debug(
-            "[SCAN] market selection: total=%s active=%s quote_match=%s selected=%s (inactive_skipped=%s quote_skipped=%s)",
+        top_quotes = sorted(seen_quotes.items(), key=lambda x: x[1], reverse=True)[:5]
+        logger.info(
+            "[SCAN] market selection: total=%s active=%s quote_match=%s selected=%s (inactive_skipped=%s quote_skipped=%s allowed_quotes=%s top_quotes=%s)",
             len(markets),
             len(markets) - skipped_inactive,
             len(filtered),
             len(result),
             skipped_inactive,
             skipped_quote,
+            sorted(allowed_quotes),
+            top_quotes,
         )
         return result
 
@@ -248,8 +254,11 @@ class OpportunityScanner:
         quote = market_meta.get("quote") or (symbol.split("/")[1] if "/" in symbol else "")
         ticker = await self._safe_fetch_ticker(client, symbol)
         volume_usd, volume_known = self._estimate_volume_usd(market_meta, ticker, avg_bid, avg_ask)
-        if not volume_known and ticker is None:
-            logger.debug("[SCAN] %s %s: ticker fetch returned None, volume unknown", exchange.upper(), symbol)
+        if not volume_known:
+            if ticker is None:
+                logger.debug("[SCAN] %s %s: ticker fetch returned None, volume unknown", exchange.upper(), symbol)
+            else:
+                logger.debug("[SCAN] %s %s: ticker fetched but no volume data found (ticker keys: %s)", exchange.upper(), symbol, list(ticker.keys())[:10] if isinstance(ticker, dict) else "N/A")
 
         floor_bps = self._net_edge_floor(exchange)
         marker = "GREEN_CHECK"
@@ -329,9 +338,19 @@ class OpportunityScanner:
     async def _safe_fetch_ticker(self, client: RestExchangeClient, symbol: str) -> Optional[Dict[str, Any]]:
         try:
             ticker = await client.fetch_ticker(symbol)
-            return ticker if isinstance(ticker, dict) else None
+            if not isinstance(ticker, dict):
+                logger.debug("[SCAN] ticker fetch returned non-dict for %s %s: %s", client._id.upper(), symbol, type(ticker))
+                return None
+            # Log if ticker has volume data
+            has_volume = any(
+                key in ticker or (isinstance(ticker.get("info"), dict) and key in ticker.get("info", {}))
+                for key in ["volume", "baseVolume", "quoteVolume", "volumeUsd24h", "volume_usd_24h"]
+            )
+            if not has_volume:
+                logger.debug("[SCAN] ticker for %s %s has no volume fields", client._id.upper(), symbol)
+            return ticker
         except Exception as exc:
-            logger.debug("[SCAN] ticker fetch failed for %s %s: %s", client._id.upper(), symbol, exc)
+            logger.warning("[SCAN] ticker fetch failed for %s %s: %s", client._id.upper(), symbol, exc)
             return None
 
     def _estimate_volume_usd(
