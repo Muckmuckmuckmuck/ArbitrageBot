@@ -55,11 +55,12 @@ class OpportunityScanner:
         async with self._lock:
             results: List[PairSnapshot] = []
             exchanges = list(self._config.venue_keys.keys())
+            logger.info("[SCAN] Starting refresh for exchanges: %s", ", ".join(ex.upper() for ex in exchanges))
             for venue in exchanges:
                 try:
                     client = await self._client_getter(venue)
                 except Exception as exc:
-                    logger.debug("[SCAN] unable to init client for %s: %s", venue, exc)
+                    logger.warning("[SCAN] unable to init client for %s: %s", venue.upper(), exc)
                     continue
                 markets = getattr(client._client, "markets", {})  # type: ignore[attr-defined]
                 if not markets:
@@ -67,21 +68,24 @@ class OpportunityScanner:
                         await client.load_markets()
                         markets = getattr(client._client, "markets", {})  # type: ignore[attr-defined]
                     except Exception as exc:  # pragma: no cover - defensive
-                        logger.debug("[SCAN] load_markets failed for %s: %s", venue, exc)
+                        logger.warning("[SCAN] load_markets failed for %s: %s", venue.upper(), exc)
                         continue
                 candidates = self._select_markets(markets)
+                logger.info("[SCAN] %s selected %s markets to evaluate", venue.upper(), len(candidates))
                 kept_local = 0
+                evaluated_count = 0
                 for symbol in candidates:
                     snapshot = await self._evaluate_market(venue, symbol, client)
+                    evaluated_count += 1
                     if snapshot:
                         key = f"{venue}:{symbol}"
                         self._snapshots[key] = snapshot
                         results.append(snapshot)
                         kept_local += 1
-                logger.debug(
+                logger.info(
                     "[SCAN] %s evaluated=%s kept=%s",
                     venue.upper(),
-                    len(candidates),
+                    evaluated_count,
                     kept_local,
                 )
             # Keep most recent snapshot for any market not refreshed this pass
@@ -92,16 +96,30 @@ class OpportunityScanner:
     def _select_markets(self, markets: Dict[str, Dict]) -> Sequence[str]:
         allowed_quotes = set(self._config.settings.scanner_quote_currencies)
         filtered = []
+        skipped_inactive = 0
+        skipped_quote = 0
         for symbol, meta in markets.items():
             if not meta.get("active", True):
+                skipped_inactive += 1
                 continue
             quote = meta.get("quote")
             if quote not in allowed_quotes:
+                skipped_quote += 1
                 continue
             filtered.append((meta.get("info", {}).get("volume") or meta.get("info", {}).get("baseVolume") or 0, symbol))
         filtered.sort(reverse=True, key=lambda item: float(item[0]) if item[0] is not None else 0.0)
         limit = self._config.settings.scanner_max_markets
-        return [symbol for _, symbol in filtered[:limit]]
+        result = [symbol for _, symbol in filtered[:limit]]
+        logger.debug(
+            "[SCAN] market selection: total=%s active=%s quote_match=%s selected=%s (inactive_skipped=%s quote_skipped=%s)",
+            len(markets),
+            len(markets) - skipped_inactive,
+            len(filtered),
+            len(result),
+            skipped_inactive,
+            skipped_quote,
+        )
+        return result
 
     async def _evaluate_market(
         self,
@@ -129,11 +147,13 @@ class OpportunityScanner:
         bids = book.get("bids") or []
         asks = book.get("asks") or []
         if not bids or not asks:
+            logger.debug("[SCAN] %s %s: empty order book", exchange.upper(), symbol)
             return None
 
         best_bid_price = Decimal(str(bids[0][0]))
         best_ask_price = Decimal(str(asks[0][0]))
         if best_bid_price <= 0 or best_ask_price <= 0 or best_ask_price <= best_bid_price:
+            logger.debug("[SCAN] %s %s: invalid prices bid=%s ask=%s", exchange.upper(), symbol, best_bid_price, best_ask_price)
             return None
 
         settings = self._config.settings
@@ -228,6 +248,8 @@ class OpportunityScanner:
         quote = market_meta.get("quote") or (symbol.split("/")[1] if "/" in symbol else "")
         ticker = await self._safe_fetch_ticker(client, symbol)
         volume_usd, volume_known = self._estimate_volume_usd(market_meta, ticker, avg_bid, avg_ask)
+        if not volume_known and ticker is None:
+            logger.debug("[SCAN] %s %s: ticker fetch returned None, volume unknown", exchange.upper(), symbol)
 
         floor_bps = self._net_edge_floor(exchange)
         marker = "GREEN_CHECK"
@@ -254,6 +276,7 @@ class OpportunityScanner:
 
         volume_for_log = volume_usd.quantize(Decimal("0.01")) if volume_known else Decimal("0")
 
+        # Always log the candidate, even if it doesn't meet thresholds
         self._log_candidate(
             exchange,
             symbol,
@@ -308,7 +331,7 @@ class OpportunityScanner:
             ticker = await client.fetch_ticker(symbol)
             return ticker if isinstance(ticker, dict) else None
         except Exception as exc:
-            logger.debug("[SCAN] ticker fetch failed for %s: %s", symbol, exc)
+            logger.debug("[SCAN] ticker fetch failed for %s %s: %s", client._id.upper(), symbol, exc)
             return None
 
     def _estimate_volume_usd(
