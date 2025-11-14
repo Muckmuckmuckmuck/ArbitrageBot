@@ -50,13 +50,24 @@ class ScalperEngine:
             creds_data = self._config.venue_keys.get(exchange)
             if not creds_data:
                 raise RuntimeError(f"Missing credentials for {exchange}")
+            api_key = creds_data.get("api_key", "").strip()
+            api_secret = creds_data.get("api_secret", "").strip()
+            if not api_key or not api_secret:
+                raise RuntimeError(f"Invalid credentials for {exchange}: key or secret is empty")
             creds = ExchangeCredentials(
-                api_key=creds_data["api_key"],
-                api_secret=creds_data["api_secret"],
+                api_key=api_key,
+                api_secret=api_secret,
                 passphrase=creds_data.get("passphrase"),
             )
-            self._clients[exchange] = RestExchangeClient(exchange, creds)
-            await self._clients[exchange].load_markets()
+            try:
+                self._clients[exchange] = RestExchangeClient(exchange, creds)
+                logger.info("[STARTUP] Initializing %s client...", exchange.upper())
+                await self._clients[exchange].load_markets()
+                markets = getattr(self._clients[exchange]._client, "markets", {})  # type: ignore[attr-defined]
+                logger.info("[STARTUP] %s loaded %s markets", exchange.upper(), len(markets))
+            except Exception as exc:
+                logger.error("[STARTUP] Failed to initialize %s client: %s", exchange.upper(), exc, exc_info=True)
+                raise
         return self._clients[exchange]
 
     async def start(self) -> None:
@@ -156,24 +167,44 @@ class ScalperEngine:
             await execution.cancel_all()
 
     async def _fetch_stable_balance(self, client: RestExchangeClient, currency: str) -> Decimal:
+        """Fetch available stable currency balance (USD, USDC, etc.) for trading."""
         try:
             balance = await client.fetch_balance()
+            if not balance:
+                logger.warning("[BALANCE] Empty balance response for %s", currency)
+                return Decimal("0")
+            # Prefer 'free' (available) over 'total' (including locked)
+            free = balance.get("free") or {}
             total = balance.get("total") or {}
-            amount = Decimal(str(total.get(currency, 0)))
+            # Try free first, fallback to total
+            amount = free.get(currency) or total.get(currency) or 0
+            amount = Decimal(str(amount))
+            if amount < 0:
+                logger.warning("[BALANCE] Negative balance for %s: %s", currency, amount)
+                return Decimal("0")
             return amount
         except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("Failed to fetch balance for %s: %s", currency, exc)
+            logger.error("[BALANCE] Failed to fetch balance for %s: %s", currency, exc, exc_info=True)
             return Decimal("0")
 
     async def _fetch_base_balance(self, client: RestExchangeClient, currency: str) -> Decimal:
+        """Fetch available base currency balance (BTC, ETH, etc.) for hedging."""
         try:
             balance = await client.fetch_balance()
+            if not balance:
+                logger.warning("[BALANCE] Empty balance response for %s", currency)
+                return Decimal("0")
             free = balance.get("free") or {}
             total = balance.get("total") or {}
-            raw = free.get(currency, total.get(currency, 0))
-            return Decimal(str(raw))
+            # Prefer free (available) balance for hedging
+            raw = free.get(currency) or total.get(currency) or 0
+            amount = Decimal(str(raw))
+            if amount < 0:
+                logger.warning("[BALANCE] Negative base balance for %s: %s", currency, amount)
+                return Decimal("0")
+            return amount
         except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("Failed to fetch base balance for %s: %s", currency, exc)
+            logger.error("[BALANCE] Failed to fetch base balance for %s: %s", currency, exc, exc_info=True)
             return Decimal("0")
 
     async def _rotation_loop(self) -> None:

@@ -186,6 +186,10 @@ class ExecutionManager:
 
     async def _submit(self, side: str, amount: Decimal, price: Decimal, *, tag: str, post_only: bool = True) -> Optional[str]:
         if amount <= 0:
+            logger.debug("[EXECUTE] %s %s skipping: amount <= 0", side.upper(), self._symbol)
+            return None
+        if price <= 0:
+            logger.warning("[EXECUTE] %s %s skipping: invalid price %s", side.upper(), self._symbol, price)
             return None
         try:
             amount = self._client.amount_to_precision(self._symbol, amount)
@@ -200,7 +204,15 @@ class ExecutionManager:
                 logger.debug("[EXECUTE] %s %s amount %s below min %s", side.upper(), self._symbol, amount, min_amount)
                 return None
             if amount <= 0:
+                logger.debug("[EXECUTE] %s %s amount became 0 after precision", side.upper(), self._symbol)
                 return None
+            
+            # Validate order value meets minimum notional (if we can determine it)
+            order_value = amount * price
+            if order_value <= 0:
+                logger.warning("[EXECUTE] %s %s order value %s is invalid", side.upper(), self._symbol, order_value)
+                return None
+            
             order = await self._client.create_limit_order(self._symbol, side, amount, price, post_only=post_only)
             order_id = str(order.get("id") or order.get("order_id") or order.get("clientOrderId"))
             if order_id:
@@ -218,13 +230,31 @@ class ExecutionManager:
                     meta.setdefault("original_amount", amount)
                     meta.setdefault("created_ts", meta["created"])
                     meta.setdefault("stage", 0)
-                logger.info("[EXECUTE] %s %s amount=%s price=%s tag=%s", side.upper(), self._symbol, amount, price, tag)
+                logger.info("[EXECUTE] %s %s amount=%s price=%s value=%s tag=%s", side.upper(), self._symbol, amount, price, order_value.quantize(Decimal("0.01")), tag)
             return order_id if order_id else None
         except InsufficientFunds as exc:
-            logger.warning("[EXECUTE] %s %s insufficient funds amount=%s price=%s tag=%s", side.upper(), self._symbol, amount, price, tag)
+            logger.warning(
+                "[EXECUTE] %s %s insufficient funds amount=%s price=%s value=%s tag=%s exc=%s",
+                side.upper(),
+                self._symbol,
+                amount,
+                price,
+                (amount * price).quantize(Decimal("0.01")),
+                tag,
+                exc,
+            )
             return None
         except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("Failed to submit %s order for %s: %s", side, self._symbol, exc)
+            logger.error(
+                "[EXECUTE] Failed to submit %s order for %s amount=%s price=%s tag=%s: %s",
+                side,
+                self._symbol,
+                amount,
+                price,
+                tag,
+                exc,
+                exc_info=True,
+            )
             return None
 
     @staticmethod

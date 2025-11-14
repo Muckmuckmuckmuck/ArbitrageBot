@@ -65,15 +65,17 @@ class OpportunityScanner:
                 markets = getattr(client._client, "markets", {})  # type: ignore[attr-defined]
                 if not markets:
                     try:
+                        logger.info("[SCAN] Loading markets for %s...", venue.upper())
                         await client.load_markets()
                         markets = getattr(client._client, "markets", {})  # type: ignore[attr-defined]
+                        logger.info("[SCAN] %s loaded %s markets", venue.upper(), len(markets))
                     except Exception as exc:  # pragma: no cover - defensive
-                        logger.warning("[SCAN] load_markets failed for %s: %s", venue.upper(), exc)
+                        logger.error("[SCAN] load_markets failed for %s: %s", venue.upper(), exc, exc_info=True)
                         continue
                 if not markets:
-                    logger.warning("[SCAN] %s markets dict is empty after load", venue.upper())
+                    logger.error("[SCAN] %s markets dict is empty after load - check API credentials and network", venue.upper())
                     continue
-                logger.debug("[SCAN] %s loaded %s markets", venue.upper(), len(markets))
+                logger.info("[SCAN] %s has %s markets available", venue.upper(), len(markets))
                 candidates = self._select_markets(markets, venue)
                 logger.info("[SCAN] %s selected %s markets to evaluate", venue.upper(), len(candidates))
                 kept_local = 0
@@ -138,10 +140,18 @@ class OpportunityScanner:
             sample_symbols,
         )
         if len(result) == 0 and len(markets) > 0:
-            logger.warning(
-                "[SCAN] %s: No markets selected! Check quote currencies. Sample market quotes: %s",
+            # Show more diagnostic info for Gemini
+            sample_quotes = {s: markets.get(s, {}).get("quote", "N/A") for s in sample_symbols[:20]}
+            all_quotes = set(markets.get(s, {}).get("quote", "") for s in list(markets.keys())[:50] if markets.get(s, {}).get("quote"))
+            logger.error(
+                "[SCAN] %s: No markets selected! Check quote currencies.\n"
+                "  Allowed quotes: %s\n"
+                "  Sample market quotes: %s\n"
+                "  Unique quotes in markets: %s",
                 venue.upper(),
-                {s: markets.get(s, {}).get("quote", "N/A") for s in sample_symbols[:10]},
+                sorted(allowed_quotes),
+                sample_quotes,
+                sorted(all_quotes),
             )
         return result
 

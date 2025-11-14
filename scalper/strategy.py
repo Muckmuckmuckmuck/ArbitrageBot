@@ -59,9 +59,12 @@ class QuotePlanner:
             state.record_skip("no_depth")
             return None
 
-        balance_cap = min(cfg.order_size_usd, stable_balance)
+        # Use ALL available balance when it's less than configured order size
+        # If we have $10 and token is $30, we buy 1/3 token using all $10
+        available_capital = stable_balance
         depth_cap = depth_usd * cfg.depth_clip_fraction
-        base_cap = min(balance_cap, depth_cap)
+        # Cap to both available balance AND depth, but prioritize using all available balance
+        base_cap = min(available_capital, depth_cap)
         if base_cap <= 0:
             state.record_skip("no_depth")
             return None
@@ -74,21 +77,27 @@ class QuotePlanner:
             net_edge_local = effective_edge - total_fee_bps
             return effective_edge, net_edge_local
 
+        # Calculate tier sizes, but always respect available balance first
+        # If available_capital < order_size_usd, use all available capital
+        premium_size = min(available_capital, cfg.order_size_usd * settings.tier_premium_size_mult)
+        standard_size = min(available_capital, cfg.order_size_usd * settings.tier_standard_size_mult)
+        probe_size = min(available_capital, settings.tier_probe_size_usd, state.probe_size_usd if state.probe_size_usd > 0 else settings.tier_probe_size_usd)
+        
         tiers = [
             (
                 "premium",
                 Decimal(settings.tier_premium_edge_bps),
-                min(base_cap, cfg.order_size_usd * settings.tier_premium_size_mult),
+                min(base_cap, premium_size),
             ),
             (
                 "standard",
                 Decimal(settings.tier_standard_edge_bps),
-                min(base_cap, cfg.order_size_usd * settings.tier_standard_size_mult),
+                min(base_cap, standard_size),
             ),
             (
                 "probe",
                 Decimal(settings.tier_probe_edge_bps),
-                min(base_cap, settings.tier_probe_size_usd, state.probe_size_usd),
+                min(base_cap, probe_size),
             ),
         ]
 
@@ -100,7 +109,8 @@ class QuotePlanner:
         for tier_name, threshold, candidate in tiers:
             if candidate is None or candidate <= 0:
                 continue
-            candidate = min(candidate, base_cap, stable_balance)
+            # Ensure we never exceed available balance
+            candidate = min(candidate, available_capital, base_cap)
             if candidate < cfg.min_notional_usd:
                 continue
             eval_result = evaluate(candidate)
@@ -164,12 +174,26 @@ class QuotePlanner:
         if sell_price <= buy_price:
             sell_price = (buy_price * Decimal("1.0003")).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
 
-        order_value = selected_value
+        # Final order value: use selected value but ensure we don't exceed available balance
+        # This handles the case where token price > available balance (e.g., $10 balance, $30 token = buy 1/3 token)
+        order_value = min(selected_value, available_capital)
+        
+        # If balance is very low, use probe size
         if stable_balance < cfg.min_notional_usd * Decimal("1.5"):
-            order_value = min(order_value, settings.tier_probe_size_usd)
+            order_value = min(order_value, settings.tier_probe_size_usd, available_capital)
 
+        # Calculate token amounts: if we have $10 and token is $30, we get 0.333 tokens
         buy_size = (order_value / buy_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
         sell_size = (order_value / sell_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
+        
+        # Ensure we're using as much of available balance as possible (within precision limits)
+        if buy_size > 0 and (buy_size * buy_price) < available_capital * Decimal("0.95"):
+            # If we're using less than 95% of available balance, try to use more
+            max_buy_size = (available_capital / buy_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
+            if max_buy_size > buy_size:
+                buy_size = max_buy_size
+                order_value = buy_size * buy_price
+                sell_size = (order_value / sell_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
 
         if buy_size <= 0 or sell_size <= 0:
             state.record_skip("size_zero")
