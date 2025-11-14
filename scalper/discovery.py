@@ -108,12 +108,38 @@ class OpportunityScanner:
         skipped_quote = 0
         seen_quotes: Dict[str, int] = {}
         sample_symbols: List[str] = []
+        sample_active_values: List[Any] = []
+        
+        # For Gemini, be more lenient with active check - some markets may not have this field set correctly
+        is_gemini = venue.lower() == "gemini"
+        
         for symbol, meta in markets.items():
-            if len(sample_symbols) < 5:
+            if len(sample_symbols) < 10:
                 sample_symbols.append(symbol)
-            if not meta.get("active", True):
-                skipped_inactive += 1
-                continue
+                active_val = meta.get("active")
+                if active_val not in sample_active_values:
+                    sample_active_values.append(active_val)
+            
+            # Check active status - for Gemini, be more lenient
+            # Gemini markets may have 'active' field set incorrectly, so we check if market has required fields instead
+            if is_gemini:
+                # For Gemini: if market has base and quote, consider it tradeable
+                # Only skip if it's explicitly marked inactive AND missing required fields
+                has_required = bool(meta.get("base") and meta.get("quote"))
+                active = meta.get("active")
+                if active is False and not has_required:
+                    skipped_inactive += 1
+                    continue
+                # If missing required fields, skip regardless of active status
+                if not has_required:
+                    skipped_inactive += 1
+                    continue
+            else:
+                # Other exchanges: default to True if missing
+                if not meta.get("active", True):
+                    skipped_inactive += 1
+                    continue
+            
             quote = meta.get("quote")
             if quote:
                 seen_quotes[quote] = seen_quotes.get(quote, 0) + 1
@@ -128,7 +154,7 @@ class OpportunityScanner:
         result = [symbol for _, symbol in filtered[:limit]]
         top_quotes = sorted(seen_quotes.items(), key=lambda x: x[1], reverse=True)[:5]
         logger.info(
-            "[SCAN] market selection: total=%s active=%s quote_match=%s selected=%s (inactive_skipped=%s quote_skipped=%s allowed_quotes=%s top_quotes=%s sample_symbols=%s)",
+            "[SCAN] market selection: total=%s active=%s quote_match=%s selected=%s (inactive_skipped=%s quote_skipped=%s allowed_quotes=%s top_quotes=%s sample_symbols=%s sample_active=%s)",
             len(markets),
             len(markets) - skipped_inactive,
             len(filtered),
@@ -138,6 +164,7 @@ class OpportunityScanner:
             sorted(allowed_quotes),
             top_quotes,
             sample_symbols,
+            sample_active_values[:5],
         )
         if len(result) == 0 and len(markets) > 0:
             # Show more diagnostic info for Gemini
