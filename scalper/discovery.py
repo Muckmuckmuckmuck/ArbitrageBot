@@ -176,7 +176,12 @@ class OpportunityScanner:
             if quote_normalized not in allowed_quotes_normalized:
                 skipped_quote += 1
                 continue
-            filtered.append((meta.get("info", {}).get("volume") or meta.get("info", {}).get("baseVolume") or 0, symbol))
+            # Safely extract volume from info - handle case where info might be a list
+            info = meta.get("info", {})
+            if not isinstance(info, dict):
+                info = {}
+            volume = info.get("volume") or info.get("baseVolume") or 0
+            filtered.append((volume, symbol))
         filtered.sort(reverse=True, key=lambda item: float(item[0]) if item[0] is not None else 0.0)
         limit = self._config.settings.scanner_max_markets
         result = [symbol for _, symbol in filtered[:limit]]
