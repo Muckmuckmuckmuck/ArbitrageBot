@@ -14,14 +14,14 @@ import hashlib
 import base64
 import time
 import json
-import aiohttp
+import aiohttp  # type: ignore
 import asyncio
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
 from typing import Dict, Optional, List, Tuple, Any
 
-import ccxt
-from ccxt.base.errors import OrderNotFound, InvalidOrder, ExchangeError
+import ccxt  # type: ignore
+from ccxt.base.errors import OrderNotFound, InvalidOrder, ExchangeError  # type: ignore
 from coinbase_gemini_config import Config
 
 logger = logging.getLogger(__name__)
