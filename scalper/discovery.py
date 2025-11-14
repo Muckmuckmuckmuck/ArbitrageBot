@@ -103,7 +103,6 @@ class OpportunityScanner:
                 Decimal("0"),
                 Decimal("0"),
                 Decimal("0"),
-                Decimal("0"),
                 "order_book",
                 details=str(exc),
             )
@@ -134,7 +133,6 @@ class OpportunityScanner:
                 Decimal("0"),
                 Decimal("0"),
                 Decimal("0"),
-                Decimal("0"),
                 "no_depth",
             )
             return None
@@ -159,7 +157,6 @@ class OpportunityScanner:
                 book_value,
                 Decimal("0"),
                 Decimal("0"),
-                Decimal("0"),
                 "order_value",
             )
             return None
@@ -174,7 +171,6 @@ class OpportunityScanner:
                 Decimal("0"),
                 Decimal("0"),
                 book_value,
-                Decimal("0"),
                 Decimal("0"),
                 Decimal("0"),
                 "insufficient_depth",
