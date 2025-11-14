@@ -113,6 +113,30 @@ class OpportunityScanner:
         # For Gemini, be more lenient with active check - some markets may not have this field set correctly
         is_gemini = venue.lower() == "gemini"
         
+        def _extract_base_quote(symbol: str, meta: Dict) -> Tuple[Optional[str], Optional[str]]:
+            """Extract base and quote from metadata or symbol."""
+            base = meta.get("base")
+            quote = meta.get("quote")
+            if base and quote:
+                return base, quote
+            # Normalize symbol to uppercase for matching
+            symbol_upper = symbol.upper()
+            # Try to extract from symbol (e.g., "BTC/USD" or "BTCUSD")
+            if "/" in symbol:
+                parts = symbol.split("/")
+                if len(parts) == 2:
+                    return parts[0].upper(), parts[1].upper()
+            # Try common patterns for Gemini (e.g., "BTCUSD", "ETHUSD")
+            # Check against allowed quotes in order of length (longest first) to avoid partial matches
+            sorted_quotes = sorted(allowed_quotes, key=len, reverse=True)
+            for allowed_quote in sorted_quotes:
+                quote_upper = allowed_quote.upper()
+                if symbol_upper.endswith(quote_upper):
+                    base_part = symbol_upper[:-len(quote_upper)]
+                    if base_part and len(base_part) >= 2:  # Minimum base length
+                        return base_part, allowed_quote.upper()
+            return None, None
+        
         for symbol, meta in markets.items():
             if len(sample_symbols) < 10:
                 sample_symbols.append(symbol)
@@ -123,28 +147,32 @@ class OpportunityScanner:
             # Check active status - for Gemini, be more lenient
             # Gemini markets may have 'active' field set incorrectly, so we check if market has required fields instead
             if is_gemini:
-                # For Gemini: if market has base and quote, consider it tradeable
-                # Only skip if it's explicitly marked inactive AND missing required fields
-                has_required = bool(meta.get("base") and meta.get("quote"))
+                # For Gemini: extract base/quote from metadata or symbol
+                base, quote = _extract_base_quote(symbol, meta)
+                has_required = bool(base and quote)
                 active = meta.get("active")
+                # Only skip if explicitly marked inactive AND we can't determine base/quote
                 if active is False and not has_required:
                     skipped_inactive += 1
                     continue
-                # If missing required fields, skip regardless of active status
+                # If we can't determine base/quote from symbol either, skip
                 if not has_required:
                     skipped_inactive += 1
                     continue
+                # Use extracted quote for matching
+                quote_to_check = quote
             else:
                 # Other exchanges: default to True if missing
                 if not meta.get("active", True):
                     skipped_inactive += 1
                     continue
+                quote_to_check = meta.get("quote")
             
-            quote = meta.get("quote")
-            if quote:
-                seen_quotes[quote] = seen_quotes.get(quote, 0) + 1
+            # Use extracted quote for Gemini, metadata quote for others
+            if quote_to_check:
+                seen_quotes[quote_to_check] = seen_quotes.get(quote_to_check, 0) + 1
             # Case-insensitive quote matching
-            quote_normalized = quote.upper() if quote else ""
+            quote_normalized = quote_to_check.upper() if quote_to_check else ""
             if quote_normalized not in allowed_quotes_normalized:
                 skipped_quote += 1
                 continue
@@ -168,16 +196,38 @@ class OpportunityScanner:
         )
         if len(result) == 0 and len(markets) > 0:
             # Show more diagnostic info for Gemini
-            sample_quotes = {s: markets.get(s, {}).get("quote", "N/A") for s in sample_symbols[:20]}
-            all_quotes = set(markets.get(s, {}).get("quote", "") for s in list(markets.keys())[:50] if markets.get(s, {}).get("quote"))
+            sample_quotes = {}
+            sample_meta = {}
+            for s in sample_symbols[:20]:
+                meta = markets.get(s, {})
+                sample_quotes[s] = meta.get("quote", "N/A")
+                # Show sample metadata structure for debugging
+                sample_meta[s] = {
+                    "base": meta.get("base", "N/A"),
+                    "quote": meta.get("quote", "N/A"),
+                    "active": meta.get("active", "N/A"),
+                    "symbol": s,
+                }
+            all_quotes = set()
+            for s in list(markets.keys())[:50]:
+                meta = markets.get(s, {})
+                quote = meta.get("quote")
+                if quote:
+                    all_quotes.add(quote)
+                # Also try extracting from symbol
+                base, quote_extracted = _extract_base_quote(s, meta)
+                if quote_extracted:
+                    all_quotes.add(quote_extracted)
             logger.error(
                 "[SCAN] %s: No markets selected! Check quote currencies.\n"
                 "  Allowed quotes: %s\n"
                 "  Sample market quotes: %s\n"
+                "  Sample metadata: %s\n"
                 "  Unique quotes in markets: %s",
                 venue.upper(),
                 sorted(allowed_quotes),
                 sample_quotes,
+                sample_meta,
                 sorted(all_quotes),
             )
         return result
