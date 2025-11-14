@@ -129,9 +129,9 @@ class Telemetry:
         payload = []
         iterable = snapshots if limit is None else snapshots[:limit]
         for snapshot in iterable:
-            marker = "GREEN_CHECK" if snapshot.net_edge_bps >= floor_bps else "RED_X"
+            marker = snapshot.marker
             logger.info(
-                "[SCAN:%s] %s %s spread=%sbps net=%sbps maker_fee=%sbps taker_fee=%sbps depth_usd=%s order_value=%s volume_usd=%s score=%s",
+                "[SCAN:%s] %s %s spread=%sbps net=%sbps maker_fee=%sbps taker_fee=%sbps depth_usd=%s order_value=%s volume_usd=%s score=%s reason=%s",
                 marker,
                 snapshot.exchange.upper(),
                 snapshot.symbol,
@@ -141,8 +141,9 @@ class Telemetry:
                 snapshot.taker_fee_bps,
                 snapshot.depth_usd,
                 snapshot.order_value_usd,
-                snapshot.volume_usd,
+                snapshot.volume_usd if snapshot.volume_known else "unknown",
                 snapshot.score,
+                snapshot.reason,
             )
             payload.append(
                 {
@@ -156,6 +157,8 @@ class Telemetry:
                     "depth_usd": str(snapshot.depth_usd),
                     "order_value_usd": str(snapshot.order_value_usd),
                     "volume_usd": str(snapshot.volume_usd),
+                    "volume_known": snapshot.volume_known,
+                    "reason": snapshot.reason,
                     "score": str(snapshot.score),
                 }
             )

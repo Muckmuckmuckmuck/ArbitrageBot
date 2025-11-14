@@ -5,7 +5,7 @@ import logging
 import time
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .config import PairConfig, ScalperConfig
 from .exchange import RestExchangeClient
@@ -25,6 +25,9 @@ class PairSnapshot:
     maker_fee_bps: Decimal
     taker_fee_bps: Decimal
     volume_usd: Decimal
+    volume_known: bool
+    marker: str
+    reason: str
     order_value_usd: Decimal
     avg_bid: Decimal
     avg_ask: Decimal
@@ -60,12 +63,20 @@ class OpportunityScanner:
                         logger.debug("[SCAN] load_markets failed for %s: %s", venue, exc)
                         continue
                 candidates = self._select_markets(markets)
+                kept_local = 0
                 for symbol in candidates:
                     snapshot = await self._evaluate_market(venue, symbol, client)
                     if snapshot:
                         key = f"{venue}:{symbol}"
                         self._snapshots[key] = snapshot
                         results.append(snapshot)
+                        kept_local += 1
+                logger.debug(
+                    "[SCAN] %s evaluated=%s kept=%s",
+                    venue.upper(),
+                    len(candidates),
+                    kept_local,
+                )
             # Keep most recent snapshot for any market not refreshed this pass
             results.extend(value for key, value in self._snapshots.items() if value not in results)
             results.sort(key=lambda snap: (snap.score, snap.net_edge_bps), reverse=True)
@@ -203,20 +214,32 @@ class OpportunityScanner:
         base = market_meta.get("base") or (symbol.split("/")[0] if "/" in symbol else symbol)
         quote = market_meta.get("quote") or (symbol.split("/")[1] if "/" in symbol else "")
         ticker = await self._safe_fetch_ticker(client, symbol)
-        volume_usd = self._estimate_volume_usd(market_meta, ticker, avg_bid, avg_ask)
+        volume_usd, volume_known = self._estimate_volume_usd(market_meta, ticker, avg_bid, avg_ask)
 
         floor_bps = self._net_edge_floor(exchange)
-        marker = "GREEN_CHECK" if net_edge >= floor_bps else "RED_X"
+        marker = "GREEN_CHECK"
         reason = "ok"
-        if available_depth < settings.scanner_min_depth_usd:
-            reason = f"depth<{settings.scanner_min_depth_usd}"
-        elif volume_usd < settings.scanner_min_volume_usd:
-            reason = f"volume<{settings.scanner_min_volume_usd}"
-        elif net_edge < floor_bps:
+        skip = False
+        if net_edge < floor_bps:
+            marker = "RED_X"
             reason = f"edge<{floor_bps}"
+            skip = True
+        elif available_depth < settings.scanner_min_depth_usd:
+            marker = "RED_X"
+            reason = f"depth<{settings.scanner_min_depth_usd}"
+            skip = True
+        elif volume_known and volume_usd < settings.scanner_min_volume_usd:
+            marker = "RED_X"
+            reason = f"volume<{settings.scanner_min_volume_usd}"
+            skip = True
+        elif not volume_known:
+            marker = "WARN"
+            reason = "volume_unknown"
 
         effective_value = min(order_value_filled, available_depth)
         score = net_edge * effective_value
+
+        volume_for_log = volume_usd.quantize(Decimal("0.01")) if volume_known else Decimal("0")
 
         self._log_candidate(
             exchange,
@@ -225,12 +248,12 @@ class OpportunityScanner:
             gross_edge.quantize(Decimal("0.01")),
             net_edge.quantize(Decimal("0.01")),
             available_depth.quantize(Decimal("0.01")),
-            volume_usd.quantize(Decimal("0.01")),
+            volume_for_log,
             score.quantize(Decimal("0.01")),
             reason,
         )
 
-        if reason != "ok":
+        if skip:
             return None
 
         return PairSnapshot(
@@ -243,7 +266,10 @@ class OpportunityScanner:
             depth_usd=available_depth.quantize(Decimal("0.01")),
             maker_fee_bps=maker_fee_bps.quantize(Decimal("0.01")),
             taker_fee_bps=taker_fee_bps.quantize(Decimal("0.01")),
-            volume_usd=volume_usd.quantize(Decimal("0.01")),
+            volume_usd=volume_for_log,
+            volume_known=volume_known,
+             marker=marker,
+             reason=reason,
             order_value_usd=order_value_filled.quantize(Decimal("0.01")),
             avg_bid=avg_bid.quantize(Decimal("0.00001")),
             avg_ask=avg_ask.quantize(Decimal("0.00001")),
@@ -265,50 +291,86 @@ class OpportunityScanner:
             logger.debug("[SCAN] ticker fetch failed for %s: %s", symbol, exc)
             return None
 
-    def _estimate_volume_usd(self, market: Dict[str, any], ticker: Optional[Dict[str, Any]], bid: Decimal, ask: Decimal) -> Decimal:
+    def _estimate_volume_usd(
+        self,
+        market: Dict[str, Any],
+        ticker: Optional[Dict[str, Any]],
+        bid: Decimal,
+        ask: Decimal,
+    ) -> Tuple[Decimal, bool]:
+        def _to_decimal(value: Any) -> Optional[Decimal]:
+            if value is None:
+                return None
+            try:
+                dec = Decimal(str(value))
+                if dec > 0:
+                    return dec
+            except Exception:
+                return None
+            return None
+
+        mid = (bid + ask) / Decimal("2")
         info = market.get("info", {}) if isinstance(market, dict) else {}
-        if ticker:
-            ticker_base = ticker.get("baseVolume") or ticker.get("volume")
-            ticker_quote = ticker.get("quoteVolume")
-            ticker_usd = ticker.get("info", {}).get("volumeUsd24h") if isinstance(ticker.get("info"), dict) else None
-            try:
-                if ticker_usd is not None:
-                    return Decimal(str(ticker_usd))
-            except Exception:
-                pass
-            try:
-                if ticker_quote is not None:
-                    return Decimal(str(ticker_quote))
-            except Exception:
-                pass
-            try:
-                if ticker_base is not None:
-                    mid = (bid + ask) / Decimal("2")
-                    return Decimal(str(ticker_base)) * mid
-            except Exception:
-                pass
-        for key in ("volumeUsd24h", "volumeUsd24Hr", "volumeUsd", "usdVolume"):
-            value = info.get(key)
-            if value is not None:
-                try:
-                    return Decimal(str(value))
-                except Exception:
-                    continue
-        base_volume = info.get("volume") or info.get("baseVolume") or market.get("baseVolume")
-        if base_volume is not None:
-            try:
-                base_volume_dec = Decimal(str(base_volume))
-                mid = (bid + ask) / Decimal("2")
-                return base_volume_dec * mid
-            except Exception:
-                pass
-        quote_volume = info.get("quoteVolume") or market.get("quoteVolume")
-        if quote_volume is not None:
-            try:
-                return Decimal(str(quote_volume))
-            except Exception:
-                pass
-        return Decimal("0")
+
+        if ticker and isinstance(ticker, dict):
+            ticker_info = ticker.get("info", {}) if isinstance(ticker.get("info"), dict) else {}
+            keys_usd = [
+                "volumeUsd24h",
+                "volume_usd_24h",
+                "volume_24h_usd",
+                "volumeUsd",
+                "volumeUsd24Hr",
+                "volume_usd",
+                "volume24hUsd",
+            ]
+            for key in keys_usd:
+                candidate = _to_decimal(ticker_info.get(key))
+                if candidate:
+                    return candidate, True
+
+            keys_quote = [
+                "quoteVolume",
+                "volumeQuote",
+                "volume_24h_quote",
+                "quoteVolume24h",
+            ]
+            for key in keys_quote:
+                candidate = _to_decimal(ticker.get(key) or ticker_info.get(key))
+                if candidate:
+                    return candidate, True
+
+            keys_base = [
+                "baseVolume",
+                "volume",
+                "volume_24h",
+                "baseVolume24h",
+            ]
+            for key in keys_base:
+                base_candidate = _to_decimal(ticker.get(key) or ticker_info.get(key))
+                if base_candidate:
+                    return base_candidate * mid, True
+
+        keys_usd_info = [
+            "volumeUsd24h",
+            "volumeUsd24Hr",
+            "volumeUsd",
+            "usdVolume",
+            "volume_usd_24h",
+        ]
+        for key in keys_usd_info:
+            candidate = _to_decimal(info.get(key))
+            if candidate:
+                return candidate, True
+
+        base_volume = _to_decimal(info.get("volume") or info.get("baseVolume") or market.get("baseVolume"))
+        if base_volume:
+            return base_volume * mid, True
+
+        quote_volume = _to_decimal(info.get("quoteVolume") or market.get("quoteVolume"))
+        if quote_volume:
+            return quote_volume, True
+
+        return Decimal("0"), False
 
     def _total_value(self, levels: Sequence[Sequence[float]]) -> Decimal:
         total = Decimal("0")
@@ -425,7 +487,7 @@ class PairCatalog:
             return None
         if snapshot.depth_usd < self._config.settings.scanner_min_depth_usd:
             return None
-        if snapshot.volume_usd < self._config.settings.scanner_min_volume_usd:
+        if snapshot.volume_known and snapshot.volume_usd < self._config.settings.scanner_min_volume_usd:
             return None
         cfg = self._build_config(snapshot)
         if cfg is None:

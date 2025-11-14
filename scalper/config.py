@@ -62,7 +62,7 @@ class EngineSettings:
     slow_fill_clip_bps: int = 1
     minimum_target_edge_bps: int = 80
     scanner_interval_s: float = 45.0
-    scanner_quote_currencies: Sequence[str] = field(default_factory=lambda: ["USD", "USDC"])
+    scanner_quote_currencies: Sequence[str] = field(default_factory=lambda: ["USD", "USDC", "USDT", "GUSD"])
     scanner_max_markets: int = 40
     scanner_depth_clip_fraction: Decimal = Decimal("0.2")
     negative_fill_lookback: int = 5
