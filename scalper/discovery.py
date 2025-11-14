@@ -355,8 +355,34 @@ class OpportunityScanner:
         effective_edge = gross_edge - slippage_total_bps
         net_edge = gross_edge - total_fee_bps - slippage_total_bps
         timestamp = time.time()
-        base = market_meta.get("base") or (symbol.split("/")[0] if "/" in symbol else symbol)
-        quote = market_meta.get("quote") or (symbol.split("/")[1] if "/" in symbol else "")
+        # Extract base/quote from metadata or symbol
+        base = market_meta.get("base")
+        quote = market_meta.get("quote")
+        if not base or not quote:
+            # Try to extract from symbol
+            if "/" in symbol:
+                parts = symbol.split("/")
+                if len(parts) == 2:
+                    base = base or parts[0]
+                    quote = quote or parts[1]
+            else:
+                # Try to extract from symbol without slash (e.g., "BTCUSD")
+                symbol_upper = symbol.upper()
+                allowed_quotes = set(self._config.settings.scanner_quote_currencies)
+                sorted_quotes = sorted(allowed_quotes, key=len, reverse=True)
+                for allowed_quote in sorted_quotes:
+                    quote_upper = allowed_quote.upper()
+                    if symbol_upper.endswith(quote_upper):
+                        base_part = symbol_upper[:-len(quote_upper)]
+                        if base_part and len(base_part) >= 2:
+                            base = base or base_part
+                            quote = quote or allowed_quote.upper()
+                            break
+        # Fallback: if still no base/quote, use symbol as base
+        if not base:
+            base = symbol.split("/")[0] if "/" in symbol else symbol
+        if not quote:
+            quote = symbol.split("/")[1] if "/" in symbol and len(symbol.split("/")) > 1 else ""
         ticker = await self._safe_fetch_ticker(client, symbol)
         volume_usd, volume_known = self._estimate_volume_usd(market_meta, ticker, avg_bid, avg_ask)
         if not volume_known:
