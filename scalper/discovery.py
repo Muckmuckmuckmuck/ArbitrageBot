@@ -191,7 +191,6 @@ class OpportunityScanner:
                 depth_usd,
                 Decimal("0"),
                 Decimal("0"),
-                Decimal("0"),
                 f"depth<{settings.scanner_min_depth_usd}",
             )
             return None
