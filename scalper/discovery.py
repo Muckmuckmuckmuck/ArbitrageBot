@@ -70,7 +70,11 @@ class OpportunityScanner:
                     except Exception as exc:  # pragma: no cover - defensive
                         logger.warning("[SCAN] load_markets failed for %s: %s", venue.upper(), exc)
                         continue
-                candidates = self._select_markets(markets)
+                if not markets:
+                    logger.warning("[SCAN] %s markets dict is empty after load", venue.upper())
+                    continue
+                logger.debug("[SCAN] %s loaded %s markets", venue.upper(), len(markets))
+                candidates = self._select_markets(markets, venue)
                 logger.info("[SCAN] %s selected %s markets to evaluate", venue.upper(), len(candidates))
                 kept_local = 0
                 evaluated_count = 0
@@ -93,20 +97,27 @@ class OpportunityScanner:
             results.sort(key=lambda snap: (snap.score, snap.net_edge_bps), reverse=True)
             return results
 
-    def _select_markets(self, markets: Dict[str, Dict]) -> Sequence[str]:
+    def _select_markets(self, markets: Dict[str, Dict], venue: str) -> Sequence[str]:
         allowed_quotes = set(self._config.settings.scanner_quote_currencies)
+        # Normalize quote currencies to uppercase for case-insensitive matching
+        allowed_quotes_normalized = {q.upper() for q in allowed_quotes}
         filtered = []
         skipped_inactive = 0
         skipped_quote = 0
         seen_quotes: Dict[str, int] = {}
+        sample_symbols: List[str] = []
         for symbol, meta in markets.items():
+            if len(sample_symbols) < 5:
+                sample_symbols.append(symbol)
             if not meta.get("active", True):
                 skipped_inactive += 1
                 continue
             quote = meta.get("quote")
             if quote:
                 seen_quotes[quote] = seen_quotes.get(quote, 0) + 1
-            if quote not in allowed_quotes:
+            # Case-insensitive quote matching
+            quote_normalized = quote.upper() if quote else ""
+            if quote_normalized not in allowed_quotes_normalized:
                 skipped_quote += 1
                 continue
             filtered.append((meta.get("info", {}).get("volume") or meta.get("info", {}).get("baseVolume") or 0, symbol))
@@ -115,7 +126,7 @@ class OpportunityScanner:
         result = [symbol for _, symbol in filtered[:limit]]
         top_quotes = sorted(seen_quotes.items(), key=lambda x: x[1], reverse=True)[:5]
         logger.info(
-            "[SCAN] market selection: total=%s active=%s quote_match=%s selected=%s (inactive_skipped=%s quote_skipped=%s allowed_quotes=%s top_quotes=%s)",
+            "[SCAN] market selection: total=%s active=%s quote_match=%s selected=%s (inactive_skipped=%s quote_skipped=%s allowed_quotes=%s top_quotes=%s sample_symbols=%s)",
             len(markets),
             len(markets) - skipped_inactive,
             len(filtered),
@@ -124,7 +135,14 @@ class OpportunityScanner:
             skipped_quote,
             sorted(allowed_quotes),
             top_quotes,
+            sample_symbols,
         )
+        if len(result) == 0 and len(markets) > 0:
+            logger.warning(
+                "[SCAN] %s: No markets selected! Check quote currencies. Sample market quotes: %s",
+                venue.upper(),
+                {s: markets.get(s, {}).get("quote", "N/A") for s in sample_symbols[:10]},
+            )
         return result
 
     async def _evaluate_market(
