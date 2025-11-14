@@ -180,20 +180,8 @@ class OpportunityScanner:
         avg_bid, bid_value = bid_agg
         avg_ask, ask_value = ask_agg
 
-        depth_usd = min(bid_value, ask_value)
-        if depth_usd < settings.scanner_min_depth_usd:
-            self._log_candidate(
-                exchange,
-                symbol,
-                "RED_X",
-                Decimal("0"),
-                Decimal("0"),
-                depth_usd,
-                Decimal("0"),
-                Decimal("0"),
-                f"depth<{settings.scanner_min_depth_usd}",
-            )
-            return None
+        order_value_filled = min(bid_value, ask_value)
+        available_depth = book_value
 
         gross_edge = (avg_ask - avg_bid) / avg_bid * Decimal("10000")
 
@@ -220,14 +208,15 @@ class OpportunityScanner:
         floor_bps = self._net_edge_floor(exchange)
         marker = "GREEN_CHECK" if net_edge >= floor_bps else "RED_X"
         reason = "ok"
-        if depth_usd < settings.scanner_min_depth_usd:
+        if available_depth < settings.scanner_min_depth_usd:
             reason = f"depth<{settings.scanner_min_depth_usd}"
         elif volume_usd < settings.scanner_min_volume_usd:
             reason = f"volume<{settings.scanner_min_volume_usd}"
         elif net_edge < floor_bps:
             reason = f"edge<{floor_bps}"
 
-        score = net_edge * depth_usd
+        effective_value = min(order_value_filled, available_depth)
+        score = net_edge * effective_value
 
         self._log_candidate(
             exchange,
@@ -235,7 +224,7 @@ class OpportunityScanner:
             marker,
             gross_edge.quantize(Decimal("0.01")),
             net_edge.quantize(Decimal("0.01")),
-            depth_usd.quantize(Decimal("0.01")),
+            available_depth.quantize(Decimal("0.01")),
             volume_usd.quantize(Decimal("0.01")),
             score.quantize(Decimal("0.01")),
             reason,
@@ -251,11 +240,11 @@ class OpportunityScanner:
             quote=quote,
             spread_bps=gross_edge.quantize(Decimal("0.01")),
             net_edge_bps=net_edge.quantize(Decimal("0.01")),
-            depth_usd=depth_usd.quantize(Decimal("0.01")),
+            depth_usd=available_depth.quantize(Decimal("0.01")),
             maker_fee_bps=maker_fee_bps.quantize(Decimal("0.01")),
             taker_fee_bps=taker_fee_bps.quantize(Decimal("0.01")),
             volume_usd=volume_usd.quantize(Decimal("0.01")),
-            order_value_usd=order_value.quantize(Decimal("0.01")),
+            order_value_usd=order_value_filled.quantize(Decimal("0.01")),
             avg_bid=avg_bid.quantize(Decimal("0.00001")),
             avg_ask=avg_ask.quantize(Decimal("0.00001")),
             score=score.quantize(Decimal("0.01")),
