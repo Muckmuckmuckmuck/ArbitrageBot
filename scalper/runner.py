@@ -86,8 +86,13 @@ class ScalperEngine:
     async def _run_pair(self, pair_key: str) -> None:
         cfg = self._pair_configs[pair_key]
         client = await self._client_for(cfg.exchange)
-        poller = MarketDataPoller(client, cfg.symbol, interval_s=self._config.settings.poll_interval_s)
-        execution = ExecutionManager(client, cfg.symbol)
+        poller = MarketDataPoller(
+            client,
+            cfg.symbol,
+            self._config.settings,
+            interval_s=self._config.settings.poll_interval_s,
+        )
+        execution = ExecutionManager(client, cfg.symbol, self._config.settings)
         state = self._states[pair_key]
         await poller.start()
         try:
@@ -96,7 +101,7 @@ class ScalperEngine:
                 await self._consume_trades(client, pair, pair_key, state, execution)
                 if pair_key not in self._active_pairs:
                     await execution.cancel_all_quotes()
-                    await execution.prune_stale_hedges(self._config.settings.hedge_stale_seconds)
+                    await execution.prune_stale_hedges(self._config.settings.hedge_stage_one_seconds)
                     await asyncio.sleep(self._config.settings.poll_interval_s)
                     continue
                 snapshot = poller.latest()
@@ -113,7 +118,7 @@ class ScalperEngine:
                         assessment.reason,
                     )
                     await execution.cancel_all_quotes()
-                    await execution.prune_stale_hedges(self._config.settings.hedge_stale_seconds)
+                    await execution.prune_stale_hedges(self._config.settings.hedge_stage_one_seconds)
                     await asyncio.sleep(self._config.settings.poll_interval_s)
                     continue
 
@@ -144,7 +149,7 @@ class ScalperEngine:
                     self._telemetry.skip(pair.exchange, pair.symbol, "planner_rejected")
 
                 await execution.prune_stale_quotes(self._config.settings.stale_order_seconds)
-                await execution.prune_stale_hedges(self._config.settings.hedge_stale_seconds)
+                await execution.prune_stale_hedges(self._config.settings.hedge_stage_one_seconds)
                 await asyncio.sleep(self._config.settings.poll_interval_s)
         finally:
             await poller.stop()
@@ -218,6 +223,7 @@ class ScalperEngine:
             logger.info("[ROTATION] Active pairs -> %s", ", ".join(sorted(allowed)))
 
         self._active_pairs = allowed
+        self._telemetry.rotation(sorted(self._active_pairs), ranked, self._states)
 
     async def _consume_trades(
         self,
@@ -249,7 +255,24 @@ class ScalperEngine:
             fee_info = trade.get("fee") or {}
             fee_cost = Decimal(str(fee_info.get("cost", 0))) if fee_info else Decimal("0")
             order_ref = str(trade.get("order") or trade.get("order_id") or trade.get("clientOrderId") or "")
-            execution.mark_filled(order_ref or trade_id)
+            meta = execution.mark_filled(order_ref or trade_id)
+            if meta and meta.get("tag") in {"hedge", "hedge_taker"}:
+                expected_price = Decimal(str(meta.get("price", price))) if meta.get("price") else price
+                slip_bps = Decimal("0")
+                if expected_price > 0:
+                    slip_bps = ((price - expected_price) / expected_price) * Decimal("10000")
+                logger.info(
+                    "[SLIP] %s %s side=%s expected=%s fill=%s slip_bps=%s stage=%s",
+                    pair.exchange.upper(),
+                    pair.symbol,
+                    side,
+                    expected_price,
+                    price,
+                    slip_bps.quantize(Decimal("0.01")),
+                    meta.get("stage", 0),
+                )
+            start_ts = float(trade.get("datetime_ms") or trade.get("timestamp") or time.time() * 1000)
+            latency_ms = max(0.0, time.time() * 1000 - start_ts)
             realized, result = self._pnl.process_fill(pair_key, state, side, amount, price, fee_cost)
             if result in {"win", "loss", "flat"}:
                 self._risk.register_fill_result(state, result, realized)
@@ -259,6 +282,7 @@ class ScalperEngine:
                     cfg_step=pair.probe_step_usd,
                     cfg_max=pair.max_probe_size_usd,
                 )
+                state.register_fill(result, latency_ms, realized)
             if realized != 0:
                 logger.info(
                     "[FILL] %s %s side=%s amount=%s price=%s realized=%s",
@@ -482,16 +506,50 @@ class ScalperEngine:
             state = self._states[pair_key]
             net_edge = snapshot.net_edge_bps
             stats = self._pnl.get_stats(pair_key)
-            penalty = Decimal(stats.losses * 20 + state.skip_reasons.get("edge_target", 0) * 5)
-            if len(state.recent_realized) >= self._config.settings.negative_fill_lookback:
-                window = list(state.recent_realized)[-self._config.settings.negative_fill_lookback:]
-                if window and all(value <= 0 for value in window):
-                    penalty += Decimal("300")
-            score_value = snapshot.score - penalty * max(snapshot.order_value_usd, Decimal("1"))
-            # If cumulative PnL is strongly negative, nudge score down further
-            pnl_penalty = stats.realized
-            if pnl_penalty < 0:
-                score_value += pnl_penalty
+            penalty = Decimal(stats.losses * 15 + state.skip_reasons.get("edge_target", 0) * 5)
+
+            fill_total = max(state.fill_count, 0)
+            win_rate = Decimal("0")
+            if fill_total > 0:
+                win_rate = Decimal(state.win_count) / Decimal(fill_total)
+
+            if fill_total >= 5 and win_rate < Decimal("0.35"):
+                continue
+
+            recent_window = list(state.recent_realized)[-self._config.settings.negative_fill_lookback :]
+            if recent_window and all(val <= 0 for val in recent_window):
+                penalty += Decimal("200")
+
+            fill_prob = Decimal("0")
+            if fill_total > 0:
+                skip_penalty = (
+                    state.skip_reasons.get("edge_floor", 0)
+                    + state.skip_reasons.get("edge_target", 0)
+                    + state.skip_reasons.get("no_depth", 0)
+                    + 1
+                )
+                fill_prob = Decimal(fill_total) / Decimal(fill_total + skip_penalty)
+
+            tier_edge = Decimal("0")
+            if state.current_tier and state.current_tier in state.tier_scores:
+                tier_edge = state.tier_scores[state.current_tier]
+
+            score_core = net_edge + tier_edge
+            score_modifier = Decimal("0.5")
+            if fill_prob > 0:
+                score_modifier += fill_prob / Decimal("2")
+            if win_rate > 0:
+                score_modifier += win_rate / Decimal("3")
+
+            score_value = float(score_core * score_modifier) + float(snapshot.score) / 1000
+            score_value -= float(penalty)
+            if stats.realized < 0:
+                score_value += float(stats.realized)
+
+            time_since_fill = time.time() - state.last_fill_ts if state.last_fill_ts else None
+            if time_since_fill and time_since_fill > 900:
+                score_value *= 0.7
+
             ranked.append((float(score_value), pair_key))
         ranked.sort(reverse=True, key=lambda item: item[0])
         return ranked

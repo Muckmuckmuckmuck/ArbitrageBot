@@ -4,10 +4,11 @@ import logging
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Mapping, Iterable, Tuple
 
 from .persistence import PersistentLogger
 from .discovery import PairSnapshot
+from .state import PairRuntimeState
 
 logger = logging.getLogger(__name__)
 
@@ -131,18 +132,22 @@ class Telemetry:
         for snapshot in iterable:
             marker = snapshot.marker
             logger.info(
-                "[SCAN:%s] %s %s spread=%sbps net=%sbps maker_fee=%sbps taker_fee=%sbps depth_usd=%s order_value=%s volume_usd=%s score=%s reason=%s",
+                "[SCAN:%s] %s %s spread=%sbps gross=%sbps slip=%sbps net=%sbps maker_fee=%sbps taker_fee=%sbps depth_usd=%s top_bid=%s top_ask=%s order_value=%s volume=%s eff=%sbps reason=%s",
                 marker,
                 snapshot.exchange.upper(),
                 snapshot.symbol,
                 snapshot.spread_bps,
+                snapshot.gross_edge_bps,
+                snapshot.slippage_bps,
                 snapshot.net_edge_bps,
                 snapshot.maker_fee_bps,
                 snapshot.taker_fee_bps,
                 snapshot.depth_usd,
+                snapshot.top_bid_depth_usd,
+                snapshot.top_ask_depth_usd,
                 snapshot.order_value_usd,
                 snapshot.volume_usd if snapshot.volume_known else "unknown",
-                snapshot.score,
+                snapshot.effective_edge_bps,
                 snapshot.reason,
             )
             payload.append(
@@ -150,16 +155,73 @@ class Telemetry:
                     "exchange": snapshot.exchange,
                     "symbol": snapshot.symbol,
                     "spread_bps": str(snapshot.spread_bps),
+                    "gross_edge_bps": str(snapshot.gross_edge_bps),
+                    "slippage_bps": str(snapshot.slippage_bps),
                     "net_edge_bps": str(snapshot.net_edge_bps),
                     "marker": marker,
                     "maker_fee_bps": str(snapshot.maker_fee_bps),
                     "taker_fee_bps": str(snapshot.taker_fee_bps),
                     "depth_usd": str(snapshot.depth_usd),
+                    "top_bid_depth_usd": str(snapshot.top_bid_depth_usd),
+                    "top_ask_depth_usd": str(snapshot.top_ask_depth_usd),
                     "order_value_usd": str(snapshot.order_value_usd),
                     "volume_usd": str(snapshot.volume_usd),
                     "volume_known": snapshot.volume_known,
+                    "effective_edge_bps": str(snapshot.effective_edge_bps),
                     "reason": snapshot.reason,
                     "score": str(snapshot.score),
                 }
             )
         self._persist.write("scan", payload)
+
+    def rotation(
+        self,
+        active: Iterable[str],
+        ranked: Sequence[Tuple[float, str]],
+        states: Mapping[str, PairRuntimeState],
+        *,
+        limit: int = 5,
+    ) -> None:
+        active_list = list(active)
+        logger.info("[ROTATION] Active -> %s", ", ".join(active_list) if active_list else "none")
+
+        payload = []
+        for score, pair_key in ranked[:limit]:
+            state = states.get(pair_key)
+            if state is None:
+                continue
+            win_rate = (
+                (Decimal(state.win_count) / Decimal(state.fill_count)).quantize(Decimal("0.01"))
+                if state.fill_count
+                else Decimal("0.00")
+            )
+            marker = "ACTIVE" if pair_key in active_list else "BENCH"
+            logger.info(
+                "[ROTATION:%s] %s score=%.3f tier=%s win_rate=%s fills=%s skip=%s",
+                marker,
+                pair_key,
+                score,
+                state.current_tier,
+                win_rate,
+                state.fill_count,
+                dict(list(state.skip_reasons.items())[:3]),
+            )
+            payload.append(
+                {
+                    "pair": pair_key,
+                    "score": score,
+                    "tier": state.current_tier,
+                    "win_rate": float(win_rate),
+                    "fills": state.fill_count,
+                    "wins": state.win_count,
+                    "losses": state.loss_count,
+                    "skip": dict(state.skip_reasons),
+                }
+            )
+        self._persist.write(
+            "rotation",
+            {
+                "active": active_list,
+                "candidates": payload,
+            },
+        )

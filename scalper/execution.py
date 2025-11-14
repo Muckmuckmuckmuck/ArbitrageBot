@@ -9,6 +9,7 @@ from typing import Dict, Iterable, Optional
 from ccxt.base.errors import InsufficientFunds  # type: ignore
 from .exchange import RestExchangeClient
 from .strategy import QuoteIntent
+from .config import EngineSettings
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +17,10 @@ logger = logging.getLogger(__name__)
 class ExecutionManager:
     """Handles order submission and cancellation while remaining maker-only."""
 
-    def __init__(self, client: RestExchangeClient, symbol: str) -> None:
+    def __init__(self, client: RestExchangeClient, symbol: str, settings: EngineSettings) -> None:
         self._client = client
         self._symbol = symbol
+        self._settings = settings
         self._quote_orders: Dict[str, Dict[str, Decimal]] = {}
         self._hedge_orders: Dict[str, Dict[str, Decimal]] = {}
         self._lock = asyncio.Lock()
@@ -104,6 +106,9 @@ class ExecutionManager:
                     meta["min_price"] = min_price
                 if max_price is not None:
                     meta["max_price"] = max_price
+                meta.setdefault("original_amount", Decimal(str(amount)))
+                meta.setdefault("created_ts", meta.get("created", time.time()))
+                meta.setdefault("stage", 0)
             return order_id
 
     async def prune_stale_hedges(self, max_age: float) -> None:
@@ -121,7 +126,7 @@ class ExecutionManager:
                         await self._client.cancel_order(oid, self._symbol)
                     except Exception:
                         pass
-                    await self._reprice_hedge(meta)
+                    await self._advance_hedge(meta)
 
     async def prune_stale_quotes(self, max_age: float) -> None:
         if max_age <= 0:
@@ -135,13 +140,15 @@ class ExecutionManager:
             for oid in stale:
                 self._quote_orders.pop(oid, None)
 
-    def mark_filled(self, order_id: Optional[str]) -> None:
+    def mark_filled(self, order_id: Optional[str]) -> Optional[Dict[str, Decimal]]:
         if not order_id:
-            return
+            return None
+        meta: Optional[Dict[str, Decimal]] = None
         if order_id in self._quote_orders:
-            self._quote_orders.pop(order_id, None)
+            meta = self._quote_orders.pop(order_id, None)
         if order_id in self._hedge_orders:
-            self._hedge_orders.pop(order_id, None)
+            meta = self._hedge_orders.pop(order_id, None)
+        return meta
 
     async def flatten_inventory(
         self,
@@ -197,11 +204,20 @@ class ExecutionManager:
             order = await self._client.create_limit_order(self._symbol, side, amount, price, post_only=post_only)
             order_id = str(order.get("id") or order.get("order_id") or order.get("clientOrderId"))
             if order_id:
-                meta = {"side": side, "amount": amount, "price": price, "created": time.time()}
+                meta = {
+                    "side": side,
+                    "amount": amount,
+                    "price": price,
+                    "created": time.time(),
+                    "tag": tag,
+                }
                 if tag == "quote":
                     self._quote_orders[order_id] = meta
                 else:
                     self._hedge_orders[order_id] = meta
+                    meta.setdefault("original_amount", amount)
+                    meta.setdefault("created_ts", meta["created"])
+                    meta.setdefault("stage", 0)
                 logger.info("[EXECUTE] %s %s amount=%s price=%s tag=%s", side.upper(), self._symbol, amount, price, tag)
             return order_id if order_id else None
         except InsufficientFunds as exc:
@@ -238,37 +254,119 @@ class ExecutionManager:
             except Exception as exc:  # pragma: no cover - defensive
                 logger.debug("Cancel failed for %s order=%s: %s", self._symbol, order_id, exc)
 
-    async def _reprice_hedge(self, meta: Dict[str, Decimal]) -> None:
+    async def _advance_hedge(self, meta: Dict[str, Decimal]) -> None:
         side = str(meta.get("side", ""))
-        amount = Decimal(str(meta.get("amount", 0)))
-        if amount <= 0 or side not in {"buy", "sell"}:
+        remaining = Decimal(str(meta.get("amount", 0)))
+        if remaining <= 0 or side not in {"buy", "sell"}:
             return
+
+        created_ts = float(meta.get("created_ts", meta.get("created", time.time())))
+        stage = int(meta.get("stage", 0))
+        now = time.time()
+        elapsed = now - created_ts
+
+        best_price = await self._best_price(side)
+        if best_price is None:
+            return
+
+        min_price = meta.get("min_price")
+        max_price = meta.get("max_price")
+        if min_price is not None and side == "sell":
+            try:
+                best_price = max(best_price, Decimal(str(min_price)))
+            except Exception:
+                pass
+        if max_price is not None and side == "buy":
+            try:
+                best_price = min(best_price, Decimal(str(max_price)))
+            except Exception:
+                pass
+
+        min_amount = self._client.min_amount(self._symbol) or Decimal("0")
+        partial_ratio = self._settings.hedge_stage_partial_ratio
+        if partial_ratio < Decimal("0"):
+            partial_ratio = Decimal("0")
+        if partial_ratio > Decimal("1"):
+            partial_ratio = Decimal("1")
+
+        if stage == 0 and elapsed >= self._settings.hedge_stage_one_seconds and partial_ratio > 0:
+            taker_amount = (remaining * partial_ratio).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+            if min_amount > 0:
+                taker_amount = max(taker_amount, min_amount)
+            if taker_amount > 0 and taker_amount < remaining:
+                executed = await self._execute_taker(side, taker_amount, best_price, "stage1")
+                if executed:
+                    remaining -= taker_amount
+                    meta["stage"] = 1
+                    meta["amount"] = remaining
+                    meta["created"] = now
+                    meta["created_ts"] = created_ts
+
+        if remaining <= 0:
+            return
+
+        if elapsed >= self._settings.hedge_stage_two_seconds:
+            await self._execute_taker(side, remaining, best_price, "stage2")
+            return
+
+        new_id = await self._submit(side, remaining, best_price, tag="hedge", post_only=True)
+        if new_id:
+            new_meta = self._hedge_orders.get(new_id)
+            if new_meta is not None:
+                new_meta.setdefault("original_amount", Decimal(str(meta.get("original_amount", remaining))))
+                new_meta.setdefault("created_ts", created_ts)
+                new_meta["stage"] = meta.get("stage", stage)
+                if "min_price" in meta:
+                    new_meta["min_price"] = meta["min_price"]
+                if "max_price" in meta:
+                    new_meta["max_price"] = meta["max_price"]
+                new_meta["allow_taker"] = meta.get("allow_taker", False)
+
+    async def _best_price(self, side: str) -> Optional[Decimal]:
         try:
             book = await self._client.fetch_order_book(self._symbol, depth=1)
         except Exception as exc:  # pragma: no cover - defensive
-            logger.debug("Failed to fetch order book for hedge repricing %s: %s", self._symbol, exc)
-            return
+            logger.debug("Failed to fetch book for hedge advance %s: %s", self._symbol, exc)
+            return None
+        if side == "sell":
+            bids = book.get("bids") or []
+            if not bids:
+                return None
+            price = Decimal(str(bids[0][0]))
+        else:
+            asks = book.get("asks") or []
+            if not asks:
+                return None
+            price = Decimal(str(asks[0][0]))
+        return price if price > 0 else None
 
-        target_price = Decimal(str(meta.get("price", 0)))
+    async def _execute_taker(self, side: str, amount: Decimal, price: Decimal, stage: str) -> bool:
+        if amount <= 0 or price <= 0:
+            return False
         try:
-            if side == "sell":
-                best_bid = Decimal(str(book.get("bids", [[0]])[0][0])) if book.get("bids") else None
-                if best_bid and best_bid > 0:
-                    target_price = best_bid
-                    min_price = meta.get("min_price")
-                    if min_price is not None:
-                        target_price = max(target_price, Decimal(str(min_price)))
-            else:
-                best_ask = Decimal(str(book.get("asks", [[0]])[0][0])) if book.get("asks") else None
-                if best_ask and best_ask > 0:
-                    target_price = best_ask
-                    max_price = meta.get("max_price")
-                    if max_price is not None:
-                        target_price = min(target_price, Decimal(str(max_price)))
-        except Exception:
-            pass
-
-        allow_taker = bool(meta.get("allow_taker"))
-        order_id = await self._submit(side, amount, target_price, tag="hedge", post_only=True)
-        if order_id is None and allow_taker:
-            await self._submit(side, amount, target_price, tag="hedge", post_only=False)
+            amount = Decimal(str(self._client.amount_to_precision(self._symbol, amount)))
+            price = Decimal(str(self._client.price_to_precision(self._symbol, price)))
+            order = await self._client.create_limit_order(self._symbol, side, amount, price, post_only=False)
+            order_id = str(order.get("id") or order.get("order_id") or order.get("clientOrderId"))
+            logger.info(
+                "[HEDGE] taker %s %s amount=%s price=%s stage=%s",
+                side.upper(),
+                self._symbol,
+                amount,
+                price,
+                stage,
+            )
+            if order_id:
+                self._hedge_orders.pop(order_id, None)
+            return True
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "[HEDGE] taker_failed %s %s amount=%s price=%s stage=%s exc=%s",
+                side.upper(),
+                self._symbol,
+                amount,
+                price,
+                stage,
+                exc,
+            )
+            return False

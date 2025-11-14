@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from .config import PairConfig, ScalperConfig
+from .config import PairConfig, ScalperConfig, EngineSettings
+from .edge_utils import estimate_slippage_bps
 from .exchange import RestExchangeClient
 
 logger = logging.getLogger(__name__)
@@ -20,8 +21,14 @@ class PairSnapshot:
     base: str
     quote: str
     spread_bps: Decimal
+    gross_edge_bps: Decimal
+    slippage_bps: Decimal
+    fees_bps: Decimal
     net_edge_bps: Decimal
+    effective_edge_bps: Decimal
     depth_usd: Decimal
+    top_bid_depth_usd: Decimal
+    top_ask_depth_usd: Decimal
     maker_fee_bps: Decimal
     taker_fee_bps: Decimal
     volume_usd: Decimal
@@ -196,6 +203,9 @@ class OpportunityScanner:
 
         gross_edge = (avg_ask - avg_bid) / avg_bid * Decimal("10000")
 
+        top_bid_depth = self._total_value(bids[: settings.scanner_max_depth_levels])
+        top_ask_depth = self._total_value(asks[: settings.scanner_max_depth_levels])
+
         maker_fee_bps = Decimal(cfg.maker_fee_bps if cfg else 12)
         taker_fee_bps = Decimal(cfg.taker_fee_bps if cfg else 35)
 
@@ -209,7 +219,10 @@ class OpportunityScanner:
 
         total_fee_bps = maker_fee_bps * Decimal("2")
         buffer_bps = Decimal(cfg.slippage_buffer_bps if cfg else settings.scanner_min_spread_bps)
-        net_edge = gross_edge - total_fee_bps - buffer_bps
+        slippage_bps = estimate_slippage_bps(order_value_filled, available_depth, settings)
+        slippage_total_bps = max(slippage_bps, buffer_bps)
+        effective_edge = gross_edge - slippage_total_bps
+        net_edge = gross_edge - total_fee_bps - slippage_total_bps
         timestamp = time.time()
         base = market_meta.get("base") or (symbol.split("/")[0] if "/" in symbol else symbol)
         quote = market_meta.get("quote") or (symbol.split("/")[1] if "/" in symbol else "")
@@ -251,6 +264,7 @@ class OpportunityScanner:
             volume_for_log,
             score.quantize(Decimal("0.01")),
             reason,
+            details=f"slip={slippage_total_bps.quantize(Decimal('0.01'))} fees={total_fee_bps.quantize(Decimal('0.01'))}",
         )
 
         if skip:
@@ -262,8 +276,14 @@ class OpportunityScanner:
             base=base,
             quote=quote,
             spread_bps=gross_edge.quantize(Decimal("0.01")),
+            gross_edge_bps=gross_edge.quantize(Decimal("0.01")),
+            slippage_bps=slippage_total_bps.quantize(Decimal("0.01")),
+            fees_bps=total_fee_bps.quantize(Decimal("0.01")),
             net_edge_bps=net_edge.quantize(Decimal("0.01")),
+            effective_edge_bps=effective_edge.quantize(Decimal("0.01")),
             depth_usd=available_depth.quantize(Decimal("0.01")),
+            top_bid_depth_usd=top_bid_depth.quantize(Decimal("0.01")),
+            top_ask_depth_usd=top_ask_depth.quantize(Decimal("0.01")),
             maker_fee_bps=maker_fee_bps.quantize(Decimal("0.01")),
             taker_fee_bps=taker_fee_bps.quantize(Decimal("0.01")),
             volume_usd=volume_for_log,
@@ -371,6 +391,7 @@ class OpportunityScanner:
             return quote_volume, True
 
         return Decimal("0"), False
+
 
     def _total_value(self, levels: Sequence[Sequence[float]]) -> Decimal:
         total = Decimal("0")

@@ -38,6 +38,13 @@ class PairRuntimeState:
     recent_net_edges: Deque[Decimal] = field(default_factory=lambda: deque(maxlen=60))
     recent_realized: Deque[Decimal] = field(default_factory=lambda: deque(maxlen=20))
     skip_reasons: Dict[str, int] = field(default_factory=dict)
+    tier_scores: Dict[str, Decimal] = field(default_factory=dict)
+    current_tier: Optional[str] = None
+    fill_count: int = 0
+    win_count: int = 0
+    loss_count: int = 0
+    last_fill_latency_ms: float = 0.0
+    last_fill_ts: float = 0.0
     fast_fill_bias: Decimal = Decimal("0")
     last_quote_reason: Optional[str] = None
     hedge_failure_ts: Optional[float] = None
@@ -87,6 +94,16 @@ class PairRuntimeState:
             self.probe_successes = 0
             next_size = max(cfg_base, self.probe_size_usd - cfg_step)
             self.probe_size_usd = next_size
+
+    def register_fill(self, result: str, latency_ms: float, realized: Decimal) -> None:
+        self.fill_count += 1
+        if result == "win":
+            self.win_count += 1
+        elif result == "loss":
+            self.loss_count += 1
+        self.last_fill_latency_ms = latency_ms
+        self.last_fill_ts = time.time()
+        self.recent_realized.append(realized)
 
 
 @dataclass

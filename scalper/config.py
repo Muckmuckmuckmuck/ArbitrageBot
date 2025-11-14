@@ -55,12 +55,15 @@ class EngineSettings:
     hedge_fee_guard_bps: int = 35
     hedge_buffer_bps: int = 15
     hedge_balance_buffer_bps: int = 25
-    hedge_stale_seconds: float = 10.0
+    hedge_stale_seconds: float = 10.0  # legacy alias for stage one
+    hedge_stage_one_seconds: float = 10.0
+    hedge_stage_two_seconds: float = 18.0
+    hedge_stage_partial_ratio: Decimal = Decimal("0.5")
     hedge_force_flat_seconds: float = 18.0
     fast_fill_latency_ms: float = 450.0
     fast_fill_clip_bps: int = 3
     slow_fill_clip_bps: int = 1
-    minimum_target_edge_bps: int = 80
+    minimum_target_edge_bps: int = 10
     scanner_interval_s: float = 45.0
     scanner_quote_currencies: Sequence[str] = field(default_factory=lambda: ["USD", "USDC", "USDT", "GUSD"])
     scanner_max_markets: int = 400
@@ -75,6 +78,19 @@ class EngineSettings:
     dynamic_order_usd_min: Decimal = Decimal("3")
     dynamic_order_usd_max: Decimal = Decimal("9")
     max_dynamic_pairs: int = 10
+    scanner_max_depth_levels: int = 5
+    scanner_slippage_floor_bps: int = 10
+    scanner_slippage_cap_bps: int = 35
+    scanner_slippage_impact_exponent: Decimal = Decimal("1.3")
+    tier_premium_edge_bps: int = 30
+    tier_standard_edge_bps: int = 18
+    tier_probe_edge_bps: int = 10
+    tier_premium_size_mult: Decimal = Decimal("1.0")
+    tier_standard_size_mult: Decimal = Decimal("0.65")
+    tier_probe_size_usd: Decimal = Decimal("3")
+    tier_min_profit_bps: int = 10
+    max_bid_improve_bps: int = 10
+    max_sell_reduce_bps: int = 10
 
 
 @dataclass
