@@ -9,6 +9,13 @@ import time
 from typing import Any, Dict, Optional
 
 import ccxt  # type: ignore
+from ccxt.base.errors import (  # type: ignore
+    InsufficientFunds,
+    InvalidNonce,
+    InvalidOrder,
+    ExchangeError,
+    NetworkError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +96,8 @@ class RestExchangeClient:
         market_id: Optional[str] = None
         try:
             market_meta = self._client.market(symbol)
-        except Exception:
+        except Exception as exc:
+            logger.debug("[EXCHANGE] Failed to fetch market metadata for %s: %s", symbol, exc)
             market_meta = None
         if market_meta:
             market_symbol = market_meta.get("symbol", symbol)
@@ -105,19 +113,149 @@ class RestExchangeClient:
                 params.setdefault("symbol", symbol.replace("/", ""))
 
         async with self._order_lock:
-            return await asyncio.to_thread(
-                self._client.create_order,
-                market_symbol,
-                "limit",
-                side,
-                float(amount),
-                float(price),
-                params,
-            )
+            try:
+                return await asyncio.to_thread(
+                    self._client.create_order,
+                    market_symbol,
+                    "limit",
+                    side,
+                    float(amount),
+                    float(price),
+                    params,
+                )
+            except InvalidNonce as exc:
+                logger.error(
+                    "[EXCHANGE] InvalidNonce error for %s %s %s amount=%s price=%s: %s",
+                    self._id.upper(),
+                    symbol,
+                    side.upper(),
+                    amount,
+                    price,
+                    exc,
+                    exc_info=True,
+                )
+                raise
+            except InsufficientFunds as exc:
+                logger.warning(
+                    "[EXCHANGE] InsufficientFunds for %s %s %s amount=%s price=%s value=%s: %s",
+                    self._id.upper(),
+                    symbol,
+                    side.upper(),
+                    amount,
+                    price,
+                    (amount * price).quantize(Decimal("0.01")),
+                    exc,
+                )
+                raise
+            except InvalidOrder as exc:
+                logger.error(
+                    "[EXCHANGE] InvalidOrder for %s %s %s amount=%s price=%s params=%s: %s",
+                    self._id.upper(),
+                    symbol,
+                    side.upper(),
+                    amount,
+                    price,
+                    params,
+                    exc,
+                    exc_info=True,
+                )
+                raise
+            except ExchangeError as exc:
+                error_msg = str(exc).lower()
+                if "nonce" in error_msg or "timestamp" in error_msg:
+                    logger.error(
+                        "[EXCHANGE] Nonce/timestamp error for %s %s %s: %s",
+                        self._id.upper(),
+                        symbol,
+                        side.upper(),
+                        exc,
+                        exc_info=True,
+                    )
+                elif "insufficient" in error_msg or "balance" in error_msg:
+                    logger.warning(
+                        "[EXCHANGE] Balance error for %s %s %s amount=%s price=%s: %s",
+                        self._id.upper(),
+                        symbol,
+                        side.upper(),
+                        amount,
+                        price,
+                        exc,
+                    )
+                else:
+                    logger.error(
+                        "[EXCHANGE] ExchangeError for %s %s %s amount=%s price=%s: %s",
+                        self._id.upper(),
+                        symbol,
+                        side.upper(),
+                        amount,
+                        price,
+                        exc,
+                        exc_info=True,
+                    )
+                raise
+            except NetworkError as exc:
+                logger.warning(
+                    "[EXCHANGE] NetworkError for %s %s %s: %s",
+                    self._id.upper(),
+                    symbol,
+                    side.upper(),
+                    exc,
+                )
+                raise
+            except Exception as exc:
+                logger.error(
+                    "[EXCHANGE] Unexpected error creating %s order for %s %s amount=%s price=%s params=%s: %s",
+                    side.upper(),
+                    self._id.upper(),
+                    symbol,
+                    amount,
+                    price,
+                    params,
+                    exc,
+                    exc_info=True,
+                )
+                raise
 
     async def cancel_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
         async with self._order_lock:
-            return await asyncio.to_thread(self._client.cancel_order, order_id, symbol)
+            try:
+                return await asyncio.to_thread(self._client.cancel_order, order_id, symbol)
+            except InvalidNonce as exc:
+                logger.error(
+                    "[EXCHANGE] InvalidNonce error cancelling %s order %s on %s: %s",
+                    self._id.upper(),
+                    order_id,
+                    symbol,
+                    exc,
+                    exc_info=True,
+                )
+                raise
+            except ExchangeError as exc:
+                error_msg = str(exc).lower()
+                if "not found" in error_msg or "does not exist" in error_msg:
+                    logger.debug(
+                        "[EXCHANGE] Order %s not found on %s (may already be cancelled)",
+                        order_id,
+                        symbol,
+                    )
+                else:
+                    logger.warning(
+                        "[EXCHANGE] ExchangeError cancelling %s order %s on %s: %s",
+                        self._id.upper(),
+                        order_id,
+                        symbol,
+                        exc,
+                    )
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "[EXCHANGE] Error cancelling %s order %s on %s: %s",
+                    self._id.upper(),
+                    order_id,
+                    symbol,
+                    exc,
+                )
+                raise
 
     async def fetch_open_orders(self, symbol: Optional[str] = None) -> Any:
         return await asyncio.to_thread(self._client.fetch_open_orders, symbol)

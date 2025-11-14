@@ -369,14 +369,34 @@ class ScalperEngine:
                         )
                         continue
                     if hedge_amount > Decimal("0"):
-                        placed = await execution.place_hedge(
-                            "sell",
-                            hedge_amount,
-                            hedge_price,
-                            allow_taker=False,
-                            min_price=hedge_price,
-                        )
-                        if not placed:
+                        try:
+                            placed = await execution.place_hedge(
+                                "sell",
+                                hedge_amount,
+                                hedge_price,
+                                allow_taker=False,
+                                min_price=hedge_price,
+                            )
+                            if not placed:
+                                await self._handle_failed_hedge(
+                                    client,
+                                    execution,
+                                    pair,
+                                    state,
+                                    "sell",
+                                    hedge_amount,
+                                    hedge_price,
+                                )
+                        except Exception as exc:
+                            logger.error(
+                                "[HEDGE] Exception placing sell hedge for %s %s amount=%s price=%s: %s",
+                                pair.exchange.upper(),
+                                pair.symbol,
+                                hedge_amount,
+                                hedge_price,
+                                exc,
+                                exc_info=True,
+                            )
                             await self._handle_failed_hedge(
                                 client,
                                 execution,
@@ -426,14 +446,34 @@ class ScalperEngine:
                         continue
                     if hedge_amount > Decimal("0"):
                         allow_taker = realized > 0
-                        placed = await execution.place_hedge(
-                            "buy",
-                            hedge_amount,
-                            hedge_price,
-                            allow_taker=allow_taker,
-                            max_price=hedge_price,
-                        )
-                        if not placed:
+                        try:
+                            placed = await execution.place_hedge(
+                                "buy",
+                                hedge_amount,
+                                hedge_price,
+                                allow_taker=allow_taker,
+                                max_price=hedge_price,
+                            )
+                            if not placed:
+                                await self._handle_failed_hedge(
+                                    client,
+                                    execution,
+                                    pair,
+                                    state,
+                                    "buy",
+                                    hedge_amount,
+                                    hedge_price,
+                                )
+                        except Exception as exc:
+                            logger.error(
+                                "[HEDGE] Exception placing buy hedge for %s %s amount=%s price=%s: %s",
+                                pair.exchange.upper(),
+                                pair.symbol,
+                                hedge_amount,
+                                hedge_price,
+                                exc,
+                                exc_info=True,
+                            )
                             await self._handle_failed_hedge(
                                 client,
                                 execution,
@@ -499,14 +539,27 @@ class ScalperEngine:
 
         min_price = entry_price if side == "sell" else None
         max_price = entry_price if side == "buy" else None
-        order_id = await execution.place_hedge(
-            side,
-            amount,
-            best_price,
-            allow_taker=True,
-            min_price=min_price,
-            max_price=max_price,
-        )
+        try:
+            order_id = await execution.place_hedge(
+                side,
+                amount,
+                best_price,
+                allow_taker=True,
+                min_price=min_price,
+                max_price=max_price,
+            )
+        except Exception as exc:
+            logger.error(
+                "[HEDGE] Exception in force-flat hedge for %s %s %s amount=%s price=%s: %s",
+                pair.exchange.upper(),
+                pair.symbol,
+                side.upper(),
+                amount,
+                best_price,
+                exc,
+                exc_info=True,
+            )
+            order_id = None
         if order_id:
             state.hedge_failure_ts = None
             state.hedge_attempt_side = None
