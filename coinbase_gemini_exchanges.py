@@ -1039,7 +1039,7 @@ class CoinbaseGeminiExchangeManager:
         fetch_params: Dict[str, Any] = {}
         if params:
             fetch_params.update(params)
-
+        
         # 🔵 Add network if provided (required for ERC-20 tokens on Coinbase)
         if exchange_id == EXCHANGE_COINBASE and network:
             fetch_params["network"] = network
