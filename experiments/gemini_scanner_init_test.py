@@ -96,7 +96,7 @@ def main() -> None:
 				f"reason={reason}"
 			)
 			candidates.append((sym, net_edge_bps, depth_usd))
-		} except Exception as e:
+		except Exception as e:
 			print(f"[SCAN:ERROR] {sym} error={e}")
 
 	print("[TEST] Gemini scanner init - complete")
