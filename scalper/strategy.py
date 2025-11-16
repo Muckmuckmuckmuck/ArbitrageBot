@@ -78,10 +78,19 @@ class QuotePlanner:
             return effective_edge, net_edge_local
 
         # Calculate tier sizes, but always respect available balance first
-        # If available_capital < order_size_usd, use all available capital
+        # If available_capital < order_size_usd, use all available capital for fractional tokens
+        # Example: $10 balance, $30 token = buy 0.33 tokens using all $10
         premium_size = min(available_capital, cfg.order_size_usd * settings.tier_premium_size_mult)
         standard_size = min(available_capital, cfg.order_size_usd * settings.tier_standard_size_mult)
         probe_size = min(available_capital, settings.tier_probe_size_usd, state.probe_size_usd if state.probe_size_usd > 0 else settings.tier_probe_size_usd)
+        
+        # When balance is limited, prioritize using all available capital
+        # This allows trading fractional tokens (e.g., 0.33 BTC when you have $10 and BTC is $30)
+        if available_capital < cfg.order_size_usd:
+            # Use all available capital (capped by depth) for limited balance scenarios
+            premium_size = min(available_capital, base_cap)
+            standard_size = min(available_capital, base_cap)
+            probe_size = min(available_capital, base_cap)
         
         tiers = [
             (
@@ -176,17 +185,47 @@ class QuotePlanner:
 
         # Final order value: use selected value but ensure we don't exceed available balance
         # This handles the case where token price > available balance (e.g., $10 balance, $30 token = buy 1/3 token)
-        order_value = min(selected_value, available_capital)
+        # When balance is limited, use ALL available capital for fractional tokens
+        if available_capital < cfg.order_size_usd and selected_tier:
+            # For limited balance, try to use all available capital (capped by depth)
+            # This allows trading fractional tokens (e.g., 0.33 tokens when you have $10 and token is $30)
+            full_capital_value = min(available_capital, base_cap)
+            # Re-evaluate edge with full capital to ensure requirements still hold
+            eval_result = evaluate(full_capital_value)
+            if eval_result:
+                eff_edge_full, net_edge_full = eval_result
+                # Get the tier threshold that was selected
+                tier_threshold = Decimal(settings.tier_probe_edge_bps)
+                if selected_tier == "premium":
+                    tier_threshold = Decimal(settings.tier_premium_edge_bps)
+                elif selected_tier == "standard":
+                    tier_threshold = Decimal(settings.tier_standard_edge_bps)
+                # Only use full capital if edge requirements still hold
+                meets_tier = net_edge_full >= tier_threshold
+                if selected_tier != "probe":
+                    meets_tier = meets_tier and net_edge_full >= Decimal(settings.minimum_target_edge_bps)
+                if meets_tier and eff_edge_full >= min_profit_bps:
+                    # Edge requirements hold, use full capital for fractional tokens
+                    order_value = full_capital_value
+                else:
+                    # Edge requirements don't hold with full capital, use selected value
+                    order_value = min(selected_value, available_capital)
+            else:
+                order_value = min(selected_value, available_capital)
+        else:
+            order_value = min(selected_value, available_capital)
         
         # If balance is very low, use probe size
         if stable_balance < cfg.min_notional_usd * Decimal("1.5"):
             order_value = min(order_value, settings.tier_probe_size_usd, available_capital)
 
         # Calculate token amounts: if we have $10 and token is $30, we get 0.333 tokens
+        # This handles fractional tokens - exchanges support partial token amounts
         buy_size = (order_value / buy_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
         sell_size = (order_value / sell_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
         
         # Ensure we're using as much of available balance as possible (within precision limits)
+        # This is especially important for fractional tokens when balance is limited
         if buy_size > 0 and (buy_size * buy_price) < available_capital * Decimal("0.95"):
             # If we're using less than 95% of available balance, try to use more
             max_buy_size = (available_capital / buy_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
