@@ -284,8 +284,16 @@ class OpportunityScanner:
             logger.debug("[SCAN] %s %s: empty order book", exchange.upper(), symbol)
             return None
 
-        best_bid_price = Decimal(str(bids[0][0]))
-        best_ask_price = Decimal(str(asks[0][0]))
+        # Defensive check: ensure first level has valid price
+        try:
+            if len(bids[0]) < 2 or len(asks[0]) < 2:
+                logger.debug("[SCAN] %s %s: malformed order book levels", exchange.upper(), symbol)
+                return None
+            best_bid_price = Decimal(str(bids[0][0]))
+            best_ask_price = Decimal(str(asks[0][0]))
+        except (IndexError, ValueError, TypeError) as exc:
+            logger.debug("[SCAN] %s %s: invalid order book structure: %s", exchange.upper(), symbol, exc)
+            return None
         if best_bid_price <= 0 or best_ask_price <= 0 or best_ask_price <= best_bid_price:
             logger.debug("[SCAN] %s %s: invalid prices bid=%s ask=%s", exchange.upper(), symbol, best_bid_price, best_ask_price)
             return None
