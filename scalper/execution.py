@@ -26,7 +26,10 @@ class ExecutionManager:
         self._lock = asyncio.Lock()
 
     async def sweep_orphans(self, *, force_age_cancel_s: float = 90.0) -> None:
-        """Cancel any open exchange orders we are not tracking, and force-cancel aged ones."""
+        """
+        Cancel any open exchange orders we are not tracking, and force-cancel aged ones.
+        CRITICAL: NEVER cancel protective sell hedges (those with min_price set after a buy fill).
+        """
         async with self._lock:
             try:
                 open_orders = await self._client.fetch_open_orders(self._symbol)
@@ -46,8 +49,15 @@ class ExecutionManager:
                 if oid not in known_ids:
                     to_cancel.append(oid)
                     continue
-                # Force-cancel tracked orders older than threshold
+                # CRITICAL: NEVER cancel protective sell hedges (those with min_price set)
+                # These are protecting filled buy orders and must remain active
                 meta = self._quote_orders.get(oid) or self._hedge_orders.get(oid) or {}
+                side = str(meta.get("side", "")).lower()
+                if side == "sell" and meta.get("min_price") is not None:
+                    # This is a protective sell hedge - NEVER cancel it
+                    logger.debug("[SWEEP] Protecting sell hedge %s (min_price=%s) from cancellation", oid, meta.get("min_price"))
+                    continue
+                # Force-cancel tracked orders older than threshold (except protective hedges)
                 created = float(meta.get("created", now))
                 if force_age_cancel_s > 0 and (now - created) >= force_age_cancel_s:
                     to_cancel.append(oid)

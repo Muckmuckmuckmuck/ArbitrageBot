@@ -127,8 +127,9 @@ class ScalperEngine:
                     tracked_base = sum(lot.amount for lot in state.inventory)
                     if wallet_base > 0:
                         # Calculate min_price for protective sell (entry + fees)
-                        # Use the most recent inventory lot's price as entry
+                        hedge_price = None
                         if state.inventory:
+                            # Use the most recent inventory lot's price as entry
                             entry_price = state.inventory[-1].price  # Most recent entry
                             hedge_price = compute_hedge_price(
                                 entry_price,
@@ -136,6 +137,28 @@ class ScalperEngine:
                                 self._config.settings.hedge_fee_guard_bps,
                                 self._config.settings.hedge_buffer_bps,
                             )
+                        else:
+                            # Fallback: use current market price if we have crypto but no inventory tracking
+                            # This handles edge cases where crypto exists but wasn't properly tracked
+                            snapshot = poller.latest()
+                            if snapshot and snapshot.best_bid > 0:
+                                # Use current bid price as a conservative estimate
+                                # Add fees to ensure we're at least break-even
+                                hedge_price = snapshot.best_bid * (
+                                    Decimal("1") + 
+                                    Decimal(self._config.settings.hedge_fee_guard_bps) / Decimal("10000") +
+                                    Decimal(self._config.settings.hedge_buffer_bps) / Decimal("10000")
+                                )
+                                logger.warning(
+                                    "[SWEEPER] %s %s: Found %s %s in wallet but no inventory tracking! Using market price %s as fallback",
+                                    pair.exchange.upper(),
+                                    pair.symbol,
+                                    wallet_base,
+                                    pair.base,
+                                    hedge_price,
+                                )
+                        
+                        if hedge_price and hedge_price > 0:
                             await execution.sweep_orphaned_inventory(
                                 wallet_base,
                                 tracked_base,
