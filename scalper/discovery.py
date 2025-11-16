@@ -370,11 +370,13 @@ class OpportunityScanner:
             # Always use exchange defaults for Coinbase - market metadata is unreliable
             maker_fee_bps = Decimal("40")
             taker_fee_bps = Decimal("60")
+            logger.debug("[SCAN] %s %s: Using Coinbase defaults: maker=%s taker=%s", exchange.upper(), symbol, maker_fee_bps, taker_fee_bps)
         elif exchange_lower == "gemini":
             # Gemini: 0.1% maker, 0.35% taker
             # Always use exchange defaults for Gemini - market metadata is unreliable
             maker_fee_bps = Decimal("10")
             taker_fee_bps = Decimal("35")
+            logger.debug("[SCAN] %s %s: Using Gemini defaults: maker=%s taker=%s", exchange.upper(), symbol, maker_fee_bps, taker_fee_bps)
         else:
             # For unknown exchanges, try to use config or market metadata
             default_maker_bps = Decimal(cfg.maker_fee_bps if cfg else 12)
@@ -400,8 +402,22 @@ class OpportunityScanner:
                     taker_fee_bps = default_taker_bps
             else:
                 taker_fee_bps = default_taker_bps
+            logger.debug("[SCAN] %s %s: Using fallback fees: maker=%s taker=%s (exchange_lower=%s)", exchange.upper(), symbol, maker_fee_bps, taker_fee_bps, exchange_lower)
 
         total_fee_bps = maker_fee_bps * Decimal("2")
+        # Sanity check: Coinbase should never have 120 bps total fees (would mean 60 bps maker, which is wrong)
+        if exchange_lower.startswith("coinbase") and total_fee_bps > Decimal("85"):
+            logger.error(
+                "[SCAN] %s %s: BUG DETECTED - total_fee_bps=%s (maker_fee_bps=%s) should be 80 for Coinbase!",
+                exchange.upper(),
+                symbol,
+                total_fee_bps,
+                maker_fee_bps,
+            )
+            # Force correct value
+            maker_fee_bps = Decimal("40")
+            taker_fee_bps = Decimal("60")
+            total_fee_bps = Decimal("80")
         buffer_bps = Decimal(cfg.slippage_buffer_bps if cfg else settings.scanner_min_spread_bps)
         slippage_bps = estimate_slippage_bps(order_value_filled, available_depth, settings)
         slippage_total_bps = max(slippage_bps, buffer_bps)
