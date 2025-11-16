@@ -360,66 +360,46 @@ class OpportunityScanner:
         top_bid_depth = self._total_value(bids[: settings.scanner_max_depth_levels])
         top_ask_depth = self._total_value(asks[: settings.scanner_max_depth_levels])
 
-        # Start with config defaults
-        maker_fee_bps = Decimal(cfg.maker_fee_bps if cfg else 12)
-        taker_fee_bps = Decimal(cfg.taker_fee_bps if cfg else 35)
-
-        # Exchange-specific fee defaults (in bps) - use these as fallback if market metadata is wrong
+        # Get market metadata for base/quote extraction (needed later)
+        market_meta = getattr(client._client, "markets", {}).get(symbol, {})  # type: ignore[attr-defined]
+        
+        # Exchange-specific fee defaults (in bps) - always use these for known exchanges
         exchange_lower = exchange.lower()
         if exchange_lower.startswith("coinbase"):
             # Coinbase Advanced Trade: 0.4% maker, 0.6% taker (for volume < $10k/month)
-            default_maker_bps = Decimal("40")
-            default_taker_bps = Decimal("60")
+            # Always use exchange defaults for Coinbase - market metadata is unreliable
+            maker_fee_bps = Decimal("40")
+            taker_fee_bps = Decimal("60")
         elif exchange_lower == "gemini":
             # Gemini: 0.1% maker, 0.35% taker
-            default_maker_bps = Decimal("10")
-            default_taker_bps = Decimal("35")
+            # Always use exchange defaults for Gemini - market metadata is unreliable
+            maker_fee_bps = Decimal("10")
+            taker_fee_bps = Decimal("35")
         else:
-            default_maker_bps = Decimal("12")
-            default_taker_bps = Decimal("35")
-
-        market_meta = getattr(client._client, "markets", {}).get(symbol, {})  # type: ignore[attr-defined]
-        maker_fee = market_meta.get("maker")
-        taker_fee = market_meta.get("taker")
-        
-        # Extract fees from market metadata, but validate against exchange defaults
-        if maker_fee is not None:
-            extracted_maker_bps = Decimal(str(maker_fee)) * Decimal("10000")
-            # Use extracted fee if it's reasonable (within 2x of default), otherwise use default
-            if extracted_maker_bps > 0 and extracted_maker_bps <= default_maker_bps * Decimal("2"):
-                maker_fee_bps = extracted_maker_bps
-            else:
-                # Market metadata fee seems wrong, use exchange default
-                logger.debug(
-                    "[SCAN] %s %s: market maker fee %s bps seems incorrect, using default %s bps",
-                    exchange.upper(),
-                    symbol,
-                    extracted_maker_bps,
-                    default_maker_bps,
-                )
-                maker_fee_bps = default_maker_bps
-        else:
-            # No fee in metadata, use exchange default
-            maker_fee_bps = default_maker_bps
+            # For unknown exchanges, try to use config or market metadata
+            default_maker_bps = Decimal(cfg.maker_fee_bps if cfg else 12)
+            default_taker_bps = Decimal(cfg.taker_fee_bps if cfg else 35)
             
-        if taker_fee is not None:
-            extracted_taker_bps = Decimal(str(taker_fee)) * Decimal("10000")
-            # Use extracted fee if it's reasonable (within 2x of default), otherwise use default
-            if extracted_taker_bps > 0 and extracted_taker_bps <= default_taker_bps * Decimal("2"):
-                taker_fee_bps = extracted_taker_bps
+            maker_fee = market_meta.get("maker")
+            taker_fee = market_meta.get("taker")
+            
+            if maker_fee is not None:
+                extracted_maker_bps = Decimal(str(maker_fee)) * Decimal("10000")
+                if extracted_maker_bps > 0 and extracted_maker_bps <= default_maker_bps * Decimal("2"):
+                    maker_fee_bps = extracted_maker_bps
+                else:
+                    maker_fee_bps = default_maker_bps
             else:
-                # Market metadata fee seems wrong, use exchange default
-                logger.debug(
-                    "[SCAN] %s %s: market taker fee %s bps seems incorrect, using default %s bps",
-                    exchange.upper(),
-                    symbol,
-                    extracted_taker_bps,
-                    default_taker_bps,
-                )
+                maker_fee_bps = default_maker_bps
+                
+            if taker_fee is not None:
+                extracted_taker_bps = Decimal(str(taker_fee)) * Decimal("10000")
+                if extracted_taker_bps > 0 and extracted_taker_bps <= default_taker_bps * Decimal("2"):
+                    taker_fee_bps = extracted_taker_bps
+                else:
+                    taker_fee_bps = default_taker_bps
+            else:
                 taker_fee_bps = default_taker_bps
-        else:
-            # No fee in metadata, use exchange default
-            taker_fee_bps = default_taker_bps
 
         total_fee_bps = maker_fee_bps * Decimal("2")
         buffer_bps = Decimal(cfg.slippage_buffer_bps if cfg else settings.scanner_min_spread_bps)
