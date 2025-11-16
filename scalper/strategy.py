@@ -226,22 +226,54 @@ class QuotePlanner:
         
         # Ensure we're using as much of available balance as possible (within precision limits)
         # This is especially important for fractional tokens when balance is limited
-        if buy_size > 0 and (buy_size * buy_price) < available_capital * Decimal("0.95"):
-            # If we're using less than 95% of available balance, try to use more
-            max_buy_size = (available_capital / buy_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
+        # Use 90% buffer to account for fees, rounding, and exchange minimums
+        balance_buffer = Decimal("0.90")
+        if buy_size > 0 and (buy_size * buy_price) < available_capital * balance_buffer:
+            # If we're using less than 90% of available balance, try to use more
+            max_buy_size = ((available_capital * balance_buffer) / buy_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
             if max_buy_size > buy_size:
                 buy_size = max_buy_size
                 order_value = buy_size * buy_price
                 sell_size = (order_value / sell_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
 
+        # CRITICAL: Final validation - ensure order_value never exceeds available balance
+        # This prevents InsufficientFunds errors
+        if order_value > available_capital:
+            # Recalculate to fit within available balance
+            max_order_value = available_capital * balance_buffer
+            buy_size = (max_order_value / buy_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
+            order_value = buy_size * buy_price
+            sell_size = (order_value / sell_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
+            logger.debug(
+                "[PLAN] %s %s order_value=%s exceeded available_capital=%s, reduced to %s",
+                cfg.exchange.upper(),
+                cfg.symbol,
+                order_value,
+                available_capital,
+                order_value,
+            )
+
         if buy_size <= 0 or sell_size <= 0:
             state.record_skip("size_zero")
+            return None
+        
+        # Final sanity check: order value must be <= available balance
+        if order_value > available_capital:
+            logger.warning(
+                "[PLAN] %s %s order_value=%s still exceeds available_capital=%s after reduction, skipping",
+                cfg.exchange.upper(),
+                cfg.symbol,
+                order_value.quantize(Decimal("0.01")),
+                available_capital.quantize(Decimal("0.01")),
+            )
+            state.record_skip("balance_exceeded")
             return None
 
         state.last_quote_ts = time.time()
         state.last_quote_reason = (
             f"tier={selected_tier} net={net_edge.quantize(Decimal('0.01'))}bps "
-            f"slip={slippage_bps.quantize(Decimal('0.01'))}bps val={order_value.quantize(Decimal('0.01'))}"
+            f"slip={slippage_bps.quantize(Decimal('0.01'))}bps val={order_value.quantize(Decimal('0.01'))} "
+            f"balance={available_capital.quantize(Decimal('0.01'))}"
         )
 
         return QuoteIntent(

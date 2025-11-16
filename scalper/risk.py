@@ -31,12 +31,27 @@ class RiskManager:
             return RiskAssessment(False, f"cooldown {state.cooldown_until - now:.1f}s")
 
         if stable_balance < cfg.min_notional_usd:
-            logger.debug(
+            logger.info(
                 "[RISK] %s %s insufficient_balance: have=%s need=%s",
                 cfg.exchange.upper(),
                 cfg.symbol,
                 stable_balance.quantize(Decimal("0.01")),
                 cfg.min_notional_usd,
+            )
+            return RiskAssessment(False, "insufficient_balance")
+        
+        # Additional check: ensure we have enough balance for at least a probe order
+        # This prevents trying to place orders that will fail
+        min_required = max(cfg.min_notional_usd, self._settings.tier_probe_size_usd)
+        if stable_balance < min_required:
+            logger.info(
+                "[RISK] %s %s balance too low for trading: have=%s need=%s (min_notional=%s probe_size=%s)",
+                cfg.exchange.upper(),
+                cfg.symbol,
+                stable_balance.quantize(Decimal("0.01")),
+                min_required.quantize(Decimal("0.01")),
+                cfg.min_notional_usd,
+                self._settings.tier_probe_size_usd,
             )
             return RiskAssessment(False, "insufficient_balance")
 

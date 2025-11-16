@@ -187,13 +187,21 @@ class ScalperEngine:
                 except Exception:
                     pass
                 stable_balance = await self._fetch_stable_balance(client, pair.quote)
+                logger.debug(
+                    "[BALANCE] %s %s quote=%s balance=%s",
+                    pair.exchange.upper(),
+                    pair.symbol,
+                    pair.quote,
+                    stable_balance.quantize(Decimal("0.01")),
+                )
                 assessment = self._risk.evaluate(pair, state, stable_balance)
                 if not assessment.allowed:
                     logger.info(
-                        "[RISK] Skip %s %s reason=%s",
+                        "[RISK] Skip %s %s reason=%s balance=%s",
                         pair.exchange.upper(),
                         pair.symbol,
                         assessment.reason,
+                        stable_balance.quantize(Decimal("0.01")),
                     )
                     await execution.sweep_orphans(force_age_cancel_s=90.0)
                     await execution.cancel_all_quotes()
