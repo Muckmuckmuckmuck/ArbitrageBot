@@ -508,7 +508,12 @@ class OpportunityScanner:
             return None
 
         mid = (bid + ask) / Decimal("2")
-        info = market.get("info", {}) if isinstance(market, dict) else {}
+        # market["info"] can be non-dict (list/str) on some venues; guard it
+        if isinstance(market, dict):
+            raw_info = market.get("info")
+            info = raw_info if isinstance(raw_info, dict) else {}
+        else:
+            info = {}
 
         if ticker and isinstance(ticker, dict):
             ticker_info = ticker.get("info", {}) if isinstance(ticker.get("info"), dict) else {}
