@@ -38,7 +38,7 @@ class PairConfig:
 class EngineSettings:
     """Global controls for the scalper engine."""
 
-    poll_interval_s: float = 0.5
+    poll_interval_s: float = 0.4
     hedge_check_interval_s: float = 0.6
     stale_order_seconds: float = 10.0
     inventory_cap_multiple: Decimal = Decimal("0.9")
@@ -63,7 +63,7 @@ class EngineSettings:
     fast_fill_latency_ms: float = 450.0
     fast_fill_clip_bps: int = 3
     slow_fill_clip_bps: int = 1
-    minimum_target_edge_bps: int = 10
+    minimum_target_edge_bps: int = 60
     scanner_interval_s: float = 45.0
     scanner_quote_currencies: Sequence[str] = field(default_factory=lambda: ["USD", "USDC", "USDT", "GUSD"])
     scanner_max_markets: int = 400

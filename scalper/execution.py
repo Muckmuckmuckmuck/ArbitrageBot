@@ -25,6 +25,41 @@ class ExecutionManager:
         self._hedge_orders: Dict[str, Dict[str, Decimal]] = {}
         self._lock = asyncio.Lock()
 
+    async def sweep_orphans(self, *, force_age_cancel_s: float = 90.0) -> None:
+        """Cancel any open exchange orders we are not tracking, and force-cancel aged ones."""
+        async with self._lock:
+            try:
+                open_orders = await self._client.fetch_open_orders(self._symbol)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("[SWEEP] fetch_open_orders failed for %s: %s", self._symbol, exc)
+                return
+            if not isinstance(open_orders, list):
+                return
+            known_ids = set(self._quote_orders.keys()) | set(self._hedge_orders.keys())
+            now = time.time()
+            to_cancel: list[str] = []
+            for order in open_orders:
+                oid = str(order.get("id") or order.get("order_id") or order.get("clientOrderId") or "")
+                if not oid:
+                    continue
+                ctime = float(order.get("timestamp") or order.get("datetime_ms") or 0) / 1000.0
+                if oid not in known_ids:
+                    to_cancel.append(oid)
+                    continue
+                # Force-cancel tracked orders older than threshold
+                meta = self._quote_orders.get(oid) or self._hedge_orders.get(oid) or {}
+                created = float(meta.get("created", now))
+                if force_age_cancel_s > 0 and (now - created) >= force_age_cancel_s:
+                    to_cancel.append(oid)
+            if to_cancel:
+                await self._cancel_orders(to_cancel)
+                for oid in to_cancel:
+                    if oid in self._quote_orders:
+                        self._quote_orders.pop(oid, None)
+                    if oid in self._hedge_orders:
+                        self._hedge_orders.pop(oid, None)
+                logger.info("[SWEEP] cancelled=%s symbol=%s", len(to_cancel), self._symbol)
+
     async def sync_quotes(self, intent: QuoteIntent) -> None:
         async with self._lock:
             desired = {}

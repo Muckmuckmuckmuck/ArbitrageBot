@@ -41,6 +41,7 @@ class ScalperEngine:
         }
         self._tasks: Dict[str, asyncio.Task[None]] = {}
         self._rotation_task: Optional[asyncio.Task[None]] = None
+        self._pnl_task: Optional[asyncio.Task[None]] = None
         self._running = False
         self._enabled_pairs = self._filter_pairs(config.pairs)
         self._active_pairs: Set[str] = set()
@@ -82,6 +83,7 @@ class ScalperEngine:
             self._pair_configs[key] = pair
         await self._run_rotation_step(initial=True)
         self._rotation_task = asyncio.create_task(self._rotation_loop())
+        self._pnl_task = asyncio.create_task(self._pnl_summary_loop())
 
     async def stop(self) -> None:
         self._running = False
@@ -92,6 +94,11 @@ class ScalperEngine:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._rotation_task
             self._rotation_task = None
+        if self._pnl_task:
+            self._pnl_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._pnl_task
+            self._pnl_task = None
         await asyncio.gather(*(client.close() for client in self._clients.values()), return_exceptions=True)
 
     async def _run_pair(self, pair_key: str) -> None:
@@ -109,6 +116,8 @@ class ScalperEngine:
         try:
             while self._running:
                 pair = self._pair_configs[pair_key]
+                # Aggressively sweep stale/orphan exchange orders before any planning/sizing
+                await execution.sweep_orphans(force_age_cancel_s=90.0)
                 await self._consume_trades(client, pair, pair_key, state, execution)
                 if pair_key not in self._active_pairs:
                     await execution.cancel_all_quotes()
@@ -117,8 +126,17 @@ class ScalperEngine:
                     continue
                 snapshot = poller.latest()
                 if not snapshot:
+                    await execution.sweep_orphans(force_age_cancel_s=90.0)
                     await asyncio.sleep(self._config.settings.poll_interval_s)
                     continue
+                # Batch-cancel both sides immediately if spread collapses
+                try:
+                    if snapshot.spread_bps < (Decimal(pair.min_spread_bps) / Decimal("2")):
+                        await execution.cancel_all_quotes()
+                        await asyncio.sleep(self._config.settings.poll_interval_s)
+                        continue
+                except Exception:
+                    pass
                 stable_balance = await self._fetch_stable_balance(client, pair.quote)
                 assessment = self._risk.evaluate(pair, state, stable_balance)
                 if not assessment.allowed:
@@ -128,6 +146,7 @@ class ScalperEngine:
                         pair.symbol,
                         assessment.reason,
                     )
+                    await execution.sweep_orphans(force_age_cancel_s=90.0)
                     await execution.cancel_all_quotes()
                     await execution.prune_stale_hedges(self._config.settings.hedge_stage_one_seconds)
                     await asyncio.sleep(self._config.settings.poll_interval_s)
@@ -212,6 +231,33 @@ class ScalperEngine:
         while self._running:
             await asyncio.sleep(interval)
             await self._run_rotation_step()
+
+    async def _pnl_summary_loop(self) -> None:
+        """Emit cumulative PnL/win-rate stats per pair every 5 minutes."""
+        interval = 300.0
+        while self._running:
+            await asyncio.sleep(interval)
+            try:
+                for pair_key, state in self._states.items():
+                    stats = self._pnl.get_stats(pair_key)
+                    win_rate = (
+                        (Decimal(stats.wins) / Decimal(stats.trades)).quantize(Decimal("0.01"))
+                        if stats.trades > 0
+                        else Decimal("0")
+                    )
+                    logger.info(
+                        "[PNL] summary %s realized=%s fees=%s wins=%s losses=%s flats=%s trades=%s win_rate=%s",
+                        pair_key,
+                        stats.realized.quantize(Decimal("0.0001")),
+                        stats.fees.quantize(Decimal("0.0001")),
+                        stats.wins,
+                        stats.losses,
+                        stats.flats,
+                        stats.trades,
+                        win_rate,
+                    )
+            except Exception:
+                continue
 
     async def _run_rotation_step(self, *, initial: bool = False) -> None:
         snapshots = await self._scanner.refresh()
