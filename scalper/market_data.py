@@ -86,6 +86,10 @@ class MarketDataPoller:
                 best_ask_price, _ = asks[0]
                 bids_decimal = self._convert_levels(bids)
                 asks_decimal = self._convert_levels(asks)
+                if not bids_decimal or not asks_decimal:
+                    logger.debug("No valid depth levels after conversion for %s", self._symbol)
+                    await asyncio.sleep(self._interval_s)
+                    continue
                 bid_value = self._aggregate_value(bids_decimal)
                 ask_value = self._aggregate_value(asks_decimal)
                 top_bid_value = bids_decimal[0][0] * bids_decimal[0][1] if bids_decimal else Decimal("0")

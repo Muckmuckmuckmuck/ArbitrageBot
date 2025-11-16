@@ -352,6 +352,10 @@ class OpportunityScanner:
         avg_bid, bid_value = bid_agg
         avg_ask, ask_value = ask_agg
 
+        if avg_bid <= 0 or avg_ask <= 0:
+            logger.debug("[SCAN] %s %s: invalid avg prices bid=%s ask=%s", exchange.upper(), symbol, avg_bid, avg_ask)
+            return None
+
         order_value_filled = min(bid_value, ask_value)
         available_depth = book_value
 
