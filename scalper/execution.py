@@ -294,14 +294,37 @@ class ExecutionManager:
 
     @staticmethod
     def _orders_equivalent(existing: Dict[str, Decimal], wanted: Dict[str, Decimal]) -> bool:
+        """
+        Check if existing order matches desired order.
+        Uses lenient matching to avoid cancelling orders due to tiny market movements.
+        - Price: allows up to 5 bps (0.05%) difference
+        - Amount: allows up to 1% difference
+        """
         try:
-            price_diff = abs(Decimal(existing.get("price", 0)) - Decimal(wanted.get("price", 0)))
-            amount_diff = abs(Decimal(existing.get("amount", 0)) - Decimal(wanted.get("amount", 0)))
+            existing_price = Decimal(existing.get("price", 0))
+            wanted_price = Decimal(wanted.get("price", 0))
+            existing_amount = Decimal(existing.get("amount", 0))
+            wanted_amount = Decimal(wanted.get("amount", 0))
+            
+            if existing_price <= 0 or wanted_price <= 0:
+                return False
+            
+            # Price difference: allow up to 5 bps (0.05%) relative difference
+            # This prevents cancelling orders due to tiny market movements
+            price_diff_pct = abs(existing_price - wanted_price) / wanted_price
+            price_match = price_diff_pct <= Decimal("0.0005")  # 5 bps = 0.05%
+            
+            # Amount difference: allow up to 1% relative difference
+            # This handles rounding/precision differences
+            if wanted_amount > 0:
+                amount_diff_pct = abs(existing_amount - wanted_amount) / wanted_amount
+                amount_match = amount_diff_pct <= Decimal("0.01")  # 1%
+            else:
+                amount_match = existing_amount == wanted_amount
+            
+            return price_match and amount_match
         except Exception:
             return False
-        price_match = price_diff <= Decimal("0.00000001")
-        amount_match = amount_diff <= Decimal("0.00000001")
-        return price_match and amount_match
 
     def amount_precision(self, amount: Decimal) -> Decimal:
         return self._client.amount_to_precision(self._symbol, amount)
