@@ -147,11 +147,57 @@ class ExecutionManager:
             return order_id
 
     async def prune_stale_hedges(self, max_age: float) -> None:
+        """
+        Prune stale hedges and advance them to taker orders if needed.
+        Only cancels hedges that are truly stale (older than max_age) and need repricing.
+        """
         if max_age <= 0:
             return
         threshold = time.time() - max_age
         async with self._lock:
-            stale = [oid for oid, meta in self._hedge_orders.items() if meta.get("created", 0.0) < threshold]
+            stale = []
+            for oid, meta in list(self._hedge_orders.items()):
+                created = meta.get("created", 0.0)
+                if created < threshold:
+                    # Check if hedge price is still reasonable
+                    side = str(meta.get("side", "")).lower()
+                    hedge_price = Decimal(str(meta.get("price", 0)))
+                    if hedge_price <= 0:
+                        stale.append(oid)
+                        continue
+                    
+                    # Get current best price to see if hedge is still competitive
+                    try:
+                        best_price = await self._best_price(side)
+                        if best_price is None:
+                            # Can't check price, keep the hedge
+                            continue
+                        
+                        # For sell hedges: cancel if current bid is significantly below hedge price
+                        # (meaning price dropped, our sell hedge won't fill at current price)
+                        # For buy hedges: cancel if current ask is significantly above hedge price
+                        # (meaning price rose, our buy hedge won't fill at current price)
+                        if side == "sell":
+                            # If current bid is more than 20 bps below hedge price, hedge is stale
+                            # (price dropped, hedge won't fill - need to repost lower)
+                            if best_price < hedge_price:
+                                price_diff_pct = (hedge_price - best_price) / hedge_price
+                                if price_diff_pct > Decimal("0.002"):  # 20 bps - price dropped significantly
+                                    stale.append(oid)
+                        elif side == "buy":
+                            # If current ask is more than 20 bps above hedge price, hedge is stale
+                            # (price rose, hedge won't fill - need to repost higher)
+                            if best_price > hedge_price:
+                                price_diff_pct = (best_price - hedge_price) / hedge_price
+                                if price_diff_pct > Decimal("0.002"):  # 20 bps - price rose significantly
+                                    stale.append(oid)
+                        else:
+                            # Unknown side, cancel if old
+                            stale.append(oid)
+                    except Exception:
+                        # Error checking price, keep the hedge to be safe
+                        continue
+            
             if stale:
                 for oid in stale:
                     meta = self._hedge_orders.pop(oid, None)
@@ -159,6 +205,14 @@ class ExecutionManager:
                         continue
                     try:
                         await self._client.cancel_order(oid, self._symbol)
+                        logger.info(
+                            "[HEDGE] Cancelled stale hedge %s %s side=%s age=%.1fs price=%s",
+                            self._symbol,
+                            oid,
+                            meta.get("side"),
+                            time.time() - meta.get("created", time.time()),
+                            meta.get("price"),
+                        )
                     except Exception:
                         pass
                     await self._advance_hedge(meta)
@@ -391,6 +445,30 @@ class ExecutionManager:
                     meta["created_ts"] = created_ts
 
         if remaining <= 0:
+            return
+
+        # Check if best_price violates min/max constraints (would be unprofitable)
+        if min_price is not None and side == "sell" and best_price < min_price:
+            # Price dropped too much - force taker to exit at best available price
+            logger.warning(
+                "[HEDGE] %s %s price dropped below min_price (min=%s best=%s), forcing taker exit",
+                side.upper(),
+                self._symbol,
+                min_price,
+                best_price,
+            )
+            await self._execute_taker(side, remaining, best_price, "price_drop")
+            return
+        if max_price is not None and side == "buy" and best_price > max_price:
+            # Price rose too much - force taker to exit at best available price
+            logger.warning(
+                "[HEDGE] %s %s price rose above max_price (max=%s best=%s), forcing taker exit",
+                side.upper(),
+                self._symbol,
+                max_price,
+                best_price,
+            )
+            await self._execute_taker(side, remaining, best_price, "price_rise")
             return
 
         if elapsed >= self._settings.hedge_stage_two_seconds:

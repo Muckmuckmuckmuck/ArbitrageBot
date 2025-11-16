@@ -55,9 +55,9 @@ class EngineSettings:
     hedge_fee_guard_bps: int = 35
     hedge_buffer_bps: int = 15
     hedge_balance_buffer_bps: int = 25
-    hedge_stale_seconds: float = 10.0  # legacy alias for stage one
-    hedge_stage_one_seconds: float = 10.0
-    hedge_stage_two_seconds: float = 18.0
+    hedge_stale_seconds: float = 30.0  # legacy alias for stage one
+    hedge_stage_one_seconds: float = 30.0  # Increased from 10s - hedges need more time to fill
+    hedge_stage_two_seconds: float = 60.0  # Increased from 18s - give hedges more time before forcing taker
     hedge_stage_partial_ratio: Decimal = Decimal("0.5")
     hedge_force_flat_seconds: float = 18.0
     fast_fill_latency_ms: float = 450.0
