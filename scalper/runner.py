@@ -273,25 +273,58 @@ class ScalperEngine:
             if cfg and key not in self._pair_configs:
                 self._pair_configs[key] = cfg
 
-        ranked = self._score_pairs(snapshots)
+        # Group snapshots by exchange for per-exchange ranking
+        snapshots_by_exchange: Dict[str, List[PairSnapshot]] = {}
+        for snapshot in snapshots:
+            exchange = snapshot.exchange.lower()
+            if exchange not in snapshots_by_exchange:
+                snapshots_by_exchange[exchange] = []
+            snapshots_by_exchange[exchange].append(snapshot)
+
+        # Rank pairs per exchange and select top N from each
         allowed: Set[str] = set()
-        for _, pair_key in ranked:
-            snapshot = snapshot_map.get(pair_key)
-            if not snapshot:
-                continue
-            if snapshot.score <= 0:
-                continue
-            cfg = self._pair_configs.get(pair_key)
-            if cfg is None:
-                cfg = self._catalog.get_by_key(pair_key)
-                if cfg:
-                    self._pair_configs[pair_key] = cfg
-            if cfg is None:
-                continue
-            await self._ensure_pair_task(pair_key, cfg)
-            allowed.add(pair_key)
-            if len(allowed) >= self._config.settings.max_active_pairs:
-                break
+        all_ranked: List[Tuple[float, str]] = []
+        max_per_exchange = 5  # Top 5 per exchange
+        
+        for exchange, exchange_snapshots in snapshots_by_exchange.items():
+            exchange_ranked = self._score_pairs(exchange_snapshots)
+            all_ranked.extend(exchange_ranked)
+            
+            logger.info(
+                "[ROTATION] %s ranked %s pairs, selecting top %s",
+                exchange.upper(),
+                len(exchange_ranked),
+                min(max_per_exchange, len(exchange_ranked)),
+            )
+            
+            # Select top N pairs from this exchange
+            exchange_count = 0
+            for _, pair_key in exchange_ranked:
+                if exchange_count >= max_per_exchange:
+                    break
+                snapshot = snapshot_map.get(pair_key)
+                if not snapshot:
+                    continue
+                if snapshot.score <= 0:
+                    continue
+                cfg = self._pair_configs.get(pair_key)
+                if cfg is None:
+                    cfg = self._catalog.get_by_key(pair_key)
+                    if cfg:
+                        self._pair_configs[pair_key] = cfg
+                if cfg is None:
+                    continue
+                await self._ensure_pair_task(pair_key, cfg)
+                allowed.add(pair_key)
+                exchange_count += 1
+                
+            if exchange_count > 0:
+                selected_pairs = [pair_key for _, pair_key in exchange_ranked[:exchange_count]]
+                logger.info(
+                    "[ROTATION] %s selected: %s",
+                    exchange.upper(),
+                    ", ".join(selected_pairs),
+                )
 
         if not allowed:
             if initial or self._active_pairs:
@@ -300,7 +333,9 @@ class ScalperEngine:
             logger.info("[ROTATION] Active pairs -> %s", ", ".join(sorted(allowed)))
 
         self._active_pairs = allowed
-        self._telemetry.rotation(sorted(self._active_pairs), ranked, self._states)
+        # Sort all_ranked for telemetry (combined view)
+        all_ranked.sort(reverse=True, key=lambda item: item[0])
+        self._telemetry.rotation(sorted(self._active_pairs), all_ranked, self._states)
 
     async def _consume_trades(
         self,

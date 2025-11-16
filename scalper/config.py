@@ -106,9 +106,9 @@ def build_default_config(venue_keys: Dict[str, Dict[str, str]]) -> ScalperConfig
     """Helper to produce a conservative default configuration."""
 
     default_pairs: List[PairConfig] = [
-        PairConfig(exchange="coinbase", symbol="BTC/USD", base="BTC", quote="USD", target_edge_bps=90, maker_fee_bps=6, taker_fee_bps=20),
-        PairConfig(exchange="coinbase", symbol="ETH/USD", base="ETH", quote="USD", target_edge_bps=90, maker_fee_bps=6, taker_fee_bps=20),
-        PairConfig(exchange="gemini", symbol="BTC/USD", base="BTC", quote="USD", target_edge_bps=95, maker_fee_bps=8, taker_fee_bps=35),
+        PairConfig(exchange="coinbase", symbol="BTC/USD", base="BTC", quote="USD", target_edge_bps=90, maker_fee_bps=40, taker_fee_bps=60),
+        PairConfig(exchange="coinbase", symbol="ETH/USD", base="ETH", quote="USD", target_edge_bps=90, maker_fee_bps=40, taker_fee_bps=60),
+        PairConfig(exchange="gemini", symbol="BTC/USD", base="BTC", quote="USD", target_edge_bps=95, maker_fee_bps=10, taker_fee_bps=35),
         PairConfig(exchange="gemini", symbol="ETH/USD", base="ETH", quote="USD", target_edge_bps=95, maker_fee_bps=10, taker_fee_bps=40),
     ]
     return ScalperConfig(venue_keys=venue_keys, pairs=default_pairs)

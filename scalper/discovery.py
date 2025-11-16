@@ -55,13 +55,16 @@ class OpportunityScanner:
         async with self._lock:
             results: List[PairSnapshot] = []
             exchanges = list(self._config.venue_keys.keys())
-            logger.info("[SCAN] Starting refresh for exchanges: %s", ", ".join(ex.upper() for ex in exchanges))
-            for venue in exchanges:
+            logger.info("[SCAN] Starting concurrent refresh for exchanges: %s", ", ".join(ex.upper() for ex in exchanges))
+            
+            async def _scan_exchange(venue: str) -> List[PairSnapshot]:
+                """Scan a single exchange and return its snapshots."""
+                exchange_results: List[PairSnapshot] = []
                 try:
                     client = await self._client_getter(venue)
                 except Exception as exc:
                     logger.warning("[SCAN] unable to init client for %s: %s", venue.upper(), exc)
-                    continue
+                    return exchange_results
                 markets = getattr(client._client, "markets", {})  # type: ignore[attr-defined]
                 if not markets:
                     try:
@@ -71,10 +74,10 @@ class OpportunityScanner:
                         logger.info("[SCAN] %s loaded %s markets", venue.upper(), len(markets))
                     except Exception as exc:  # pragma: no cover - defensive
                         logger.error("[SCAN] load_markets failed for %s: %s", venue.upper(), exc, exc_info=True)
-                        continue
+                        return exchange_results
                 if not markets:
                     logger.error("[SCAN] %s markets dict is empty after load - check API credentials and network", venue.upper())
-                    continue
+                    return exchange_results
                 logger.info("[SCAN] %s has %s markets available", venue.upper(), len(markets))
                 candidates = self._select_markets(markets, venue)
                 logger.info("[SCAN] %s selected %s markets to evaluate", venue.upper(), len(candidates))
@@ -86,7 +89,7 @@ class OpportunityScanner:
                     if snapshot:
                         key = f"{venue}:{symbol}"
                         self._snapshots[key] = snapshot
-                        results.append(snapshot)
+                        exchange_results.append(snapshot)
                         kept_local += 1
                 logger.info(
                     "[SCAN] %s evaluated=%s kept=%s",
@@ -94,9 +97,24 @@ class OpportunityScanner:
                     evaluated_count,
                     kept_local,
                 )
+                return exchange_results
+            
+            # Scan all exchanges concurrently
+            exchange_tasks = [_scan_exchange(venue) for venue in exchanges]
+            exchange_results_list = await asyncio.gather(*exchange_tasks, return_exceptions=True)
+            
+            # Collect results from all exchanges
+            for idx, exchange_result in enumerate(exchange_results_list):
+                if isinstance(exchange_result, Exception):
+                    logger.error("[SCAN] Exception scanning %s: %s", exchanges[idx].upper(), exchange_result, exc_info=True)
+                    continue
+                if isinstance(exchange_result, list):
+                    results.extend(exchange_result)
+            
             # Keep most recent snapshot for any market not refreshed this pass
             results.extend(value for key, value in self._snapshots.items() if value not in results)
-            results.sort(key=lambda snap: (snap.score, snap.net_edge_bps), reverse=True)
+            # Sort by exchange first, then by score/net_edge (per-exchange ranking will be done in runner)
+            results.sort(key=lambda snap: (snap.exchange, -snap.score, -snap.net_edge_bps))
             return results
 
     def _select_markets(self, markets: Dict[str, Dict], venue: str) -> Sequence[str]:
@@ -342,16 +360,66 @@ class OpportunityScanner:
         top_bid_depth = self._total_value(bids[: settings.scanner_max_depth_levels])
         top_ask_depth = self._total_value(asks[: settings.scanner_max_depth_levels])
 
+        # Start with config defaults
         maker_fee_bps = Decimal(cfg.maker_fee_bps if cfg else 12)
         taker_fee_bps = Decimal(cfg.taker_fee_bps if cfg else 35)
+
+        # Exchange-specific fee defaults (in bps) - use these as fallback if market metadata is wrong
+        exchange_lower = exchange.lower()
+        if exchange_lower.startswith("coinbase"):
+            # Coinbase Advanced Trade: 0.4% maker, 0.6% taker (for volume < $10k/month)
+            default_maker_bps = Decimal("40")
+            default_taker_bps = Decimal("60")
+        elif exchange_lower == "gemini":
+            # Gemini: 0.1% maker, 0.35% taker
+            default_maker_bps = Decimal("10")
+            default_taker_bps = Decimal("35")
+        else:
+            default_maker_bps = Decimal("12")
+            default_taker_bps = Decimal("35")
 
         market_meta = getattr(client._client, "markets", {}).get(symbol, {})  # type: ignore[attr-defined]
         maker_fee = market_meta.get("maker")
         taker_fee = market_meta.get("taker")
+        
+        # Extract fees from market metadata, but validate against exchange defaults
         if maker_fee is not None:
-            maker_fee_bps = Decimal(str(maker_fee)) * Decimal("10000")
+            extracted_maker_bps = Decimal(str(maker_fee)) * Decimal("10000")
+            # Use extracted fee if it's reasonable (within 2x of default), otherwise use default
+            if extracted_maker_bps > 0 and extracted_maker_bps <= default_maker_bps * Decimal("2"):
+                maker_fee_bps = extracted_maker_bps
+            else:
+                # Market metadata fee seems wrong, use exchange default
+                logger.debug(
+                    "[SCAN] %s %s: market maker fee %s bps seems incorrect, using default %s bps",
+                    exchange.upper(),
+                    symbol,
+                    extracted_maker_bps,
+                    default_maker_bps,
+                )
+                maker_fee_bps = default_maker_bps
+        else:
+            # No fee in metadata, use exchange default
+            maker_fee_bps = default_maker_bps
+            
         if taker_fee is not None:
-            taker_fee_bps = Decimal(str(taker_fee)) * Decimal("10000")
+            extracted_taker_bps = Decimal(str(taker_fee)) * Decimal("10000")
+            # Use extracted fee if it's reasonable (within 2x of default), otherwise use default
+            if extracted_taker_bps > 0 and extracted_taker_bps <= default_taker_bps * Decimal("2"):
+                taker_fee_bps = extracted_taker_bps
+            else:
+                # Market metadata fee seems wrong, use exchange default
+                logger.debug(
+                    "[SCAN] %s %s: market taker fee %s bps seems incorrect, using default %s bps",
+                    exchange.upper(),
+                    symbol,
+                    extracted_taker_bps,
+                    default_taker_bps,
+                )
+                taker_fee_bps = default_taker_bps
+        else:
+            # No fee in metadata, use exchange default
+            taker_fee_bps = default_taker_bps
 
         total_fee_bps = maker_fee_bps * Decimal("2")
         buffer_bps = Decimal(cfg.slippage_buffer_bps if cfg else settings.scanner_min_spread_bps)
