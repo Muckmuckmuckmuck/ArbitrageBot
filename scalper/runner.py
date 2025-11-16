@@ -713,13 +713,25 @@ class ScalperEngine:
             return None
         if side == "sell":
             bids = book.get("bids") or []
-            if not bids:
+            if not bids or len(bids) == 0:
                 return None
-            return Decimal(str(bids[0][0]))
+            try:
+                price = Decimal(str(bids[0][0]))
+                if price <= 0:
+                    return None
+                return price
+            except (IndexError, ValueError, TypeError):
+                return None
         asks = book.get("asks") or []
-        if not asks:
+        if not asks or len(asks) == 0:
             return None
-        return Decimal(str(asks[0][0]))
+        try:
+            price = Decimal(str(asks[0][0]))
+            if price <= 0:
+                return None
+            return price
+        except (IndexError, ValueError, TypeError):
+            return None
 
     def _score_pairs(self, snapshots: Sequence[PairSnapshot]) -> List[Tuple[float, str]]:
         ranked: List[Tuple[float, str]] = []

@@ -603,15 +603,25 @@ class ExecutionManager:
             return None
         if side == "sell":
             bids = book.get("bids") or []
-            if not bids:
+            if not bids or len(bids) == 0:
                 return None
-            price = Decimal(str(bids[0][0]))
+            try:
+                price = Decimal(str(bids[0][0]))
+            except (IndexError, ValueError, TypeError):
+                return None
+            if price <= 0:
+                return None
         else:
             asks = book.get("asks") or []
-            if not asks:
+            if not asks or len(asks) == 0:
                 return None
-            price = Decimal(str(asks[0][0]))
-        return price if price > 0 else None
+            try:
+                price = Decimal(str(asks[0][0]))
+            except (IndexError, ValueError, TypeError):
+                return None
+            if price <= 0:
+                return None
+        return price
 
     async def _execute_taker(self, side: str, amount: Decimal, price: Decimal, stage: str) -> bool:
         if amount <= 0 or price <= 0:

@@ -432,8 +432,11 @@ class OpportunityScanner:
             if "/" in symbol:
                 parts = symbol.split("/")
                 if len(parts) == 2:
-                    base = base or parts[0]
-                    quote = quote or parts[1]
+                    # Only set if not already set from market_meta
+                    if not base:
+                        base = parts[0].strip()
+                    if not quote:
+                        quote = parts[1].strip()
             else:
                 # Try to extract from symbol without slash (e.g., "BTCUSD")
                 symbol_upper = symbol.upper()

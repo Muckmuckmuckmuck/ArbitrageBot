@@ -163,6 +163,11 @@ class QuotePlanner:
         buy_price = snapshot.best_bid
         sell_price = snapshot.best_ask
 
+        # Validate prices are positive
+        if buy_price <= 0 or sell_price <= 0:
+            state.record_skip("invalid_prices")
+            return None
+
         available_adjust = net_edge - min_profit_bps
         if available_adjust > 0:
             buy_adjust = min(available_adjust / Decimal("2"), Decimal(settings.max_bid_improve_bps))
