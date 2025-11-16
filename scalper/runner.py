@@ -119,6 +119,32 @@ class ScalperEngine:
                 # Aggressively sweep stale/orphan exchange orders before any planning/sizing
                 await execution.sweep_orphans(force_age_cancel_s=90.0)
                 await self._consume_trades(client, pair, pair_key, state, execution)
+                
+                # CRITICAL: Sweep for orphaned inventory (crypto without sell orders)
+                # This ensures we never have crypto sitting in the account unprotected
+                try:
+                    wallet_base = await self._fetch_base_balance(client, pair.base)
+                    tracked_base = sum(lot.amount for lot in state.inventory)
+                    if wallet_base > 0:
+                        # Calculate min_price for protective sell (entry + fees)
+                        # Use the most recent inventory lot's price as entry
+                        if state.inventory:
+                            entry_price = state.inventory[-1].price  # Most recent entry
+                            hedge_price = compute_hedge_price(
+                                entry_price,
+                                "buy",  # We bought, so we need to sell
+                                self._config.settings.hedge_fee_guard_bps,
+                                self._config.settings.hedge_buffer_bps,
+                            )
+                            await execution.sweep_orphaned_inventory(
+                                wallet_base,
+                                tracked_base,
+                                hedge_price,
+                                pair.min_notional_usd,
+                            )
+                except Exception as exc:
+                    logger.debug("[SWEEPER] Error sweeping orphaned inventory for %s %s: %s", pair.exchange.upper(), pair.symbol, exc)
+                
                 if pair_key not in self._active_pairs:
                     await execution.cancel_all_quotes()
                     await execution.prune_stale_hedges(self._config.settings.hedge_stage_one_seconds)

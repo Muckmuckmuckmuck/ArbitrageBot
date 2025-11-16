@@ -60,6 +60,77 @@ class ExecutionManager:
                         self._hedge_orders.pop(oid, None)
                 logger.info("[SWEEP] cancelled=%s symbol=%s", len(to_cancel), self._symbol)
 
+    async def sweep_orphaned_inventory(
+        self,
+        wallet_base: Decimal,
+        tracked_inventory: Decimal,
+        min_price: Decimal,
+        pair_min_notional: Decimal,
+    ) -> Optional[str]:
+        """
+        Sweep for crypto in wallet without an active sell order.
+        If crypto is found without a protective sell order, place one immediately.
+        Returns order_id if placed, None otherwise.
+        """
+        if wallet_base <= 0:
+            return None
+        
+        # Check if we have active sell hedge orders
+        async with self._lock:
+            active_sell_hedges = [
+                (oid, meta)
+                for oid, meta in self._hedge_orders.items()
+                if str(meta.get("side", "")).lower() == "sell"
+            ]
+            total_hedged = sum(Decimal(str(meta.get("amount", 0))) for _, meta in active_sell_hedges)
+            
+            # Calculate unhedged inventory
+            unhedged = wallet_base - total_hedged
+            if unhedged <= 0:
+                return None
+            
+            # Check if unhedged amount meets minimum notional
+            unhedged_notional = unhedged * min_price
+            if unhedged_notional < pair_min_notional:
+                logger.debug(
+                    "[SWEEPER] Unhedged inventory %s %s (value=%s) below min_notional=%s, skipping",
+                    self._symbol,
+                    unhedged,
+                    unhedged_notional,
+                    pair_min_notional,
+                )
+                return None
+            
+            # We have unhedged crypto - place a protective sell order immediately
+            # Use min_price to ensure we're profitable
+            amount = self._client.amount_to_precision(self._symbol, unhedged)
+            if amount <= 0:
+                return None
+            
+            logger.warning(
+                "[SWEEPER] Found unhedged inventory %s %s (value=%s) without sell order! Placing protective sell immediately.",
+                self._symbol,
+                amount,
+                unhedged_notional,
+            )
+            
+            # Place sell hedge at min_price to protect the position
+            order_id = await self._submit("sell", amount, min_price, tag="hedge", post_only=True)
+            if order_id and order_id in self._hedge_orders:
+                meta = self._hedge_orders[order_id]
+                meta["min_price"] = min_price  # Mark as protective hedge
+                meta.setdefault("original_amount", amount)
+                meta.setdefault("created_ts", meta.get("created", time.time()))
+                meta.setdefault("stage", 0)
+                logger.info(
+                    "[SWEEPER] Placed protective sell order %s for %s %s at price %s",
+                    order_id,
+                    self._symbol,
+                    amount,
+                    min_price,
+                )
+            return order_id
+
     async def sync_quotes(self, intent: QuoteIntent) -> None:
         async with self._lock:
             desired = {}
@@ -149,6 +220,7 @@ class ExecutionManager:
     async def prune_stale_hedges(self, max_age: float) -> None:
         """
         Prune stale hedges and advance them to taker orders if needed.
+        CRITICAL: Sell hedges protecting filled buys NEVER cancel - only repost if price moves significantly.
         Only cancels hedges that are truly stale (older than max_age) and need repricing.
         """
         if max_age <= 0:
@@ -165,6 +237,31 @@ class ExecutionManager:
                     if hedge_price <= 0:
                         stale.append(oid)
                         continue
+                    
+                    # CRITICAL: Sell hedges protecting filled buys NEVER cancel - only repost if price moves
+                    # If this is a sell hedge with min_price set, it's protecting a filled buy
+                    # We should NEVER cancel it, only repost if price dropped significantly
+                    if side == "sell" and meta.get("min_price") is not None:
+                        # This is a protective sell hedge - only repost if price dropped significantly
+                        try:
+                            best_price = await self._best_price(side)
+                            if best_price is None:
+                                # Can't check price, keep the hedge - NEVER cancel protective hedges
+                                continue
+                            
+                            min_price = Decimal(str(meta.get("min_price", 0)))
+                            # Only repost if current bid is significantly below min_price (unprofitable)
+                            # Otherwise, keep the hedge active - it will fill eventually
+                            if best_price < min_price:
+                                price_diff_pct = (min_price - best_price) / min_price
+                                if price_diff_pct > Decimal("0.005"):  # 50 bps - price dropped significantly
+                                    # Price dropped too much, need to repost at current price
+                                    stale.append(oid)
+                            # Otherwise, keep the hedge - don't cancel protective sell orders
+                            continue
+                        except Exception:
+                            # Error checking price, keep the hedge to be safe
+                            continue
                     
                     # Get current best price to see if hedge is still competitive
                     try:
