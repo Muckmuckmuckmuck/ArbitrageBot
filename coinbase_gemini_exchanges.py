@@ -1243,7 +1243,7 @@ class CoinbaseGeminiExchangeManager:
                     try:
                         error_data = await response.json()
                         error_msg = json.dumps(error_data, indent=2)
-                    except:
+                    except Exception:
                         error_msg = response_text
                     
                     correlation_id = response.headers.get('x-correlation-id') or response.headers.get('X-Correlation-ID')
@@ -1378,7 +1378,7 @@ class CoinbaseGeminiExchangeManager:
             try:
                 all_attrs = dir(e)
                 logger.error(f"     All attributes ({len(all_attrs)}): {', '.join(all_attrs[:20])}...")
-            except:
+            except Exception:
                 pass
             
             # Check __dict__ if it exists
@@ -1391,7 +1391,7 @@ class CoinbaseGeminiExchangeManager:
                             value_str = str(value)[:200]
                             value_type = type(value).__name__
                             logger.error(f"       {key}: {value_type} = {value_str}")
-                        except:
+                        except Exception:
                             logger.error(f"       {key}: {type(value).__name__} = [could not stringify]")
                 except Exception as dict_error:
                     logger.error(f"     Could not access __dict__: {dict_error}")
@@ -1417,7 +1417,7 @@ class CoinbaseGeminiExchangeManager:
                                             if h_name in headers:
                                                 error_details['correlation_id'] = headers[h_name]
                                                 logger.error(f"       ✅✅ Correlation ID found: {headers[h_name]}")
-                            except:
+                            except Exception:
                                 pass
                     except Exception as attr_error:
                         logger.error(f"     ⚠️ Could not access {attr}: {attr_error}")
@@ -1434,7 +1434,7 @@ class CoinbaseGeminiExchangeManager:
                             logger.error(f"     🔍 {name}: {type(value).__name__} = {str(value)[:150]}")
                             if isinstance(value, dict) and 'correlation' in str(value).lower():
                                 logger.error(f"       ⚠️ Potential correlation ID in {name}")
-                        except:
+                        except Exception:
                             pass
             except Exception as inspect_error:
                 logger.warning(f"     Could not inspect exception members: {inspect_error}")
@@ -1694,40 +1694,40 @@ def calculate_min_profitable_spread(buy_exchange: str, sell_exchange: str,
     return min_spread
 
 if __name__ == "__main__":
-    print("=" * 80)
-    print("COINBASE + GEMINI EXCHANGE MANAGER")
-    print("=" * 80)
-    print()
+    logger.info("=" * 80)
+    logger.info("COINBASE + GEMINI EXCHANGE MANAGER")
+    logger.info("=" * 80)
+    logger.info("")
     
-    print("Configuration:")
-    print(f"  Exchange 1: {Config.EXCHANGE_1_ID}")
-    print(f"  Exchange 2: {Config.EXCHANGE_2_ID}")
-    print()
+    logger.info("Configuration:")
+    logger.info(f"  Exchange 1: {Config.EXCHANGE_1_ID}")
+    logger.info(f"  Exchange 2: {Config.EXCHANGE_2_ID}")
+    logger.info("")
     
-    print("Fee Calculation Examples:")
-    print()
+    logger.info("Fee Calculation Examples:")
+    logger.info("")
     
     # Example 1: Buy on Coinbase, sell on Gemini
     total_fees_1 = calculate_total_fees('coinbase', 'gemini')
     min_spread_1 = calculate_min_profitable_spread('coinbase', 'gemini')
-    print(f"Buy on Coinbase, Sell on Gemini:")
-    print(f"  Total fees: {total_fees_1*100:.2f}%")
-    print(f"  Min profitable spread: {min_spread_1*100:.2f}%")
-    print()
+    logger.info(f"Buy on Coinbase, Sell on Gemini:")
+    logger.info(f"  Total fees: {total_fees_1*100:.2f}%")
+    logger.info(f"  Min profitable spread: {min_spread_1*100:.2f}%")
+    logger.info("")
     
     # Example 2: Buy on Gemini, sell on Coinbase
     total_fees_2 = calculate_total_fees('gemini', 'coinbase')
     min_spread_2 = calculate_min_profitable_spread('gemini', 'coinbase')
-    print(f"Buy on Gemini, Sell on Coinbase:")
-    print(f"  Total fees: {total_fees_2*100:.2f}%")
-    print(f"  Min profitable spread: {min_spread_2*100:.2f}%")
-    print()
+    logger.info(f"Buy on Gemini, Sell on Coinbase:")
+    logger.info(f"  Total fees: {total_fees_2*100:.2f}%")
+    logger.info(f"  Min profitable spread: {min_spread_2*100:.2f}%")
+    logger.info("")
     
-    print("Withdrawal Fees:")
-    print(f"  Coinbase: FREE for all cryptos")
-    print(f"  Gemini: FREE (10 per month)")
-    print()
+    logger.info("Withdrawal Fees:")
+    logger.info(f"  Coinbase: FREE for all cryptos")
+    logger.info(f"  Gemini: FREE (10 per month)")
+    logger.info("")
     
-    print("✅ Exchange manager ready!")
+    logger.info("✅ Exchange manager ready!")
 
 
