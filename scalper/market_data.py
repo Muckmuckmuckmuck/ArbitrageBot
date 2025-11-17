@@ -39,6 +39,35 @@ class OrderBookSnapshot:
     @property
     def depth_usd(self) -> Decimal:
         return min(self.bid_value_usd, self.ask_value_usd)
+    
+    def is_undercut(self, our_price: Decimal, side: str) -> Tuple[bool, Optional[Decimal]]:
+        """
+        Check if our price is undercut by the order book.
+        Returns: (is_undercut, competitor_price)
+        """
+        if side == "sell":
+            # For sell orders, we're undercut if best_ask < our_price
+            if self.best_ask > 0 and self.best_ask < our_price:
+                return True, self.best_ask
+        elif side == "buy":
+            # For buy orders, we're undercut if best_bid > our_price
+            if self.best_bid > 0 and self.best_bid > our_price:
+                return True, self.best_bid
+        return False, None
+    
+    def get_queue_position(self, our_price: Decimal, side: str) -> int:
+        """
+        Get our position in the order book queue.
+        Returns: 1 = first in queue, 2 = second, etc.
+        """
+        if side == "sell":
+            # Count how many asks are better (lower price) than ours
+            better = sum(1 for price, _ in self.asks if price < our_price)
+            return better + 1
+        else:  # buy
+            # Count how many bids are better (higher price) than ours
+            better = sum(1 for price, _ in self.bids if price > our_price)
+            return better + 1
 
 
 class MarketDataPoller:

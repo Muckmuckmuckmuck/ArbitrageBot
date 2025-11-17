@@ -82,12 +82,40 @@ class QuotePlanner:
             net_edge_local = effective_edge - total_fee_bps
             return effective_edge, net_edge_local
 
-        # Calculate tier sizes, but always respect available balance first
+        # DYNAMIC CAPITAL ALLOCATION: Allocate more capital to better opportunities
+        # Calculate opportunity score to determine capital allocation
+        # Score = (net_edge_bps * depth_usd * win_rate) / capital_required
+        win_rate = Decimal("0.5")  # Default 50% if no history
+        if state.fill_count > 0:
+            win_rate = Decimal(state.win_count) / Decimal(state.fill_count)
+        
+        # Estimate net edge for scoring (use conservative estimate)
+        estimated_net_edge = gross_edge - total_fee_bps - Decimal("10")  # Assume 10 bps slippage for scoring
+        opportunity_score = estimated_net_edge * depth_usd * win_rate
+        
+        # Dynamic allocation multipliers based on opportunity quality
+        # Better opportunities get more capital
+        if estimated_net_edge > Decimal("150"):  # Excellent opportunity (>150 bps)
+            allocation_multiplier = Decimal("1.2")  # 20% more capital
+        elif estimated_net_edge > Decimal("120"):  # Great opportunity (>120 bps)
+            allocation_multiplier = Decimal("1.1")  # 10% more capital
+        elif estimated_net_edge > Decimal("100"):  # Good opportunity (>100 bps)
+            allocation_multiplier = Decimal("1.0")  # Normal capital
+        elif estimated_net_edge > Decimal("80"):  # Okay opportunity (>80 bps)
+            allocation_multiplier = Decimal("0.8")  # 20% less capital
+        else:  # Marginal opportunity
+            allocation_multiplier = Decimal("0.6")  # 40% less capital
+        
+        # Calculate tier sizes with dynamic allocation
         # If available_capital < order_size_usd, use all available capital for fractional tokens
         # Example: $10 balance, $30 token = buy 0.33 tokens using all $10
-        premium_size = min(available_capital, cfg.order_size_usd * settings.tier_premium_size_mult)
-        standard_size = min(available_capital, cfg.order_size_usd * settings.tier_standard_size_mult)
-        probe_size = min(available_capital, settings.tier_probe_size_usd, state.probe_size_usd if state.probe_size_usd > 0 else settings.tier_probe_size_usd)
+        base_premium = cfg.order_size_usd * settings.tier_premium_size_mult
+        base_standard = cfg.order_size_usd * settings.tier_standard_size_mult
+        base_probe = settings.tier_probe_size_usd
+        
+        premium_size = min(available_capital, base_premium * allocation_multiplier)
+        standard_size = min(available_capital, base_standard * allocation_multiplier)
+        probe_size = min(available_capital, base_probe * allocation_multiplier, state.probe_size_usd if state.probe_size_usd > 0 else base_probe)
         
         # When balance is limited, prioritize using all available capital
         # This allows trading fractional tokens (e.g., 0.33 BTC when you have $10 and BTC is $30)
@@ -234,10 +262,10 @@ class QuotePlanner:
         buy_size = (order_value / buy_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
         sell_size = (order_value / sell_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
         
-        # Ensure we're using as much of available balance as possible (within precision limits)
+        # FRACTIONAL TOKEN OPTIMIZATION: Use as much of available balance as possible
         # This is especially important for fractional tokens when balance is limited
-        # Use 90% buffer to account for fees, rounding, and exchange minimums
-        balance_buffer = Decimal("0.90")
+        # Use 95% buffer (increased from 90%) to maximize capital utilization
+        balance_buffer = Decimal("0.95")
         if buy_size > 0 and (buy_size * buy_price) < available_capital * balance_buffer:
             # If we're using less than 90% of available balance, try to use more
             max_buy_size = ((available_capital * balance_buffer) / buy_price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)

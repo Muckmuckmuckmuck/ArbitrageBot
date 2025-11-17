@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from decimal import Decimal, ROUND_DOWN
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, List, Optional
 
 from ccxt.base.errors import InsufficientFunds  # type: ignore
 from .exchange import RestExchangeClient
@@ -195,6 +195,145 @@ class ExecutionManager:
             await self._cancel_orders(all_orders)
             self._quote_orders.clear()
             self._hedge_orders.clear()
+    
+    async def check_undercuts(self, snapshot) -> List[Dict]:
+        """
+        Check all our quote orders for undercuts.
+        Requires snapshot from MarketDataPoller.
+        Returns list of orders that need repricing.
+        """
+        if not snapshot or not hasattr(snapshot, 'is_undercut'):
+            return []
+        
+        undercut_orders = []
+        async with self._lock:
+            for order_id, meta in list(self._quote_orders.items()):
+                side = str(meta.get("side", "")).lower()
+                our_price = Decimal(str(meta.get("price", 0)))
+                
+                if our_price <= 0:
+                    continue
+                
+                is_undercut, competitor_price = snapshot.is_undercut(our_price, side)
+                if is_undercut and competitor_price:
+                    queue_position = snapshot.get_queue_position(our_price, side)
+                    
+                    # Only reprice if we're not first in queue
+                    if queue_position > 1:
+                        undercut_orders.append({
+                            "order_id": order_id,
+                            "side": side,
+                            "our_price": our_price,
+                            "competitor_price": competitor_price,
+                            "queue_position": queue_position,
+                            "meta": meta,
+                        })
+        
+        return undercut_orders
+    
+    async def reprice_undercut_order(
+        self,
+        order_id: str,
+        side: str,
+        competitor_price: Decimal,
+        min_profitable_price: Optional[Decimal] = None,
+        max_profitable_price: Optional[Decimal] = None,
+    ) -> Optional[str]:
+        """
+        Reprice an order that was undercut.
+        Adjusts to beat competitor by 1 tick while staying profitable.
+        """
+        # Get tick size (minimum price increment) - use 0.01 as fallback
+        tick_size = Decimal("0.01")
+        try:
+            market = self._client._client.market(self._symbol)
+            if market:
+                price_precision = market.get("precision", {}).get("price")
+                if price_precision:
+                    tick_size = Decimal("10") ** (-price_precision)
+        except Exception:
+            pass
+        
+        # Calculate new price to beat competitor
+        if side == "sell":
+            # Beat competitor by 1 tick (lower price)
+            new_price = competitor_price - tick_size
+            
+            # Ensure we're still profitable
+            if min_profitable_price and new_price < min_profitable_price:
+                # Can't beat competitor profitably, cancel order
+                logger.warning(
+                    "[UNDERCUT] %s %s sell order can't beat competitor %s profitably (min=%s), canceling",
+                    self._symbol,
+                    order_id,
+                    competitor_price,
+                    min_profitable_price,
+                )
+                await self._cancel_orders([order_id])
+                self._quote_orders.pop(order_id, None)
+                return None
+        else:  # buy
+            # Beat competitor by 1 tick (higher price)
+            new_price = competitor_price + tick_size
+            
+            # Ensure we're still profitable
+            if max_profitable_price and new_price > max_profitable_price:
+                # Can't beat competitor profitably, cancel order
+                logger.warning(
+                    "[UNDERCUT] %s %s buy order can't beat competitor %s profitably (max=%s), canceling",
+                    self._symbol,
+                    order_id,
+                    competitor_price,
+                    max_profitable_price,
+                )
+                await self._cancel_orders([order_id])
+                self._quote_orders.pop(order_id, None)
+                return None
+        
+        # Get current order amount
+        meta = self._quote_orders.get(order_id)
+        if not meta:
+            return None
+        
+        amount = Decimal(str(meta.get("amount", 0)))
+        if amount <= 0:
+            return None
+        
+        # Cancel old order and place new one
+        try:
+            await self._cancel_orders([order_id])
+            self._quote_orders.pop(order_id, None)
+            
+            # Place new order at better price
+            new_order_id = await self._submit(
+                side,
+                amount,
+                new_price,
+                tag="quote",
+            )
+            
+            if new_order_id:
+                logger.info(
+                    "[UNDERCUT] %s %s %s order repriced from %s to %s (competitor=%s)",
+                    self._symbol,
+                    order_id,
+                    side.upper(),
+                    meta.get("price"),
+                    new_price,
+                    competitor_price,
+                )
+            
+            return new_order_id
+        except Exception as exc:
+            logger.error(
+                "[UNDERCUT] Failed to reprice %s %s %s: %s",
+                self._symbol,
+                order_id,
+                side,
+                exc,
+                exc_info=True,
+            )
+            return None
 
     async def place_hedge(
         self,

@@ -307,6 +307,44 @@ class ScalperEngine:
                     await asyncio.sleep(self._config.settings.poll_interval_s)
                     continue
 
+                # UNDERCUT DETECTION: Check if our orders are undercut and reprice immediately
+                undercut_orders = await execution.check_undercuts(snapshot)
+                if undercut_orders:
+                    for undercut_info in undercut_orders:
+                        order_id = undercut_info["order_id"]
+                        side = undercut_info["side"]
+                        competitor_price = undercut_info["competitor_price"]
+                        
+                        # Calculate profitable price range
+                        min_profitable_price = None
+                        max_profitable_price = None
+                        
+                        if side == "sell":
+                            # For sell orders, min_price = best_bid * (1 + fees + buffer)
+                            fee_bps = Decimal(pair.maker_fee_bps)
+                            buffer_bps = Decimal(self._config.settings.hedge_buffer_bps)
+                            total_bps = fee_bps + buffer_bps
+                            min_profitable_price = snapshot.best_bid * (
+                                Decimal("1") + total_bps / Decimal("10000")
+                            )
+                        else:  # buy
+                            # For buy orders, max_price = best_ask * (1 - fees - buffer)
+                            fee_bps = Decimal(pair.maker_fee_bps)
+                            buffer_bps = Decimal(self._config.settings.hedge_buffer_bps)
+                            total_bps = fee_bps + buffer_bps
+                            max_profitable_price = snapshot.best_ask * (
+                                Decimal("1") - total_bps / Decimal("10000")
+                            )
+                        
+                        # Reprice the order
+                        await execution.reprice_undercut_order(
+                            order_id,
+                            side,
+                            competitor_price,
+                            min_profitable_price,
+                            max_profitable_price,
+                        )
+
                 intent = self._planner.plan(
                     pair,
                     state,
@@ -1019,17 +1057,33 @@ class ScalperEngine:
             if state.current_tier and state.current_tier in state.tier_scores:
                 tier_edge = state.tier_scores[state.current_tier]
 
+            # OPPORTUNITY PRIORITIZATION: Enhanced scoring
+            # Score considers: net edge, depth, win rate, fill probability, capital efficiency
+            depth_score = min(snapshot.depth_usd, Decimal("1000")) / Decimal("1000")  # Normalize to 0-1
+            capital_efficiency = Decimal("1.0")
+            if snapshot.order_value_usd > 0:
+                # Lower capital required = higher efficiency score
+                capital_efficiency = Decimal("10") / max(snapshot.order_value_usd, Decimal("1"))
+            
             score_core = net_edge + tier_edge
             score_modifier = Decimal("0.5")
             if fill_prob > 0:
                 score_modifier += fill_prob / Decimal("2")
             if win_rate > 0:
                 score_modifier += win_rate / Decimal("3")
+            if depth_score > 0:
+                score_modifier += depth_score / Decimal("4")  # Depth bonus
+            if capital_efficiency > 1:
+                score_modifier += (capital_efficiency - Decimal("1")) / Decimal("10")  # Efficiency bonus
 
             score_value = float(score_core * score_modifier) + float(snapshot.score) / 1000
             score_value -= float(penalty)
             if stats.realized < 0:
                 score_value += float(stats.realized)
+            
+            # Bonus for high-quality opportunities
+            if net_edge > Decimal("150") and win_rate > Decimal("0.6") and depth_score > Decimal("0.5"):
+                score_value += 50  # Premium opportunity bonus
 
             time_since_fill = time.time() - state.last_fill_ts if state.last_fill_ts else None
             if time_since_fill and time_since_fill > 900:
