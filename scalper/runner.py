@@ -402,7 +402,12 @@ class ScalperEngine:
         interval = max(10.0, self._config.settings.scanner_interval_s)
         while self._running:
             await asyncio.sleep(interval)
-            await self._run_rotation_step()
+            try:
+                await self._run_rotation_step()
+            except Exception as exc:
+                logger.error("[ROTATION] Error in rotation step: %s", exc, exc_info=True)
+                # Continue running even if rotation fails
+                continue
 
     async def _pnl_summary_loop(self) -> None:
         """Emit cumulative PnL/win-rate stats per pair every 2 minutes."""
@@ -470,11 +475,19 @@ class ScalperEngine:
                 continue
 
     async def _run_rotation_step(self, *, initial: bool = False) -> None:
-        snapshots = await self._scanner.refresh()
-        self._telemetry.scan(
-            snapshots,
-            floor_bps=Decimal(self._config.settings.minimum_target_edge_bps),
-        )
+        try:
+            snapshots = await self._scanner.refresh()
+        except Exception as exc:
+            logger.error("[ROTATION] Error refreshing scanner: %s", exc, exc_info=True)
+            return
+        try:
+            self._telemetry.scan(
+                snapshots,
+                floor_bps=Decimal(self._config.settings.minimum_target_edge_bps),
+            )
+        except Exception as exc:
+            logger.error("[ROTATION] Error in telemetry scan: %s", exc, exc_info=True)
+            # Continue even if telemetry fails
         snapshot_map: Dict[str, PairSnapshot] = {}
         for snapshot in snapshots:
             key = self._pair_key(snapshot.exchange, snapshot.symbol)
@@ -524,9 +537,18 @@ class ScalperEngine:
                         self._pair_configs[pair_key] = cfg
                 if cfg is None:
                     continue
-                await self._ensure_pair_task(pair_key, cfg)
-                allowed.add(pair_key)
-                exchange_count += 1
+                try:
+                    await self._ensure_pair_task(pair_key, cfg)
+                    allowed.add(pair_key)
+                    exchange_count += 1
+                except Exception as exc:
+                    logger.error(
+                        "[ROTATION] Error ensuring pair task for %s: %s",
+                        pair_key,
+                        exc,
+                        exc_info=True,
+                    )
+                    continue
                 
             if exchange_count > 0:
                 selected_pairs = [pair_key for _, pair_key in exchange_ranked[:exchange_count]]
