@@ -82,12 +82,25 @@ class PnLTracker:
                 state.win_streak = 0
                 result = "flat"
             state.last_result = result
+            # Calculate win rate for this pair
+            win_rate_pct = (
+                (Decimal(stats.wins) / Decimal(stats.trades) * Decimal("100")).quantize(Decimal("0.01"))
+                if stats.trades > 0
+                else Decimal("0")
+            )
+            net_profit = stats.realized - stats.fees
             logger.info(
-                "[PNL] %s realized=%s cumulative=%s fees=%s",
+                "[PNL] %s result=%s realized=%s cumulative=%s fees=%s net_profit=%s trades=%s wins=%s losses=%s win_rate=%s%%",
                 pair_key,
+                result.upper(),
                 realized.quantize(Decimal("0.0001")),
                 state.realized_pnl.quantize(Decimal("0.0001")),
                 state.fees_paid.quantize(Decimal("0.0001")),
+                net_profit.quantize(Decimal("0.0001")),
+                stats.trades,
+                stats.wins,
+                stats.losses,
+                win_rate_pct,
             )
         else:
             logger.debug("Unknown fill side %s for %s", side, pair_key)

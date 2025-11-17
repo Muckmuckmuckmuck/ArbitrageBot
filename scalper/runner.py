@@ -405,30 +405,68 @@ class ScalperEngine:
             await self._run_rotation_step()
 
     async def _pnl_summary_loop(self) -> None:
-        """Emit cumulative PnL/win-rate stats per pair every 5 minutes."""
-        interval = 300.0
+        """Emit cumulative PnL/win-rate stats per pair every 2 minutes."""
+        interval = 120.0  # 2 minutes instead of 5
         while self._running:
             await asyncio.sleep(interval)
             try:
+                total_realized = Decimal("0")
+                total_fees = Decimal("0")
+                total_trades = 0
+                total_wins = 0
+                total_losses = 0
+                total_flats = 0
+                
+                # Log per-pair stats
                 for pair_key, state in self._states.items():
                     stats = self._pnl.get_stats(pair_key)
-                    win_rate = (
-                        (Decimal(stats.wins) / Decimal(stats.trades)).quantize(Decimal("0.01"))
+                    if stats.trades == 0:
+                        continue
+                    
+                    win_rate_pct = (
+                        (Decimal(stats.wins) / Decimal(stats.trades) * Decimal("100")).quantize(Decimal("0.01"))
                         if stats.trades > 0
                         else Decimal("0")
                     )
+                    net_profit = stats.realized - stats.fees
+                    
+                    total_realized += stats.realized
+                    total_fees += stats.fees
+                    total_trades += stats.trades
+                    total_wins += stats.wins
+                    total_losses += stats.losses
+                    total_flats += stats.flats
+                    
                     logger.info(
-                        "[PNL] summary %s realized=%s fees=%s wins=%s losses=%s flats=%s trades=%s win_rate=%s",
+                        "[PNL_SUMMARY] %s realized=%s fees=%s net_profit=%s wins=%s losses=%s flats=%s trades=%s win_rate=%s%%",
                         pair_key,
                         stats.realized.quantize(Decimal("0.0001")),
                         stats.fees.quantize(Decimal("0.0001")),
+                        net_profit.quantize(Decimal("0.0001")),
                         stats.wins,
                         stats.losses,
                         stats.flats,
                         stats.trades,
-                        win_rate,
+                        win_rate_pct,
                     )
-            except Exception:
+                
+                # Log overall summary across all pairs
+                if total_trades > 0:
+                    overall_win_rate = (Decimal(total_wins) / Decimal(total_trades) * Decimal("100")).quantize(Decimal("0.01"))
+                    overall_net_profit = total_realized - total_fees
+                    logger.info(
+                        "[PNL_OVERALL] TOTAL realized=%s fees=%s net_profit=%s wins=%s losses=%s flats=%s trades=%s win_rate=%s%%",
+                        total_realized.quantize(Decimal("0.0001")),
+                        total_fees.quantize(Decimal("0.0001")),
+                        overall_net_profit.quantize(Decimal("0.0001")),
+                        total_wins,
+                        total_losses,
+                        total_flats,
+                        total_trades,
+                        overall_win_rate,
+                    )
+            except Exception as exc:
+                logger.error("[PNL_SUMMARY] Error generating summary: %s", exc, exc_info=True)
                 continue
 
     async def _run_rotation_step(self, *, initial: bool = False) -> None:
@@ -568,14 +606,25 @@ class ScalperEngine:
                 )
                 state.register_fill(result, latency_ms, realized)
             if realized != 0:
+                stats = self._pnl.get_stats(pair_key)
+                win_rate_pct = (
+                    (Decimal(stats.wins) / Decimal(stats.trades) * Decimal("100")).quantize(Decimal("0.01"))
+                    if stats.trades > 0
+                    else Decimal("0")
+                )
+                net_profit = stats.realized - stats.fees
                 logger.info(
-                    "[FILL] %s %s side=%s amount=%s price=%s realized=%s",
+                    "[FILL] %s %s side=%s amount=%s price=%s realized=%s result=%s win_rate=%s%% net_profit=%s trades=%s",
                     pair.exchange.upper(),
                     pair.symbol,
                     side,
                     amount,
                     price,
                     realized.quantize(Decimal("0.0001")),
+                    result.upper(),
+                    win_rate_pct,
+                    net_profit.quantize(Decimal("0.0001")),
+                    stats.trades,
                 )
             if amount > 0:
                 # Invalidate balance cache after a fill

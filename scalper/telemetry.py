@@ -190,20 +190,22 @@ class Telemetry:
             state = states.get(pair_key)
             if state is None:
                 continue
-            win_rate = (
-                (Decimal(state.win_count) / Decimal(state.fill_count)).quantize(Decimal("0.01"))
+            win_rate_pct = (
+                (Decimal(state.win_count) / Decimal(state.fill_count) * Decimal("100")).quantize(Decimal("0.01"))
                 if state.fill_count
                 else Decimal("0.00")
             )
             marker = "ACTIVE" if pair_key in active_list else "BENCH"
             logger.info(
-                "[ROTATION:%s] %s score=%.3f tier=%s win_rate=%s fills=%s skip=%s",
+                "[ROTATION:%s] %s score=%.3f tier=%s win_rate=%s%% fills=%s wins=%s losses=%s skip=%s",
                 marker,
                 pair_key,
                 score,
                 state.current_tier,
-                win_rate,
+                win_rate_pct,
                 state.fill_count,
+                state.win_count,
+                state.loss_count,
                 dict(list(state.skip_reasons.items())[:3]),
             )
             payload.append(
@@ -211,7 +213,7 @@ class Telemetry:
                     "pair": pair_key,
                     "score": score,
                     "tier": state.current_tier,
-                    "win_rate": float(win_rate),
+                    "win_rate": float(win_rate_pct),
                     "fills": state.fill_count,
                     "wins": state.win_count,
                     "losses": state.loss_count,
