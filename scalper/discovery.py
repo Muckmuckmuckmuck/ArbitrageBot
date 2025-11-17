@@ -83,13 +83,32 @@ class OpportunityScanner:
                 logger.info("[SCAN] %s selected %s markets to evaluate", venue.upper(), len(candidates))
                 kept_local = 0
                 evaluated_count = 0
-                for symbol in candidates:
-                    snapshot = await self._evaluate_market(venue, symbol, client)
+                
+                # Batch evaluation with semaphore to limit concurrent API calls
+                semaphore = asyncio.Semaphore(10)  # Max 10 concurrent evaluations
+                
+                async def _evaluate_with_limit(sym: str) -> Optional[PairSnapshot]:
+                    async with semaphore:
+                        return await self._evaluate_market(venue, sym, client)
+                
+                # Evaluate all markets concurrently (limited by semaphore)
+                tasks = [_evaluate_with_limit(symbol) for symbol in candidates]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                for i, result in enumerate(results):
                     evaluated_count += 1
-                    if snapshot:
-                        key = f"{venue}:{symbol}"
-                        self._snapshots[key] = snapshot
-                        exchange_results.append(snapshot)
+                    if isinstance(result, Exception):
+                        logger.debug(
+                            "[SCAN] Error evaluating %s %s: %s",
+                            venue.upper(),
+                            candidates[i],
+                            result,
+                        )
+                        continue
+                    if result:
+                        key = f"{venue}:{candidates[i]}"
+                        self._snapshots[key] = result
+                        exchange_results.append(result)
                         kept_local += 1
                 logger.info(
                     "[SCAN] %s evaluated=%s kept=%s",

@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
 import time
 from collections import defaultdict
 from decimal import Decimal, ROUND_DOWN
-from typing import Dict, Sequence, Set, Optional, List, Tuple
+from typing import Dict, Sequence, Set, Optional, List, Tuple, Callable, Awaitable
 
 from .config import PairConfig, ScalperConfig
 from .exchange import ExchangeCredentials, RestExchangeClient
@@ -21,6 +22,90 @@ from .telemetry import PlanTelemetry, Telemetry
 from .discovery import OpportunityScanner, PairSnapshot, PairCatalog
 
 logger = logging.getLogger(__name__)
+
+
+class BalanceCache:
+    """Cache for balance data with TTL to reduce API calls."""
+    
+    def __init__(self, ttl_s: float = 3.0):
+        self._cache: Dict[str, Tuple[Decimal, float]] = {}
+        self._ttl_s = ttl_s
+        self._lock = asyncio.Lock()
+    
+    async def get(
+        self, 
+        client: RestExchangeClient, 
+        currency: str,
+        fetch_func: Callable[[RestExchangeClient, str], Awaitable[Decimal]]
+    ) -> Decimal:
+        """Get balance from cache or fetch fresh if expired."""
+        cache_key = f"{client._id}:{currency}"
+        async with self._lock:
+            if cache_key in self._cache:
+                balance, timestamp = self._cache[cache_key]
+                if time.time() - timestamp < self._ttl_s:
+                    return balance
+            # Fetch fresh balance
+            balance = await fetch_func(client, currency)
+            self._cache[cache_key] = (balance, time.time())
+            return balance
+    
+    def invalidate(self, exchange: str, currency: Optional[str] = None) -> None:
+        """Invalidate cache for a specific exchange/currency."""
+        if currency:
+            cache_key = f"{exchange}:{currency}"
+            self._cache.pop(cache_key, None)
+        else:
+            # Invalidate all for this exchange
+            keys_to_remove = [k for k in self._cache.keys() if k.startswith(f"{exchange}:")]
+            for key in keys_to_remove:
+                self._cache.pop(key, None)
+
+
+class CircuitBreaker:
+    """Circuit breaker pattern to temporarily disable failing exchanges."""
+    
+    def __init__(self, failure_threshold: int = 5, timeout: float = 60.0):
+        self._failures = 0
+        self._failure_threshold = failure_threshold
+        self._timeout = timeout
+        self._opened_at: Optional[float] = None
+        self._state = "closed"  # closed, open, half_open
+        self._lock = asyncio.Lock()
+    
+    async def record_success(self) -> None:
+        async with self._lock:
+            self._failures = 0
+            self._state = "closed"
+            self._opened_at = None
+    
+    async def record_failure(self) -> None:
+        async with self._lock:
+            self._failures += 1
+            if self._failures >= self._failure_threshold:
+                self._state = "open"
+                self._opened_at = time.time()
+                logger.warning(
+                    "[CIRCUIT] Circuit breaker opened after %s failures (timeout=%ss)",
+                    self._failures,
+                    self._timeout,
+                )
+    
+    async def can_proceed(self) -> bool:
+        async with self._lock:
+            if self._state == "closed":
+                return True
+            if self._state == "open":
+                if self._opened_at and time.time() - self._opened_at > self._timeout:
+                    self._state = "half_open"
+                    logger.info("[CIRCUIT] Circuit breaker entering half-open state")
+                    return True
+                return False
+            return True  # half_open
+    
+    async def is_open(self) -> bool:
+        async with self._lock:
+            return self._state == "open"
 
 
 class ScalperEngine:
@@ -45,8 +130,19 @@ class ScalperEngine:
         self._running = False
         self._enabled_pairs = self._filter_pairs(config.pairs)
         self._active_pairs: Set[str] = set()
+        # Performance improvements
+        self._balance_cache = BalanceCache(ttl_s=3.0)
+        self._circuit_breakers: Dict[str, CircuitBreaker] = {}
 
     async def _client_for(self, exchange: str) -> RestExchangeClient:
+        # Check circuit breaker
+        if exchange not in self._circuit_breakers:
+            self._circuit_breakers[exchange] = CircuitBreaker(failure_threshold=5, timeout=60.0)
+        breaker = self._circuit_breakers[exchange]
+        if await breaker.is_open():
+            if not await breaker.can_proceed():
+                raise RuntimeError(f"Circuit breaker open for {exchange}")
+        
         if exchange not in self._clients:
             creds_data = self._config.venue_keys.get(exchange)
             if not creds_data:
@@ -66,8 +162,10 @@ class ScalperEngine:
                 await self._clients[exchange].load_markets()
                 markets = getattr(self._clients[exchange]._client, "markets", {})  # type: ignore[attr-defined]
                 logger.info("[STARTUP] %s loaded %s markets", exchange.upper(), len(markets))
+                await breaker.record_success()
             except Exception as exc:
                 logger.error("[STARTUP] Failed to initialize %s client: %s", exchange.upper(), exc, exc_info=True)
+                await breaker.record_failure()
                 raise
         return self._clients[exchange]
 
@@ -232,6 +330,8 @@ class ScalperEngine:
                         )
                     )
                     await execution.sync_quotes(intent)
+                    # Invalidate balance cache after placing orders
+                    self._balance_cache.invalidate(pair.exchange)
                 else:
                     self._telemetry.skip(pair.exchange, pair.symbol, "planner_rejected")
 
@@ -244,44 +344,59 @@ class ScalperEngine:
 
     async def _fetch_stable_balance(self, client: RestExchangeClient, currency: str) -> Decimal:
         """Fetch available stable currency balance (USD, USDC, etc.) for trading."""
-        try:
-            balance = await client.fetch_balance()
-            if not balance:
-                logger.warning("[BALANCE] Empty balance response for %s", currency)
+        async def _fetch_impl(c: RestExchangeClient, curr: str) -> Decimal:
+            try:
+                balance = await c.fetch_balance()
+                if not balance:
+                    logger.warning("[BALANCE] Empty balance response for %s", curr)
+                    return Decimal("0")
+                # Prefer 'free' (available) over 'total' (including locked)
+                free = balance.get("free") or {}
+                total = balance.get("total") or {}
+                # Try free first, fallback to total
+                amount = free.get(curr) or total.get(curr) or 0
+                amount = Decimal(str(amount))
+                if amount < 0:
+                    logger.warning("[BALANCE] Negative balance for %s: %s", curr, amount)
+                    return Decimal("0")
+                return amount
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("[BALANCE] Failed to fetch balance for %s: %s", curr, exc, exc_info=True)
                 return Decimal("0")
-            # Prefer 'free' (available) over 'total' (including locked)
-            free = balance.get("free") or {}
-            total = balance.get("total") or {}
-            # Try free first, fallback to total
-            amount = free.get(currency) or total.get(currency) or 0
-            amount = Decimal(str(amount))
-            if amount < 0:
-                logger.warning("[BALANCE] Negative balance for %s: %s", currency, amount)
-                return Decimal("0")
-            return amount
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.error("[BALANCE] Failed to fetch balance for %s: %s", currency, exc, exc_info=True)
-            return Decimal("0")
+        
+        return await self._balance_cache.get(client, currency, _fetch_impl)
 
     async def _fetch_base_balance(self, client: RestExchangeClient, currency: str) -> Decimal:
         """Fetch available base currency balance (BTC, ETH, etc.) for hedging."""
-        try:
-            balance = await client.fetch_balance()
-            if not balance:
-                logger.warning("[BALANCE] Empty balance response for %s", currency)
+        async def _fetch_impl(c: RestExchangeClient, curr: str) -> Decimal:
+            try:
+                balance = await c.fetch_balance()
+                if not balance:
+                    logger.warning("[BALANCE] Empty balance response for %s", curr)
+                    return Decimal("0")
+                free = balance.get("free") or {}
+                total = balance.get("total") or {}
+                # Prefer free (available) balance for hedging
+                raw = free.get(curr) or total.get(curr) or 0
+                amount = Decimal(str(raw))
+                if amount < 0:
+                    logger.warning("[BALANCE] Negative base balance for %s: %s", curr, amount)
+                    return Decimal("0")
+                return amount
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("[BALANCE] Failed to fetch base balance for %s: %s", curr, exc, exc_info=True)
                 return Decimal("0")
-            free = balance.get("free") or {}
-            total = balance.get("total") or {}
-            # Prefer free (available) balance for hedging
-            raw = free.get(currency) or total.get(currency) or 0
-            amount = Decimal(str(raw))
-            if amount < 0:
-                logger.warning("[BALANCE] Negative base balance for %s: %s", currency, amount)
-                return Decimal("0")
-            return amount
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.error("[BALANCE] Failed to fetch base balance for %s: %s", currency, exc, exc_info=True)
-            return Decimal("0")
+        
+        return await self._balance_cache.get(client, currency, _fetch_impl)
+    
+    async def _fetch_balances(
+        self, client: RestExchangeClient, pair: PairConfig
+    ) -> Tuple[Decimal, Decimal]:
+        """Fetch both base and quote balances concurrently."""
+        base_task = self._fetch_base_balance(client, pair.base)
+        quote_task = self._fetch_stable_balance(client, pair.quote)
+        base_bal, quote_bal = await asyncio.gather(base_task, quote_task)
+        return base_bal, quote_bal
 
     async def _rotation_loop(self) -> None:
         interval = max(10.0, self._config.settings.scanner_interval_s)
@@ -463,6 +578,8 @@ class ScalperEngine:
                     realized.quantize(Decimal("0.0001")),
                 )
             if amount > 0:
+                # Invalidate balance cache after a fill
+                self._balance_cache.invalidate(pair.exchange)
                 await execution.cancel_all_quotes()
                 hedge_price = compute_hedge_price(
                     price,

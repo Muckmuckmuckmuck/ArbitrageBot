@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from dataclasses import dataclass
 from decimal import Decimal
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Callable, TypeVar
 
 import ccxt  # type: ignore
 from ccxt.base.errors import (  # type: ignore
@@ -15,9 +16,13 @@ from ccxt.base.errors import (  # type: ignore
     InvalidOrder,
     ExchangeError,
     NetworkError,
+    RateLimitExceeded,
+    RequestTimeout,
 )
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 @dataclass
@@ -67,17 +72,64 @@ class RestExchangeClient:
             self._client.nonce = self._next_nonce  # type: ignore[attr-defined]
         self._id = getattr(self._client, "id", normalized)
 
+    async def _request_with_backoff(
+        self,
+        func: Callable[..., T],
+        *args,
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+        **kwargs
+    ) -> T:
+        """Execute a function with exponential backoff retry logic."""
+        for attempt in range(max_retries):
+            try:
+                if asyncio.iscoroutinefunction(func):
+                    return await func(*args, **kwargs)
+                else:
+                    return await asyncio.to_thread(func, *args, **kwargs)
+            except (RateLimitExceeded, NetworkError, RequestTimeout) as e:
+                if attempt == max_retries - 1:
+                    logger.warning(
+                        "[EXCHANGE] Max retries (%s) exceeded for %s: %s",
+                        max_retries,
+                        func.__name__,
+                        e,
+                    )
+                    raise
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                logger.debug(
+                    "[EXCHANGE] Retry %s/%s after %.2fs for %s: %s",
+                    attempt + 1,
+                    max_retries,
+                    delay,
+                    func.__name__,
+                    e,
+                )
+                await asyncio.sleep(delay)
+            except Exception as e:
+                # Don't retry non-transient errors
+                raise
+        raise RuntimeError("Should not reach here")
+
     async def fetch_order_book(self, symbol: str, *, depth: int = 5) -> Dict[str, Any]:
-        return await asyncio.to_thread(self._client.fetch_order_book, symbol, depth)
+        return await self._request_with_backoff(
+            self._client.fetch_order_book, symbol, depth, max_retries=3, base_delay=0.5
+        )
 
     async def fetch_trades(self, symbol: str, *, limit: int = 50, since: Optional[int] = None) -> Any:
-        return await asyncio.to_thread(self._client.fetch_trades, symbol, since, limit)
+        return await self._request_with_backoff(
+            self._client.fetch_trades, symbol, since, limit, max_retries=3, base_delay=0.5
+        )
 
     async def fetch_balance(self) -> Dict[str, Any]:
-        return await asyncio.to_thread(self._client.fetch_balance)
+        return await self._request_with_backoff(
+            self._client.fetch_balance, max_retries=3, base_delay=0.5
+        )
 
     async def fetch_ticker(self, symbol: str) -> Any:
-        return await asyncio.to_thread(self._client.fetch_ticker, symbol)
+        return await self._request_with_backoff(
+            self._client.fetch_ticker, symbol, max_retries=3, base_delay=0.5
+        )
 
     async def create_limit_order(
         self,
@@ -114,7 +166,7 @@ class RestExchangeClient:
 
         async with self._order_lock:
             try:
-                return await asyncio.to_thread(
+                return await self._request_with_backoff(
                     self._client.create_order,
                     market_symbol,
                     "limit",
@@ -122,6 +174,8 @@ class RestExchangeClient:
                     float(amount),
                     float(price),
                     params,
+                    max_retries=2,  # Fewer retries for orders to avoid duplicate orders
+                    base_delay=1.0,
                 )
             except InvalidNonce as exc:
                 logger.error(
@@ -219,7 +273,13 @@ class RestExchangeClient:
     async def cancel_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
         async with self._order_lock:
             try:
-                return await asyncio.to_thread(self._client.cancel_order, order_id, symbol)
+                return await self._request_with_backoff(
+                    self._client.cancel_order,
+                    order_id,
+                    symbol,
+                    max_retries=2,
+                    base_delay=0.5,
+                )
             except InvalidNonce as exc:
                 logger.error(
                     "[EXCHANGE] InvalidNonce error cancelling %s order %s on %s: %s",
@@ -258,10 +318,14 @@ class RestExchangeClient:
                 raise
 
     async def fetch_open_orders(self, symbol: Optional[str] = None) -> Any:
-        return await asyncio.to_thread(self._client.fetch_open_orders, symbol)
+        return await self._request_with_backoff(
+            self._client.fetch_open_orders, symbol, max_retries=3, base_delay=0.5
+        )
 
     async def fetch_my_trades(self, symbol: str, *, since: Optional[int] = None, limit: int = 100) -> Any:
-        return await asyncio.to_thread(self._client.fetch_my_trades, symbol, since, limit)
+        return await self._request_with_backoff(
+            self._client.fetch_my_trades, symbol, since, limit, max_retries=3, base_delay=0.5
+        )
 
     async def close(self) -> None:
         try:
@@ -270,7 +334,9 @@ class RestExchangeClient:
             pass
 
     async def load_markets(self) -> None:
-        await asyncio.to_thread(self._client.load_markets)
+        await self._request_with_backoff(
+            self._client.load_markets, max_retries=3, base_delay=1.0
+        )
 
     def amount_to_precision(self, symbol: str, amount: Decimal) -> Decimal:
         try:
