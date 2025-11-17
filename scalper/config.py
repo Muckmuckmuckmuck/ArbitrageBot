@@ -15,9 +15,9 @@ class PairConfig:
     quote: str
     order_size_usd: Decimal = Decimal("6")
     min_notional_usd: Decimal = Decimal("3")
-    target_edge_bps: int = 80
-    min_edge_bps: int = 60
-    probe_edge_bps: int = 40
+    target_edge_bps: int = 100  # Increased from 80 to account for potential taker fees
+    min_edge_bps: int = 80  # Increased from 60 to account for potential taker fees
+    probe_edge_bps: int = 60  # Increased from 40 to account for potential taker fees
     max_edge_bps: int = 140
     slippage_buffer_bps: int = 8
     maker_fee_bps: int = 12
@@ -63,7 +63,7 @@ class EngineSettings:
     fast_fill_latency_ms: float = 450.0
     fast_fill_clip_bps: int = 3
     slow_fill_clip_bps: int = 1
-    minimum_target_edge_bps: int = 60
+    minimum_target_edge_bps: int = 80  # Increased from 60 to account for potential taker fees
     scanner_interval_s: float = 45.0
     scanner_quote_currencies: Sequence[str] = field(default_factory=lambda: ["USD", "USDC", "USDT", "GUSD"])
     scanner_max_markets: int = 400
@@ -71,8 +71,8 @@ class EngineSettings:
     negative_fill_lookback: int = 5
     insufficient_balance_cooldown_s: float = 6.0
     scanner_min_spread_bps: int = 40
-    scanner_min_net_edge_bps: int = 80
-    coinbase_min_net_edge_bps: int = 120
+    scanner_min_net_edge_bps: int = 100  # Increased from 80 to account for potential taker fees
+    coinbase_min_net_edge_bps: int = 140  # Increased from 120 to account for potential taker fees
     scanner_min_depth_usd: Decimal = Decimal("25")
     scanner_min_volume_usd: Decimal = Decimal("2500")
     dynamic_order_usd_min: Decimal = Decimal("3")
@@ -82,9 +82,9 @@ class EngineSettings:
     scanner_slippage_floor_bps: int = 10
     scanner_slippage_cap_bps: int = 35
     scanner_slippage_impact_exponent: Decimal = Decimal("1.3")
-    tier_premium_edge_bps: int = 30
-    tier_standard_edge_bps: int = 18
-    tier_probe_edge_bps: int = 10
+    tier_premium_edge_bps: int = 40  # Increased from 30 to account for potential taker fees
+    tier_standard_edge_bps: int = 25  # Increased from 18 to account for potential taker fees
+    tier_probe_edge_bps: int = 15  # Increased from 10 to account for potential taker fees
     tier_premium_size_mult: Decimal = Decimal("1.0")
     tier_standard_size_mult: Decimal = Decimal("0.65")
     tier_probe_size_usd: Decimal = Decimal("3")
@@ -106,9 +106,9 @@ def build_default_config(venue_keys: Dict[str, Dict[str, str]]) -> ScalperConfig
     """Helper to produce a conservative default configuration."""
 
     default_pairs: List[PairConfig] = [
-        PairConfig(exchange="coinbase", symbol="BTC/USD", base="BTC", quote="USD", target_edge_bps=90, maker_fee_bps=40, taker_fee_bps=60),
-        PairConfig(exchange="coinbase", symbol="ETH/USD", base="ETH", quote="USD", target_edge_bps=90, maker_fee_bps=40, taker_fee_bps=60),
-        PairConfig(exchange="gemini", symbol="BTC/USD", base="BTC", quote="USD", target_edge_bps=95, maker_fee_bps=10, taker_fee_bps=35),
-        PairConfig(exchange="gemini", symbol="ETH/USD", base="ETH", quote="USD", target_edge_bps=95, maker_fee_bps=10, taker_fee_bps=40),
+        PairConfig(exchange="coinbase", symbol="BTC/USD", base="BTC", quote="USD", target_edge_bps=110, min_edge_bps=90, probe_edge_bps=70, maker_fee_bps=40, taker_fee_bps=60),
+        PairConfig(exchange="coinbase", symbol="ETH/USD", base="ETH", quote="USD", target_edge_bps=110, min_edge_bps=90, probe_edge_bps=70, maker_fee_bps=40, taker_fee_bps=60),
+        PairConfig(exchange="gemini", symbol="BTC/USD", base="BTC", quote="USD", target_edge_bps=105, min_edge_bps=85, probe_edge_bps=65, maker_fee_bps=10, taker_fee_bps=35),
+        PairConfig(exchange="gemini", symbol="ETH/USD", base="ETH", quote="USD", target_edge_bps=105, min_edge_bps=85, probe_edge_bps=65, maker_fee_bps=10, taker_fee_bps=40),
     ]
     return ScalperConfig(venue_keys=venue_keys, pairs=default_pairs)

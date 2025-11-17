@@ -52,7 +52,12 @@ class QuotePlanner:
 
         gross_edge = spread_bps
         maker_fee_bps = Decimal(cfg.maker_fee_bps)
-        total_fee_bps = maker_fee_bps * Decimal("2")
+        taker_fee_bps = Decimal(cfg.taker_fee_bps)
+        # CRITICAL FIX: Use conservative fee assumption (potential taker fees)
+        # Even with post_only=True, orders can sometimes fill as taker if they cross spread
+        # Use weighted average: 80% maker, 20% taker to be conservative
+        conservative_fee_bps = (maker_fee_bps * Decimal("0.8") + taker_fee_bps * Decimal("0.2"))
+        total_fee_bps = conservative_fee_bps * Decimal("2")
         min_profit_bps = Decimal(settings.tier_min_profit_bps)
         depth_usd = snapshot.depth_usd
         if depth_usd <= 0:

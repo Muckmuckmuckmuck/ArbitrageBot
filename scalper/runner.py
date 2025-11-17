@@ -578,6 +578,52 @@ class ScalperEngine:
             fee_cost = Decimal(str(fee_info.get("cost", 0))) if fee_info else Decimal("0")
             order_ref = str(trade.get("order") or trade.get("order_id") or trade.get("clientOrderId") or "")
             meta = execution.mark_filled(order_ref or trade_id)
+            
+            # CRITICAL: Detect if we paid taker fees when we expected maker fees
+            # This is a major profitability issue - we assume maker fees in edge calculation
+            trade_value = amount * price
+            if trade_value > 0 and fee_cost > 0:
+                actual_fee_rate = (fee_cost / trade_value) * Decimal("10000")  # Convert to bps
+                expected_maker_bps = Decimal(pair.maker_fee_bps)
+                expected_taker_bps = Decimal(pair.taker_fee_bps)
+                # Allow 5 bps tolerance for rounding
+                tolerance_bps = Decimal("5")
+                is_taker = actual_fee_rate > (expected_maker_bps + tolerance_bps)
+                is_maker = actual_fee_rate <= (expected_maker_bps + tolerance_bps)
+                
+                # Check if we expected maker but got taker (CRITICAL BUG)
+                expected_maker = meta is None or meta.get("tag") != "hedge_taker"
+                if is_taker and expected_maker:
+                    excess_fee = fee_cost - (trade_value * expected_maker_bps / Decimal("10000"))
+                    logger.error(
+                        "[FEE_ERROR] %s %s side=%s UNEXPECTED TAKER FEE! expected_maker=%sbps actual=%sbps excess_fee=%s trade_value=%s",
+                        pair.exchange.upper(),
+                        pair.symbol,
+                        side,
+                        expected_maker_bps,
+                        actual_fee_rate.quantize(Decimal("0.01")),
+                        excess_fee.quantize(Decimal("0.0001")),
+                        trade_value.quantize(Decimal("0.01")),
+                    )
+                elif is_maker:
+                    logger.debug(
+                        "[FEE_OK] %s %s side=%s MAKER fee=%sbps (expected=%sbps)",
+                        pair.exchange.upper(),
+                        pair.symbol,
+                        side,
+                        actual_fee_rate.quantize(Decimal("0.01")),
+                        expected_maker_bps,
+                    )
+                else:
+                    logger.debug(
+                        "[FEE] %s %s side=%s fee=%sbps (maker=%s taker=%s)",
+                        pair.exchange.upper(),
+                        pair.symbol,
+                        side,
+                        actual_fee_rate.quantize(Decimal("0.01")),
+                        expected_maker_bps,
+                        expected_taker_bps,
+                    )
             if meta and meta.get("tag") in {"hedge", "hedge_taker"}:
                 expected_price = Decimal(str(meta.get("price", price))) if meta.get("price") else price
                 slip_bps = Decimal("0")
@@ -613,13 +659,30 @@ class ScalperEngine:
                     else Decimal("0")
                 )
                 net_profit = stats.realized - stats.fees
+                # Determine fee type for logging
+                trade_value = amount * price
+                fee_type = "UNKNOWN"
+                if trade_value > 0 and fee_cost > 0:
+                    actual_fee_rate = (fee_cost / trade_value) * Decimal("10000")
+                    expected_maker_bps = Decimal(pair.maker_fee_bps)
+                    expected_taker_bps = Decimal(pair.taker_fee_bps)
+                    tolerance_bps = Decimal("5")
+                    if actual_fee_rate <= (expected_maker_bps + tolerance_bps):
+                        fee_type = "MAKER"
+                    elif actual_fee_rate >= (expected_taker_bps - tolerance_bps):
+                        fee_type = "TAKER"
+                    else:
+                        fee_type = "MIXED"
+                
                 logger.info(
-                    "[FILL] %s %s side=%s amount=%s price=%s realized=%s result=%s win_rate=%s%% net_profit=%s trades=%s",
+                    "[FILL] %s %s side=%s amount=%s price=%s fee_type=%s fee=%s realized=%s result=%s win_rate=%s%% net_profit=%s trades=%s",
                     pair.exchange.upper(),
                     pair.symbol,
                     side,
                     amount,
                     price,
+                    fee_type,
+                    fee_cost.quantize(Decimal("0.0001")),
                     realized.quantize(Decimal("0.0001")),
                     result.upper(),
                     win_rate_pct,
