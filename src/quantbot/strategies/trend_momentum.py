@@ -29,6 +29,7 @@ class TrendMomentum(Strategy):
         weighting: str = "momentum",
         vol_normalize: bool = True,
         rebalance: str = "M",
+        reversion_weight: float = 0.0,
     ):
         self.lookbacks = lookbacks
         self.skip = skip
@@ -37,12 +38,14 @@ class TrendMomentum(Strategy):
         self.weighting = weighting
         self.vol_normalize = vol_normalize
         self.rebalance = rebalance
+        self.reversion_weight = reversion_weight
 
     def target_weights(
         self, prices: pd.DataFrame, regime: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
         px = prices.sort_index()
-        sig = common.signal_momentum(px, self.lookbacks, self.skip, self.vol_window, self.vol_normalize)
+        sig = common.signal_momentum(px, self.lookbacks, self.skip, self.vol_window,
+                                     self.vol_normalize, self.reversion_weight)
         vol = common.realized_vol(px, self.vol_window)
 
         def decide(dt: pd.Timestamp) -> pd.Series:

@@ -30,12 +30,18 @@ def signal_momentum(
     skip: int = 21,
     vol_window: int = 60,
     vol_normalize: bool = True,
+    reversion_weight: float = 0.0,
+    reversion_window: int = 5,
 ) -> pd.DataFrame:
-    """Blended, optionally vol-normalized momentum signal.
+    """Blended, optionally vol-normalized momentum signal, with an optional
+    short-term mean-reversion tilt.
 
     Averaging several horizons (3/6/12m) reduces single-lookback timing luck; dividing
     by volatility ranks assets by return-per-unit-risk (Moskowitz-Ooi-Pedersen). With
     lookbacks=(252,) and vol_normalize=False this reduces to plain 12-1 momentum.
+
+    reversion_weight>0 subtracts a short-horizon (default 5-day) return — a contrarian
+    tilt fading very recent moves (Lehmann 1990; Khandani-Lo short-term reversal).
     """
     lookbacks = tuple(lookbacks)
     vol = realized_vol(prices, vol_window) if vol_normalize else None
@@ -45,7 +51,10 @@ def signal_momentum(
         if vol_normalize:
             m = m / vol.replace(0.0, np.nan)
         total = m if total is None else total + m
-    return total / len(lookbacks)
+    sig = total / len(lookbacks)
+    if reversion_weight and reversion_weight > 0:
+        sig = sig - reversion_weight * prices.pct_change(reversion_window)
+    return sig
 
 
 def realized_vol(prices: pd.DataFrame, window: int = 60) -> pd.DataFrame:

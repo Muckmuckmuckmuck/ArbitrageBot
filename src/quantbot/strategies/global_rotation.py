@@ -35,6 +35,7 @@ class GlobalRotation(Strategy):
         weighting: str = "momentum",
         vol_normalize: bool = True,
         rebalance: str = "M",
+        reversion_weight: float = 0.0,
     ):
         self.symbols = symbols
         self.cash_symbol = cash_symbol
@@ -46,13 +47,15 @@ class GlobalRotation(Strategy):
         self.weighting = weighting
         self.vol_normalize = vol_normalize
         self.rebalance = rebalance
+        self.reversion_weight = reversion_weight
 
     def target_weights(
         self, prices: pd.DataFrame, regime: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
         px = prices.sort_index()
         assets = [s for s in self.symbols if s in px.columns]
-        sig = common.signal_momentum(px, self.lookbacks, self.skip, self.vol_window, self.vol_normalize)
+        sig = common.signal_momentum(px, self.lookbacks, self.skip, self.vol_window,
+                                     self.vol_normalize, self.reversion_weight)
         up = common.trend_up(px, self.trend_window)
         vol = common.realized_vol(px, self.vol_window)
 
