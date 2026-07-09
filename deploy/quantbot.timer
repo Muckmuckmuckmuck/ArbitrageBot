@@ -1,0 +1,11 @@
+[Unit]
+Description=Run quantbot every weekday after the US market close
+
+[Timer]
+# 22:00 UTC Mon-Fri = ~5-6pm ET, after the close and once daily bars have settled.
+# (US close is 20:00 UTC in summer / 21:00 UTC in winter; 22:00 clears both.)
+OnCalendar=Mon-Fri *-*-* 22:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -22,6 +22,8 @@ venv/
 *.db
 data/cache/
 data/backtests/
+data/live/
+data/logs/
 data/*.parquet
 data/*.csv
 state/

@@ -1,0 +1,12 @@
+[Unit]
+Description=quantbot daily run (regime -> target book -> log)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/quantbot
+ExecStart=/home/ubuntu/quantbot/.venv/bin/python scripts/daily_run.py
+Nice=10
+# Restart-free oneshot; the .timer schedules it. Logs go to journald + data/logs/.
