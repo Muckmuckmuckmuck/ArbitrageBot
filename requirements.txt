@@ -1,0 +1,17 @@
+# --- Data (backtesting = bulk free sources; NOT IBKR, which has harsh pacing limits) ---
+yfinance>=0.2.40      # primary historical bars (adjusted OHLCV)
+pandas>=2.1.0
+numpy>=1.26.0
+pyarrow>=15.0.0       # parquet cache
+
+# --- Broker (live/paper execution via IB Gateway or TWS) ---
+ib_async>=2.0.0       # maintained successor to ib_insync
+
+# --- Config / utils ---
+python-dotenv>=1.0.0
+
+# --- Dev / test ---
+pytest>=8.0.0
+
+# NOTE: the AI research/improvement layer is Claude Code (your subscription),
+# driven off the tracked data/artifacts this bot emits — no paid LLM API.
