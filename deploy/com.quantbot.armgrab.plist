@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Optional: auto-retry grabbing the Always-Free ARM VM every 10 min until it lands.
+     Install (you opt in):
+       cp deploy/com.quantbot.armgrab.plist ~/Library/LaunchAgents/
+       launchctl load ~/Library/LaunchAgents/com.quantbot.armgrab.plist
+     Stop it:
+       launchctl unload ~/Library/LaunchAgents/com.quantbot.armgrab.plist
+     Progress log: ~/.oci/armgrab.log -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.quantbot.armgrab</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/jayreddy/algo/deploy/oci_grab_arm.sh</string>
+  </array>
+  <key>StartInterval</key><integer>600</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/Users/jayreddy/.oci/armgrab.out</string>
+  <key>StandardErrorPath</key><string>/Users/jayreddy/.oci/armgrab.err</string>
+</dict>
+</plist>
