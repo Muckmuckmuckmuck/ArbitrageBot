@@ -5,6 +5,8 @@ numpy>=1.26.0
 pyarrow>=15.0.0       # parquet cache
 
 # --- Broker (live/paper execution via IB Gateway or TWS) ---
+# NOTE: ib_async requires Python >=3.10 (the VM has it). Everything else runs on 3.9,
+# and ibkr.py imports ib_async lazily, so backtests/dry-runs work without it.
 ib_async>=2.0.0       # maintained successor to ib_insync
 
 # --- Config / utils ---

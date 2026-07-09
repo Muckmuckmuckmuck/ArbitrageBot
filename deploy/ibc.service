@@ -1,0 +1,19 @@
+[Unit]
+Description=IBC + IB Gateway (headless, under Xvfb) for quantbot live paper trading
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+Environment=DISPLAY=:1
+# Virtual framebuffer so the Java GUI app can run without a monitor:
+ExecStartPre=/usr/bin/Xvfb :1 -screen 0 1024x768x24
+ExecStart=/home/ubuntu/ibc/scripts/ibcstart.sh 1030 -g \
+  --gateway --mode=paper \
+  --ibc-ini=/home/ubuntu/ibc/config.ini \
+  --ibc-path=/home/ubuntu/ibc
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

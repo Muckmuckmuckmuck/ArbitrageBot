@@ -89,7 +89,10 @@ python3 -m venv .venv
 - [x] Three research-grounded sleeves + regime-tilted vol-targeted allocator
 - [x] Hard-cap risk engine + drawdown kill-switch
 - [x] Backtester with per-regime attribution + tracking artifacts
-- [ ] Stress tests on sub-periods (2020 crash, 2022 bear) + walk-forward validation
-- [ ] Stronger mid/safe sleeves; parameter robustness sweeps
-- [ ] IBKR paper execution adapter (ib_async) + one-command connection test
-- [ ] Live daily loop: regime → allocate → risk-check → (paper) execute → log
+- [x] Stress tests on sub-periods (2020 crash, 2022 bear) + per-year walk-forward (`scripts/stress_test.py`)
+- [x] Signal ablation → multi-horizon momentum; multi-asset rotation sleeves (`scripts/ablation.py`)
+- [x] IBKR execution adapter (`ib_async`) behind a `Broker` interface + `SimBroker` for tests
+- [x] Rebalancer (target book → orders) + headless daily loop (`scripts/daily_run.py`)
+- [x] Cloud deploy kit: Oracle Always-Free ARM, systemd timer, IB Gateway/IBC headless (`deploy/`)
+- [ ] Live paper forward-test on the VM (needs your IBKR + Oracle account setup)
+- [ ] AI research loop: Claude Code reads tracked artifacts → proposes ablation-tested changes

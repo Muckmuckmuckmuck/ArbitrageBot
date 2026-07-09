@@ -37,6 +37,10 @@ def _i(key: str, default: int) -> int:
     return int(os.getenv(key, default))
 
 
+def _b(key: str, default: bool) -> bool:
+    return os.getenv(key, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class RiskLimits:
     """Hard risk caps. The allocator sizes to the *binding* constraint — a lesson
@@ -73,12 +77,22 @@ class BacktestConfig:
 
 
 @dataclass(frozen=True)
+class ExecutionConfig:
+    # execute=False -> dry-run (compute + log orders, place nothing). The safe default.
+    execute: bool = field(default_factory=lambda: _b("QUANTBOT_EXECUTE", False))
+    min_trade_usd: float = field(default_factory=lambda: _f("EXEC_MIN_TRADE_USD", 50.0))
+    order_type: str = field(default_factory=lambda: os.getenv("EXEC_ORDER_TYPE", "MKT"))  # MKT|LMT
+    allow_fractional: bool = field(default_factory=lambda: _b("EXEC_ALLOW_FRACTIONAL", False))
+
+
+@dataclass(frozen=True)
 class Settings:
     mode: Mode = field(default_factory=lambda: Mode(os.getenv("QUANTBOT_MODE", "PAPER").upper()))
     starting_equity_usd: float = field(default_factory=lambda: _f("STARTING_EQUITY_USD", 100_000.0))
     ibkr: IBKRConfig = field(default_factory=IBKRConfig)
     data: DataConfig = field(default_factory=DataConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     risk: RiskLimits = field(default_factory=RiskLimits)
 
     def require_live_ready(self) -> None:
