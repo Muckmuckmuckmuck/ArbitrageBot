@@ -65,14 +65,15 @@ class Allocator:
         return alloc.div(alloc.sum(axis=1).replace(0.0, 1.0), axis=0)  # normalize to 1
 
     def combined_weights(
-        self, prices: pd.DataFrame, regime: pd.DataFrame
+        self, prices: pd.DataFrame, regime: pd.DataFrame, volume: pd.DataFrame = None
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Return (portfolio weights on all columns, sleeve allocation panel)."""
         alloc = self._sleeve_allocations(prices.index, regime)
         book = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
         for s in self.sleeves:
             syms = [c for c in s.symbols if c in prices.columns]
-            w = s.strategy.target_weights(prices[syms], regime)
+            vol_sub = volume[[c for c in syms if c in volume.columns]] if volume is not None else None
+            w = s.strategy.target_weights(prices[syms], regime, vol_sub)
             w = w.reindex(index=prices.index, columns=prices.columns).fillna(0.0)
             book = book + w.mul(alloc[s.name], axis=0)
         book = common.apply_vol_target(

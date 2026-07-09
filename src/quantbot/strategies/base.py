@@ -30,7 +30,11 @@ class Strategy(ABC):
 
     @abstractmethod
     def target_weights(
-        self, prices: pd.DataFrame, regime: Optional[pd.DataFrame] = None
+        self,
+        prices: pd.DataFrame,
+        regime: Optional[pd.DataFrame] = None,
+        volume: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
-        """Target weights per date (index=dates, columns=symbols). Row sum <= 1."""
+        """Target weights per date (index=dates, columns=symbols). Row sum <= 1.
+        `volume` (optional) enables volume-confirmation of the signal."""
         raise NotImplementedError

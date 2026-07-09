@@ -16,6 +16,7 @@ from quantbot import universe
 from quantbot.allocator import Allocator, Sleeve
 from quantbot.backtest.engine import BacktestResult, buy_and_hold, run_backtest
 from quantbot.risk.engine import drawdown_kill_switch, enforce_caps
+from quantbot.data.history import get_volume
 from quantbot.strategies import common
 from quantbot.strategies.global_rotation import GlobalRotation
 from quantbot.strategies.trend_momentum import TrendMomentum
@@ -46,13 +47,14 @@ def build_results(px: pd.DataFrame, regime: pd.DataFrame, settings, base_weights
     base_weights = base_weights or universe.SLEEVE_TARGET_WEIGHTS
     cost, cash = settings.backtest.cost_bps, settings.backtest.cash_annual_rate
     high, mid, safe = build_sleeves()
+    vol = get_volume(list(cols), start=str(px.index[0].date())).reindex(px.index).reindex(columns=cols)
 
     def vt(w: pd.DataFrame, target: float) -> pd.DataFrame:
         return common.apply_vol_target(w.reindex(columns=cols).fillna(0.0), px, target)
 
-    r_high = run_backtest(px, vt(high.target_weights(px[HIGH], regime), VOL_TARGET["high_growth"]), cost, cash)
-    r_mid = run_backtest(px, vt(mid.target_weights(px[MID + [CASH]], regime), VOL_TARGET["mid_growth"]), cost, cash)
-    r_safe = run_backtest(px, vt(safe.target_weights(px[SAFE + [CASH]], regime), VOL_TARGET["safe_growth"]), cost, cash)
+    r_high = run_backtest(px, vt(high.target_weights(px[HIGH], regime, vol[HIGH]), VOL_TARGET["high_growth"]), cost, cash)
+    r_mid = run_backtest(px, vt(mid.target_weights(px[MID + [CASH]], regime, vol[MID + [CASH]]), VOL_TARGET["mid_growth"]), cost, cash)
+    r_safe = run_backtest(px, vt(safe.target_weights(px[SAFE + [CASH]], regime, vol[SAFE + [CASH]]), VOL_TARGET["safe_growth"]), cost, cash)
 
     alloc = Allocator(
         sleeves=[
@@ -64,7 +66,7 @@ def build_results(px: pd.DataFrame, regime: pd.DataFrame, settings, base_weights
         portfolio_vol_target=PORTFOLIO_VOL_TARGET,
         regime_tilt=True,
     )
-    book, _ = alloc.combined_weights(px, regime)
+    book, _ = alloc.combined_weights(px, regime, vol)
     book = enforce_caps(book, settings.risk)
     book = drawdown_kill_switch(book, px, settings.risk.max_drawdown_pct)
     r_comb = run_backtest(px, book, cost, cash)

@@ -50,12 +50,16 @@ class GlobalRotation(Strategy):
         self.reversion_weight = reversion_weight
 
     def target_weights(
-        self, prices: pd.DataFrame, regime: Optional[pd.DataFrame] = None
+        self, prices: pd.DataFrame, regime: Optional[pd.DataFrame] = None,
+        volume: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         px = prices.sort_index()
         assets = [s for s in self.symbols if s in px.columns]
         sig = common.signal_momentum(px, self.lookbacks, self.skip, self.vol_window,
                                      self.vol_normalize, self.reversion_weight)
+        if volume is not None:  # volume confirmation (Kronos-derived)
+            vt = common.volume_trend(volume).reindex(index=sig.index, columns=sig.columns).fillna(1.0)
+            sig = sig * vt
         up = common.trend_up(px, self.trend_window)
         vol = common.realized_vol(px, self.vol_window)
 

@@ -41,11 +41,15 @@ class TrendMomentum(Strategy):
         self.reversion_weight = reversion_weight
 
     def target_weights(
-        self, prices: pd.DataFrame, regime: Optional[pd.DataFrame] = None
+        self, prices: pd.DataFrame, regime: Optional[pd.DataFrame] = None,
+        volume: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         px = prices.sort_index()
         sig = common.signal_momentum(px, self.lookbacks, self.skip, self.vol_window,
                                      self.vol_normalize, self.reversion_weight)
+        if volume is not None:  # volume confirmation (Kronos-derived): favor moves backed by rising volume
+            vt = common.volume_trend(volume).reindex(index=sig.index, columns=sig.columns).fillna(1.0)
+            sig = sig * vt
         vol = common.realized_vol(px, self.vol_window)
 
         def decide(dt: pd.Timestamp) -> pd.Series:

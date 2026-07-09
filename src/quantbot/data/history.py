@@ -60,6 +60,37 @@ def _from_stooq(symbols: List[str], start: str, end: str) -> pd.DataFrame:
     return close.loc[start:end]
 
 
+def get_volume(
+    symbols: Sequence[str],
+    start: str = "2010-01-01",
+    end: str = "2100-01-01",
+    use_cache: bool = True,
+) -> pd.DataFrame:
+    """Daily volume panel (dates x symbols) from yfinance. Used for volume-confirmation
+    signals (the transferable idea from OHLCV foundation models like Kronos)."""
+    symbols = list(dict.fromkeys(symbols))
+    cache = _cache_path(symbols, start, end)
+    cache = cache.with_name("vol_" + cache.name)
+    if use_cache and cache.exists():
+        return pd.read_parquet(cache)
+    import yfinance as yf
+
+    raw = yf.download(symbols, start=start, end=end, auto_adjust=True, progress=False, threads=True)
+    if raw is None or len(raw) == 0:
+        raise RuntimeError(f"No volume data for {symbols}")
+    if isinstance(raw.columns, pd.MultiIndex):
+        vol = raw["Volume"].copy()
+    else:
+        vol = raw[["Volume"]].copy()
+        vol.columns = [symbols[0]]
+    vol = vol.sort_index().dropna(how="all")
+    vol = vol[[c for c in symbols if c in vol.columns]]
+    if use_cache:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        vol.to_parquet(cache)
+    return vol
+
+
 def get_prices(
     symbols: Sequence[str],
     start: str = "2010-01-01",

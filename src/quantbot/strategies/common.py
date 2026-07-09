@@ -57,6 +57,19 @@ def signal_momentum(
     return sig
 
 
+def volume_trend(volume: pd.DataFrame, fast: int = 21, slow: int = 63) -> pd.DataFrame:
+    """Ratio of recent to longer-run average volume (>1 = rising participation).
+
+    The transferable idea from OHLCV foundation models (Kronos): confirm price trends
+    with trade activity. Used to tilt/gate the momentum signal toward names whose moves
+    are backed by rising volume.
+    """
+    v = volume.astype(float)
+    return v.rolling(fast, min_periods=max(3, fast // 2)).mean() / v.rolling(
+        slow, min_periods=max(5, slow // 2)
+    ).mean()
+
+
 def realized_vol(prices: pd.DataFrame, window: int = 60) -> pd.DataFrame:
     """Annualized trailing realized volatility per asset."""
     rets = prices.pct_change()
