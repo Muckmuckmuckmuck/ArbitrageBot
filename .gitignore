@@ -24,6 +24,7 @@ data/cache/
 data/backtests/
 data/live/
 data/logs/
+reports/
 data/*.parquet
 data/*.csv
 state/
