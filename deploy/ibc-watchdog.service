@@ -1,0 +1,6 @@
+[Unit]
+Description=IB Gateway API watchdog (restarts IBC if port 4002 is down)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ibc-watchdog.sh

@@ -62,10 +62,26 @@ Test a single run, then let the daily timer drive it:
 cd ~/quantbot && ./.venv/bin/python scripts/daily_run.py     # should show broker=ibkr and place paper orders
 ```
 
-## Notes / gotchas
-- **`ib_async` requires Python 3.10+** — Ubuntu 22.04 has it; the 3.9 Mac used for dev does not.
-- The Gateway must be **restarted daily** (IBKR requirement) — `AutoRestartTime` handles it;
-  schedule the bot's 22:00 UTC run to avoid the restart window.
-- Firewall: the API bind is localhost only (`127.0.0.1:4002`); no inbound cloud rule needed.
-- Start read-only (`ReadOnlyApi=yes`, `QUANTBOT_EXECUTE=false`) to confirm connectivity and
-  the target book before enabling order placement.
+## Hard-won gotchas (every one of these actually bit us — don't relearn them)
+
+1. **Use `ibcstart.sh`, NOT `gatewaystart.sh`.** `gatewaystart.sh` launches the Gateway
+   inside an `xterm` and then returns — under `xvfb-run` that tears the display down
+   instantly and the unit crash-loops (`xterm: command not found`, "Deactivated
+   successfully" in ~1s). The working ExecStart is:
+   `xvfb-run -a /home/ubuntu/ibc/scripts/ibcstart.sh 1045 --gateway --mode=paper --tws-path=/home/ubuntu/Jts --ibc-path=/home/ubuntu/ibc --ibc-ini=/home/ubuntu/ibc/config.ini`
+2. **`AllowBlindTrading=yes` is REQUIRED** on a paper account with no market-data
+   subscription. Without it the Gateway blocks every order — and it surfaces
+   *misleadingly* as `Error 321 ... read-only mode` plus an undismissed "API client needs
+   write access" dialog. Also set `BypassOrderPrecautions=yes`. `ReadOnlyApi=no` alone is
+   NOT enough.
+3. **Install the watchdog** (`deploy/ibc-watchdog.*`). IBKR force-restarts the Gateway
+   nightly; when that re-login hangs the Gateway is dead but systemd still reports the unit
+   `active` (the wrapper survives), so the bot silently dry-runs forever. This caused a real
+   2-day silent outage. The watchdog restarts IBC within 10 min of the API port dropping.
+4. **Match IBC's expected install path:** installing to `~/ibgateway` requires
+   `ln -sfn ~/ibgateway ~/Jts/ibgateway/1045` so IBC can find the jars.
+5. **Cap the heap on a small box:** `-Xmx512m` in `~/ibgateway/ibgateway.vmoptions`
+   (plus 2 GB swap) for the 1 GB VM.
+6. **`ib_async` requires Python 3.10+** — Ubuntu 22.04 has it; the 3.9 Mac used for dev does not.
+7. Firewall: the API bind is localhost only (`127.0.0.1:4002`); no inbound cloud rule needed.
+8. Keep `QUANTBOT_EXECUTE=false` until a dry run reports `broker=ibkr`, then flip it on.
