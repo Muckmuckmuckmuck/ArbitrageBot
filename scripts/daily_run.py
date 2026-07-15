@@ -78,6 +78,13 @@ def main() -> int:
 
         broker, kind = _select_broker(prices_last, log)
         do_execute = settings.execution.execute and kind == "ibkr"
+        # Execution was requested but we could not reach IBKR -> we are NOT trading.
+        # Make this loud: log CRITICAL and exit non-zero so systemd marks the unit failed
+        # instead of silently "succeeding" while placing nothing.
+        degraded = settings.execution.execute and kind != "ibkr"
+        if degraded:
+            log.critical("NOT TRADING — execution is enabled but IB Gateway is unreachable; "
+                         "fell back to dry-run. Fix the Gateway (systemctl restart ibc).")
         placed = []
         try:
             equity = broker.net_liquidation()
@@ -116,6 +123,9 @@ def main() -> int:
                 for o in placed
             ],
         }, indent=2))
+        if degraded:
+            log.error("=== daily run DEGRADED (no orders placed) ===")
+            return 2
         log.info("=== daily run ok ===")
         return 0
     except Exception:
