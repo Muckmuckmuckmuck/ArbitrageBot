@@ -11,6 +11,7 @@ and would throttle heavy backtesting.
 from __future__ import annotations
 
 import hashlib
+import time
 from pathlib import Path
 from typing import List, Sequence
 
@@ -18,12 +19,23 @@ import pandas as pd
 
 from quantbot.config import CACHE_DIR
 
+# A daily bot must never trade on stale prices: the cache is only good for a few
+# hours, after which we refetch. (The cache key can't encode "today" because `end`
+# is an open-ended sentinel, so freshness is enforced by file age.)
+CACHE_MAX_AGE_HOURS = 12.0
+
 
 def _cache_path(symbols: Sequence[str], start: str, end: str) -> Path:
     key = "|".join(sorted(symbols)) + f"|{start}|{end}"
     h = hashlib.sha1(key.encode()).hexdigest()[:16]
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return CACHE_DIR / f"prices_{h}.parquet"
+
+
+def _is_fresh(cache: Path, max_age_hours: float = CACHE_MAX_AGE_HOURS) -> bool:
+    if not cache.exists():
+        return False
+    return (time.time() - cache.stat().st_mtime) < max_age_hours * 3600
 
 
 def _from_yfinance(symbols: List[str], start: str, end: str) -> pd.DataFrame:
@@ -71,7 +83,7 @@ def get_volume(
     symbols = list(dict.fromkeys(symbols))
     cache = _cache_path(symbols, start, end)
     cache = cache.with_name("vol_" + cache.name)
-    if use_cache and cache.exists():
+    if use_cache and _is_fresh(cache):
         return pd.read_parquet(cache)
     import yfinance as yf
 
@@ -101,7 +113,7 @@ def get_prices(
     """Adjusted-close panel (dates x symbols). Falls back yfinance -> Stooq."""
     symbols = list(dict.fromkeys(symbols))  # de-dup, keep order
     cache = _cache_path(symbols, start, end)
-    if use_cache and cache.exists():
+    if use_cache and _is_fresh(cache):
         return pd.read_parquet(cache)
 
     close = pd.DataFrame()
