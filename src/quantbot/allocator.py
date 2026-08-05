@@ -41,12 +41,17 @@ class Allocator:
         portfolio_vol_target: float = 0.10,
         regime_tilt: bool = True,
         vol_window: int = 60,
+        max_leverage: float = 1.0,
     ):
         self.sleeves = sleeves
         self.base_weights = base_weights
         self.portfolio_vol_target = portfolio_vol_target
         self.regime_tilt = regime_tilt
         self.vol_window = vol_window
+        # >1.0 lets vol targeting scale exposure UP when realized vol sits below
+        # target (proper two-sided vol targeting). At 1.0 it can only ever cut,
+        # which structurally under-risks the book and leaves cash idle.
+        self.max_leverage = max_leverage
 
     def _sleeve_allocations(self, index: pd.DatetimeIndex, regime: pd.DataFrame) -> pd.DataFrame:
         """Time-varying capital fraction per sleeve (rows sum to 1)."""
@@ -77,6 +82,7 @@ class Allocator:
             w = w.reindex(index=prices.index, columns=prices.columns).fillna(0.0)
             book = book + w.mul(alloc[s.name], axis=0)
         book = common.apply_vol_target(
-            book, prices, self.portfolio_vol_target, self.vol_window, max_leverage=1.0
+            book, prices, self.portfolio_vol_target, self.vol_window,
+            max_leverage=self.max_leverage,
         )
         return book, alloc

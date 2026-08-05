@@ -88,6 +88,10 @@ class ExecutionConfig:
 @dataclass(frozen=True)
 class Settings:
     mode: Mode = field(default_factory=lambda: Mode(os.getenv("QUANTBOT_MODE", "PAPER").upper()))
+    # Aggression profile (see quantbot.system.PROFILES): balanced | growth |
+    # aggressive | max_growth | momentum_max. Controls sleeve mix, vol targets,
+    # leverage and the risk envelope. Deploy changes by setting this in .env.
+    profile: str = field(default_factory=lambda: os.getenv("QUANTBOT_PROFILE", "balanced"))
     starting_equity_usd: float = field(default_factory=lambda: _f("STARTING_EQUITY_USD", 100_000.0))
     ibkr: IBKRConfig = field(default_factory=IBKRConfig)
     data: DataConfig = field(default_factory=DataConfig)
